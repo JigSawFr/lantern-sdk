@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/titles.json",
+  "title": "Titles",
+  "description": "GET <base>/v1/titles?ids=… (SPEC.md § 7.2).",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "$ref": "common.json#/$defs/schema1"
+    },
+    "titles": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "$ref": "common.json#/$defs/title"
+      }
+    },
+    "unknown": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/id"
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "titles",
+    "unknown"
+  ]
+}

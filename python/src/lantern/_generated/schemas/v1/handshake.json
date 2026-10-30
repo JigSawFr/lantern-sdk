@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/handshake.json",
+  "title": "Handshake",
+  "description": "GET /.well-known/lantern and GET <base>/v1/ (SPEC.md § 4.2).",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "$ref": "common.json#/$defs/schema1"
+    },
+    "uid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "name": {
+      "$ref": "common.json#/$defs/name"
+    },
+    "software": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "$ref": "common.json#/$defs/name"
+        },
+        "version": {
+          "$ref": "common.json#/$defs/name"
+        }
+      }
+    },
+    "base": {
+      "$ref": "common.json#/$defs/url"
+    },
+    "versions": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "minItems": 1
+    },
+    "platforms": {
+      "description": "The platforms the server has something for (SPEC.md § 4.3).",
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/platform"
+      },
+      "uniqueItems": true
+    },
+    "motd": {
+      "$ref": "common.json#/$defs/text"
+    },
+    "account": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "$ref": "common.json#/$defs/name"
+        },
+        "state": {
+          "enum": [
+            "anonymous",
+            "active",
+            "frozen"
+          ]
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "$ref": "common.json#/$defs/scope"
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "state",
+        "scopes"
+      ]
+    },
+    "features": {
+      "type": "object",
+      "description": "Per family, the schema the server writes for it, or 0 when not offered to this caller.",
+      "properties": {
+        "library": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "titles": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "changes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sections": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "homebrew": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "saves": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cheats": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "requests": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pairing": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "page_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "save_body": {
+          "$ref": "common.json#/$defs/uint64",
+          "description": "The largest save a single request takes (SPEC.md § 9.2)."
+        },
+        "save_size": {
+          "$ref": "common.json#/$defs/uint64",
+          "description": "The largest save at all (SPEC.md § 9.3)."
+        },
+        "saves_kept_per_title": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Backups kept per title, platform and account (SPEC.md § 9.1)."
+        }
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "uid",
+    "name",
+    "base",
+    "versions",
+    "platforms",
+    "account",
+    "features"
+  ]
+}

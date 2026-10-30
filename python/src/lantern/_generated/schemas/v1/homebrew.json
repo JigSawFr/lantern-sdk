@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/homebrew.json",
+  "title": "Homebrew",
+  "description": "GET <base>/v1/homebrew/{id} (SPEC.md § 8.1): an entry, with its manifest.",
+  "allOf": [
+    {
+      "$ref": "common.json#/$defs/homebrew"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "$ref": "common.json#/$defs/schema1"
+        }
+      },
+      "required": [
+        "schema"
+      ]
+    },
+    {
+      "properties": {
+        "package": {
+          "if": {
+            "properties": {
+              "format": {
+                "const": "zip"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "manifest"
+            ]
+          }
+        },
+        "packages": {
+          "items": {
+            "if": {
+              "properties": {
+                "format": {
+                  "const": "zip"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "manifest"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ]
+}

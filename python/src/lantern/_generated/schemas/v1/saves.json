@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/saves.json",
+  "title": "Save backups",
+  "description": "GET <base>/v1/saves (SPEC.md § 9.1); newest first per title.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "$ref": "common.json#/$defs/schema1"
+    },
+    "saves": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/save"
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "saves"
+  ]
+}

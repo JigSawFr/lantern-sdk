@@ -8,6 +8,14 @@ precedence = "closest"
 SPDX-FileCopyrightText = "2026 JigSawFr"
 SPDX-License-Identifier = "MIT"
 
+# The Python library's models and schemas, generated from the specification's
+# (JigSawFr/lantern, MIT) by python/tools/generate.py.
+[[annotations]]
+path = ["python/src/lantern/_generated/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "2026 JigSawFr"
+SPDX-License-Identifier = "MIT"
+
 # The C++ library's vendored code, under its own licences
 # (cpp/THIRD_PARTY_NOTICES.md): Monocypher, for ed25519, and doctest, for
 # the tests only.

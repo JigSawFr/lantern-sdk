@@ -1,0 +1,184 @@
+# The Python library (python/): the generated models against the
+# specification's schemas, ruff, mypy --strict, the tests with coverage on
+# Linux (3.11 to 3.14), Windows and macOS, the core without any extra, the
+# client against the specification's reference server, the conformance suite
+# against the demo servers (Flask and FastAPI), and the sdist and wheel.
+# Nothing is published: that comes with the first release and its signing.
+name: python
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ "python/**", "spec", ".github/workflows/python.yml" ]
+  pull_request:
+    paths: [ "python/**", "spec", ".github/workflows/python.yml" ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: python
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUTF8: "1"
+
+jobs:
+  lint:
+    name: generated code, ruff, mypy
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . --group dev
+      - name: The generated models are those of the pinned specification
+        run: python tools/generate.py --check
+      - name: ruff
+        run: |
+          ruff check --output-format=github .
+          ruff format --check .
+      - name: mypy --strict
+        run: mypy
+
+  test:
+    name: tests (${{ matrix.os }}, ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-26.04 ]
+        python: [ "3.11", "3.12", "3.13", "3.14" ]
+        include:
+          - os: windows-2025
+            python: "3.13"
+          - os: macos-15
+            python: "3.13"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . --group dev
+      - name: pytest, with coverage
+        run: python -m pytest -m "not integration and not conformance" --cov --cov-report=term --cov-report=xml
+
+  core:
+    name: the core, without any extra
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+      - name: Install the package alone, and pytest
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . pytest
+          python -m pip list
+      - name: pytest (what needs an extra is skipped)
+        run: python -m pytest -m "not conformance"
+
+  integration:
+    name: the client against the reference server
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . --group dev
+      - name: pytest -m integration (stdlib, httpx and async transports)
+        run: python -m pytest -m integration -v
+
+  conformance:
+    name: the conformance suite against the demo servers
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . --group dev
+      - name: pytest -m conformance (Flask and FastAPI, anonymously and with a token)
+        run: python -m pytest -m conformance -v
+      - name: The suite's own report, against each framework
+        run: |
+          for framework in flask fastapi; do
+            port=$([ "$framework" = flask ] && echo 8080 || echo 8081)
+            python tests/demo.py --framework "$framework" --port "$port" &
+            for _ in $(seq 50); do
+              curl -fsS "http://127.0.0.1:$port/.well-known/lantern" >/dev/null && break
+              sleep 0.2
+            done
+            echo "::group::$framework"
+            python ../spec/conformance/run.py "http://127.0.0.1:$port/" --token et_demo-0123456789abcdef0123456789abcdef
+            echo "::endgroup::"
+          done
+
+  build:
+    name: sdist and wheel
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Build
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build twine
+          python -m build
+          python -m twine check --strict dist/*
+      - name: The wheel installs and imports, without any extra
+        run: |
+          python -m venv "$RUNNER_TEMP/wheel"
+          "$RUNNER_TEMP/wheel/bin/pip" install dist/*.whl
+          "$RUNNER_TEMP/wheel/bin/python" -c "import lantern, lantern.client, lantern.server; print(lantern.__version__)"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: python-dist
+          path: python/dist/
+          if-no-files-found: error

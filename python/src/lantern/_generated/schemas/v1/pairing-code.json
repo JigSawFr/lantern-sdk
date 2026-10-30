@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/pairing-code.json",
+  "title": "Pairing code",
+  "description": "The answer to a pairing request (SPEC.md § 5.2).",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "$ref": "common.json#/$defs/schema1"
+    },
+    "code": {
+      "description": "8 to 32 symbols of 23456789ABCDEFGHJKLMNPQRSTUVWXYZ (40 bits at least), in groups of 4 joined by -.",
+      "type": "string",
+      "pattern": "^[2-9A-HJ-NP-Z]{4}(-[2-9A-HJ-NP-Z]{4}){1,7}$"
+    },
+    "verify": {
+      "$ref": "common.json#/$defs/url"
+    },
+    "poll": {
+      "$ref": "common.json#/$defs/url",
+      "description": "Where to poll; unguessable, it gives the token once."
+    },
+    "interval": {
+      "description": "Seconds between polls.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "expires": {
+      "description": "Seconds until the code expires: 10 minutes at most.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 600
+    }
+  },
+  "required": [
+    "schema",
+    "code",
+    "verify",
+    "poll",
+    "interval",
+    "expires"
+  ]
+}
