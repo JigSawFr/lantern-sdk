@@ -1,6 +1,6 @@
 # The Python library (python/): the generated models against the
 # specification's schemas, ruff, mypy --strict, the tests with coverage on
-# Linux (3.11 to 3.14), Windows and macOS (the client against the malicious
+# Linux (3.11 to 3.15), Windows and macOS (the client against the malicious
 # test server among them, and the vectors of draft 0.5), the core without
 # any extra, the client against the specification's reference server (over
 # TLS, with a token bound to its key; events, its peer, sync, encrypted
@@ -11,27 +11,27 @@
 # is published: that comes with the first release and its signing.
 name: python
 
+# Called by ci.yml when the Python library's files change: its folder, the
+# specification (the submodule), this workflow and the files every library
+# shares (.github/scripts/changes.sh)
 on:
-  push:
-    branches: [ main ]
-    paths: [ "python/**", "spec", ".github/workflows/python.yml" ]
-  pull_request:
-    paths: [ "python/**", "spec", ".github/workflows/python.yml" ]
+  workflow_call:
 
 permissions:
   contents: read
-
-concurrency:
-  group: python-${{ github.ref }}
-  cancel-in-progress: true
 
 defaults:
   run:
     working-directory: python
 
+# uv installs Python and the development environment exactly as uv.lock
+# says (UV_LOCKED: a lock that no longer matches pyproject.toml fails),
+# from its cache when the lock has not changed
 env:
-  PIP_DISABLE_PIP_VERSION_CHECK: "1"
   PYTHONUTF8: "1"
+  UV_LOCKED: "1"
+  # The version of uv, as setup-uv's step installs it
+  UV_VERSION: 0.13.1
 
 jobs:
   lint:
@@ -43,22 +43,22 @@ jobs:
         with:
           persist-credentials: false
           submodules: true
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
-          python-version: "3.13"
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.14"
       - name: Install
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e . --group dev
+        run: uv sync
       - name: The generated models are those of the pinned specification
-        run: python tools/generate.py --check
+        run: uv run python tools/generate.py --check
       - name: ruff
         run: |
-          ruff check --output-format=github .
-          ruff format --check .
+          uv run ruff check --output-format=github .
+          uv run ruff format --check .
       - name: mypy --strict
-        run: mypy
+        run: uv run mypy
 
+  # On every core of the runner (pytest-xdist)
   test:
     name: tests (${{ matrix.os }}, ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
@@ -67,26 +67,37 @@ jobs:
       fail-fast: false
       matrix:
         os: [ ubuntu-26.04 ]
-        python: [ "3.11", "3.12", "3.13", "3.14" ]
+        python: [ "3.11", "3.12", "3.13", "3.14", "3.15" ]
         include:
           - os: windows-2025
-            python: "3.13"
+            python: "3.14"
           - os: macos-15
-            python: "3.13"
+            python: "3.14"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           submodules: true
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
+          version: ${{ env.UV_VERSION }}
           python-version: ${{ matrix.python }}
       - name: Install
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e . --group dev
+        run: uv sync
       - name: pytest, with coverage
-        run: python -m pytest -m "not integration and not conformance" --cov --cov-report=term --cov-report=xml
+        run: uv run pytest -n auto -m "not integration and not conformance" --cov --cov-report=term --cov-report=xml
+      # The newest Python's, in the run's summary
+      - name: Coverage, in the summary
+        if: matrix.os == 'ubuntu-26.04' && matrix.python == '3.15'
+        shell: bash
+        run: |
+          {
+            echo "### Python coverage (unit tests, Python $PYTHON)"
+            echo
+            uv run coverage report --format=markdown
+          } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          PYTHON: ${{ matrix.python }}
 
   core:
     name: the core, without any extra
@@ -97,16 +108,18 @@ jobs:
         with:
           persist-credentials: false
           submodules: true
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
+          version: ${{ env.UV_VERSION }}
           python-version: "3.11"
+      # The package, installed as a wheel, and pytest (the lock's `test`
+      # group): nothing else
       - name: Install the package alone, and pytest
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install . pytest
-          python -m pip list
+          uv sync --no-default-groups --group test --no-editable
+          uv pip list
       - name: pytest (what needs an extra is skipped)
-        run: python -m pytest -m "not conformance"
+        run: .venv/bin/python -m pytest -m "not conformance"
 
   integration:
     name: the client against the reference server
@@ -117,15 +130,14 @@ jobs:
         with:
           persist-credentials: false
           submodules: true
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
-          python-version: "3.13"
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.14"
       - name: Install
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e . --group dev
+        run: uv sync
       - name: pytest -m integration (stdlib, httpx and async transports; TLS, pairing, bound tokens, DNS-SD; events, peers, sync, encrypted saves, static export)
-        run: python -m pytest -m integration -v
+        run: uv run pytest -n auto -m integration -v
 
   hostile:
     name: the malicious test server, from its command line
@@ -136,20 +148,19 @@ jobs:
         with:
           persist-credentials: false
           submodules: true
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
-          python-version: "3.13"
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.14"
       - name: Install
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[crypto]" pytest
+        run: uv sync
       - name: Every scenario, listed
-        run: python tools/hostile_server.py --list
+        run: uv run python tools/hostile_server.py --list
       - name: The Python client against every scenario
-        run: python -m pytest tests/test_hostile.py -v
+        run: uv run pytest -n auto tests/test_hostile.py -v
       - name: One scenario served as another language's CI starts it
         run: |
-          python tools/hostile_server.py bad-digest --port 8099 > "$RUNNER_TEMP/hostile.json" 2> "$RUNNER_TEMP/hostile.log" &
+          .venv/bin/python tools/hostile_server.py bad-digest --port 8099 > "$RUNNER_TEMP/hostile.json" 2> "$RUNNER_TEMP/hostile.log" &
           pid=$!
           for _ in $(seq 50); do
             curl -fsS http://127.0.0.1:8099/.well-known/lantern >/dev/null && break
@@ -161,7 +172,7 @@ jobs:
           kill "$pid"
       - name: A scenario of draft 0.5 from the command line (an event of 64 KiB)
         run: |
-          python tools/hostile_server.py oversized-event --port 8098 > "$RUNNER_TEMP/event.json" 2> /dev/null &
+          .venv/bin/python tools/hostile_server.py oversized-event --port 8098 > "$RUNNER_TEMP/event.json" 2> /dev/null &
           pid=$!
           for _ in $(seq 50); do
             curl -fsS http://127.0.0.1:8098/.well-known/lantern >/dev/null && break
@@ -180,28 +191,27 @@ jobs:
         with:
           persist-credentials: false
           submodules: true
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
+          version: ${{ env.UV_VERSION }}
           python-version: "3.14"  # zstd in the standard library: JSON compressed as § 2.1 recommends
       - name: Install
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e . --group dev
+        run: uv sync
       - name: pytest -m conformance (Flask and FastAPI, anonymously and with a token bound to its key; a peer; --static)
-        run: python -m pytest -m conformance -v
+        run: uv run pytest -n auto -m conformance -v
       - name: The suite's own report, against each framework, and the levels reached
         run: |
           set -o pipefail
           for framework in flask fastapi; do
             port=$([ "$framework" = flask ] && echo 8080 || echo 8081)
-            python tests/demo.py --framework "$framework" --port "$port" --key-file "$RUNNER_TEMP/demo.key" &
+            .venv/bin/python tests/demo.py --framework "$framework" --port "$port" --key-file "$RUNNER_TEMP/demo.key" &
             pid=$!
             for _ in $(seq 50); do
               curl -fsS "http://127.0.0.1:$port/.well-known/lantern" >/dev/null && break
               sleep 0.2
             done
             echo "::group::$framework"
-            python ../spec/conformance/run.py "http://127.0.0.1:$port/" --admin-writes \
+            .venv/bin/python ../spec/conformance/run.py "http://127.0.0.1:$port/" --admin-writes \
               --token et_demo-0123456789abcdef0123456789abcdef --key "$RUNNER_TEMP/demo.key" | tee "$RUNNER_TEMP/$framework.txt"
             echo "::endgroup::"
             grep -A8 '^Levels reached' "$RUNNER_TEMP/$framework.txt" >> "$GITHUB_STEP_SUMMARY"
@@ -210,8 +220,8 @@ jobs:
       - name: The generator's static library, through the suite's --static
         run: |
           set -o pipefail
-          python tests/demo.py --static "$RUNNER_TEMP/static"
-          python ../spec/conformance/run.py --static "$RUNNER_TEMP/static" | tee "$RUNNER_TEMP/static.txt"
+          .venv/bin/python tests/demo.py --static "$RUNNER_TEMP/static"
+          .venv/bin/python ../spec/conformance/run.py --static "$RUNNER_TEMP/static" | tee "$RUNNER_TEMP/static.txt"
           grep -A1 '^Levels reached' "$RUNNER_TEMP/static.txt" >> "$GITHUB_STEP_SUMMARY"
 
   build:
@@ -223,19 +233,20 @@ jobs:
         with:
           persist-credentials: false
           submodules: true
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
-          python-version: "3.13"
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.14"
+      # With pyproject.toml's build backend (hatchling), in isolation;
+      # twine checks what PyPI would show
       - name: Build
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install build twine
-          python -m build
-          python -m twine check --strict dist/*
+          uv build
+          uvx --exclude-newer "14 days" twine@7.0.0 check --strict dist/*
       - name: The wheel installs and imports, without any extra
         run: |
-          python -m venv "$RUNNER_TEMP/wheel"
-          "$RUNNER_TEMP/wheel/bin/pip" install dist/*.whl
+          uv venv "$RUNNER_TEMP/wheel"
+          VIRTUAL_ENV="$RUNNER_TEMP/wheel" uv pip install dist/*.whl
           "$RUNNER_TEMP/wheel/bin/python" -c "import lantern, lantern.client, lantern.server, lantern.static, lantern.peer, lantern.e2e; print(lantern.__version__)"
           "$RUNNER_TEMP/wheel/bin/lantern-static" --help > /dev/null
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

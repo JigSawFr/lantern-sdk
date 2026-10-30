@@ -25,6 +25,7 @@ option(LANTERN_BUILD_FUZZERS "libFuzzer targets (clang only)" OFF)
 option(LANTERN_WERROR "Warnings are errors (the CI sets it)" OFF)
 option(LANTERN_NO_EXCEPTIONS "Build everything with -fno-exceptions -fno-rtti" OFF)
 option(LANTERN_INSTALL "Install rules and the CMake package" ${PROJECT_IS_TOP_LEVEL})
+option(LANTERN_HARDENING "Hardening flags for every target, tests included (the presets set it)" OFF)
 
 include(GNUInstallDirs)
 
@@ -33,6 +34,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # No C++ modules here: no dependency scan, which some cross toolchains lack
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 include(cmake/LanternWarnings.cmake)
+if (LANTERN_HARDENING)
+    include(cmake/LanternHardening.cmake)
+endif ()
 
 # Monocypher (third_party/monocypher, THIRD_PARTY_NOTICES.md): ed25519
 # checks, XChaCha20-Poly1305 and the wipe of secrets. Built as its own object library, with its own (lower) warnings: it is

@@ -42,10 +42,16 @@ option(LANTERN_C_BUILD_TESTS "The C API's tests (C11), the reference server's in
 option(LANTERN_C_BUILD_EXAMPLES "The example in C (examples/read_library.c)" ${LANTERN_C_TESTS_DEFAULT})
 option(LANTERN_C_SHARED "Lantern::c, the shared library" ${LANTERN_C_SHARED_DEFAULT})
 option(LANTERN_C_INSTALL "Install rules and the CMake package LanternC" ${PROJECT_IS_TOP_LEVEL})
+option(LANTERN_HARDENING "Hardening flags for every target, the C++ library's and the tests included (the presets set it)" OFF)
 set(LANTERN_C_CPP SOURCE CACHE STRING "Where Lantern::lantern comes from: SOURCE (../cpp) or PACKAGE (find_package)")
 set_property(CACHE LANTERN_C_CPP PROPERTY STRINGS SOURCE PACKAGE)
 
 include(GNUInstallDirs)
+
+# Before the C++ library, whose folder takes them too
+if (LANTERN_HARDENING)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/../cpp/cmake/LanternHardening.cmake)
+endif ()
 
 # The C++ library ---------------------------------------------------------
 if (NOT TARGET Lantern::lantern)
