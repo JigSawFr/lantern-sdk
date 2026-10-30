@@ -33,7 +33,7 @@ CODE: dict[str, Any] = {
     "interval": 1,
     "expires": 600,
 }
-SAVE = {
+SAVE: dict[str, Any] = {
     "schema": 1,
     "platform": "switch",
     "title_id": "0100ABCD00010000",
@@ -454,3 +454,140 @@ def test_what_fits() -> None:
 
     small, big, unknown = app(10, 20), app(10, 2000), app(500, None)
     assert what_fits([small, big, unknown], 600) == ([small, unknown], [big])
+
+
+def test_the_async_client_writes(tmp_path: Path) -> None:
+    import asyncio
+
+    from fakes import AsyncFakeTransport
+    from lantern.client import AsyncLanternClient
+
+    data = bytes(range(256)) * 10
+    source = tmp_path / "save.zip"
+    source.write_bytes(data)
+    got = bytearray()
+    page = {"schema": 1, "items": [], "total": 0, "next": None}
+
+    def answer(r: Request) -> Any:
+        path = r.url.split("/v1", 1)[-1]
+        if r.url.endswith("/.well-known/lantern"):
+            return doc(body=signed_hello())
+        if path.endswith("/pairing"):
+            return doc(body=CODE)
+        if "/pairing/" in path and r.method == "GET":
+            return doc(body={"schema": 1, "token": "et_new", "scopes": ["library"], "bound": True})
+        if path.endswith("/uploads"):
+            return doc(
+                201,
+                {
+                    "schema": 1,
+                    "upload": "/api/lantern/v1/uploads/u_1",
+                    "chunk_size": 1000,
+                    "offset": 0,
+                    "expires": "2026-10-31T09:12:00Z",
+                },
+            )
+        if r.method == "HEAD":
+            return 204, {"Upload-Offset": str(len(got)), "Upload-Length": str(len(data))}, b""
+        if r.method == "PATCH" and "/uploads/" in path:
+            got.extend(r.body or b"")
+            if len(got) == len(data):
+                return doc(201, {**SAVE, "size": len(data)})
+            return 204, {"Upload-Offset": str(len(got))}, b""
+        if r.method in ("DELETE", "PUT") or "/admin/pairings/" in path:
+            return 204, {}, b""
+        if path.startswith("/saves/") and r.method == "POST":
+            return doc(201, SAVE)
+        if path == "/saves":
+            return doc(body={"schema": 1, "saves": [SAVE]})
+        if path == "/cheats":
+            return doc(
+                201,
+                {
+                    "schema": 1,
+                    "id": "cs_1",
+                    "platform": "switch",
+                    "title_id": "0100ABCD00010000",
+                    "size": 3,
+                    "sha256": "0" * 64,
+                },
+            )
+        if path == "/requests" and r.method == "POST":
+            return doc(
+                201,
+                {
+                    "schema": 1,
+                    "id": "r_1",
+                    "platform": "switch",
+                    "title_id": "0100ABCD00010000",
+                    "status": "open",
+                    "created": "2026-10-30T09:12:00Z",
+                },
+            )
+        if path.startswith("/requests"):
+            return doc(body={"schema": 1, "requests": []})
+        if path.startswith("/admin/users") and r.method in ("POST", "PATCH"):
+            return doc(
+                201 if r.method == "POST" else 200,
+                {"schema": 1, "name": "ines", "state": "active", "scopes": ["library"]},
+            )
+        if path.startswith("/admin/invitations") and r.method == "POST":
+            return doc(
+                201,
+                {
+                    "schema": 1,
+                    "id": "i_1",
+                    "code": "MZ7Q-4KHP-XW2N-8TRD",
+                    "link": f"{ROOT}/pair",
+                    "user": "ines",
+                    "scopes": ["library"],
+                    "expires": "2026-11-06T18:00:00Z",
+                    "devices": 1,
+                    "used": 0,
+                },
+            )
+        if path.startswith("/admin/"):
+            return doc(body=page)
+        return doc(404, {"schema": 1, "type": "about:blank", "title": "x", "status": 404, "code": "not_found"})
+
+    async def run() -> None:
+        transport = AsyncFakeTransport(answer)
+        async with AsyncLanternClient(ROOT, user_agent="LanternTest/1.0", platform="switch", transport=transport) as c:
+            pairing = await c.pair("Lea's tablet", ["library"], key=KEY)
+            record = await c.wait_for_pairing(pairing, store=MemoryServerStore())
+            assert record.bound and c.rating_cap is None
+            assert (await c.save("0100ABCD00010000", b"PK", profile="Lea")).save_id == "s_1"
+            assert (await c.saves()).saves[0].save_id == "s_1"
+            done = await c.upload_save("0100ABCD00010000", source)
+            assert done.size == len(data) and bytes(got) == data
+            got.clear()
+            got.extend(data[:1000])
+            assert await c.upload_offset("/api/lantern/v1/uploads/u_1") == (1000, len(data))
+            assert (await c.upload_save("0100ABCD00010000", source, resume="/api/lantern/v1/uploads/u_1")).size
+            await c.abandon_upload("/api/lantern/v1/uploads/u_1")
+            await c.delete_save(Save.from_json(SAVE))
+            assert (await c.create_cheat("switch", "0100ABCD00010000", "[x]\n")).id == "cs_1"
+            await c.replace_cheat("cs_1", "switch", "0100ABCD00010000", "[y]\n")
+            await c.delete_cheat("cs_1")
+            made = await c.request_title("0100ABCD00010000")
+            assert (await c.requests()).requests == []
+            await c.withdraw_request(made.id)
+            assert (await c.create_user("ines", ["library"])).name == "ines"
+            assert (await c.update_user("ines", scopes=["library"])).name == "ines"
+            assert [u async for u in c.iter_admin_users()] == []
+            assert [d async for d in c.iter_admin_devices(user="ines")] == []
+            assert [p async for p in c.iter_admin_pairings()] == []
+            assert [i async for i in c.iter_admin_invitations()] == []
+            assert (await c.admin_users()).items == [] and (await c.admin_devices()).items == []
+            assert (await c.admin_pairings()).items == [] and (await c.admin_invitations()).items == []
+            await c.approve_pairing("pr_1", user="ines")
+            await c.refuse_pairing("pr_2")
+            await c.revoke_device("d_1")
+            invitation = await c.create_invitation("ines", ["library"], expires="2026-11-06T18:00:00Z")
+            await c.revoke_invitation(invitation.id)
+        signed = [r for r in transport.requests if "Signature" in r.headers]
+        assert len(signed) >= len(transport.requests) - 3  # all but the handshake, the pairing and its poll's token
+
+    asyncio.run(run())
+    paired = AsyncLanternClient.paired(RECORD, user_agent="LanternTest/1.0", transport=AsyncFakeTransport(answer))
+    assert paired.core.pipeline.signer is not None

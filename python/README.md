@@ -4,12 +4,18 @@ The Python library of the [Lantern protocol](https://github.com/JigSawFr/lantern
 the open REST/JSON protocol between console homebrews and the library
 servers people run at home for their own games
 ([lantern.boreale.dev](https://lantern.boreale.dev/?utm_source=github&utm_medium=readme)):
-a client, a toolkit to add Lantern to an existing server, and the checks
-both sides share. It follows the specification's **draft 0.3**.
+a client, a toolkit to add Lantern to an existing server, the checks both
+sides share, and a malicious test server for clients. It follows the
+specification's **draft 0.4**.
 
-**Status: early.** The read side of draft 0.3 is here; pairing, tokens and
-writes wait for draft 0.4 (see [What is not there yet](#what-is-not-there-yet)).
-Nothing is published on PyPI before the first release.
+**Status: early, complete for draft 0.4's client.** The client speaks every
+route of the protocol: pairing with a device key, requests signed by it
+(RFC 9421), the writes, LAN discovery. The server toolkit pairs devices,
+checks signed requests, and serves the read routes, invitations, rating
+caps and the administration API; it reaches **Lantern Core +titles
++homebrew +cheats +admin** in the specification's conformance suite. See
+[What is not there yet](#what-is-not-there-yet). Nothing is published on
+PyPI before the first release.
 
 ## Installing
 
@@ -22,7 +28,12 @@ pip install "lantern-protocol[httpx]"     # an httpx transport, and the async cl
 pip install "lantern-protocol[flask]"     # the Flask adapter
 pip install "lantern-protocol[fastapi]"   # the FastAPI adapter
 pip install "lantern-protocol[crypto]"    # ed25519 by `cryptography` (pure Python otherwise)
+pip install "lantern-protocol[dnssd]"     # DNS-SD discovery and advertising (zeroconf)
 ```
+
+A device that signs its requests should install `crypto`: the pure-Python
+Ed25519 works everywhere but is not constant-time, which matters for a
+secret key on a device someone else can time.
 
 The distribution is `lantern-protocol`; the package is `lantern`.
 
@@ -72,14 +83,97 @@ async with lantern.AsyncLanternClient("https://shelf.example.org/", platform="sw
         ...
 ```
 
+### Pairing, and signed requests
+
+A device gets its token by pairing (SPEC.md § 5.2): it makes an Ed25519 key
+for the server, shows a code, the server's address and the short
+fingerprint of the server's key, and polls until the user approves it on
+the server's side. Its token is then bound to the key, and every request is
+signed by it (§ 5.4).
+
+```python
+from lantern.pinning import FileServerStore
+
+store = FileServerStore("servers.json")  # its owner's alone; or your keychain's
+client = lantern.LanternClient("https://192.0.2.10:8443/", verify=False, platform="switch")
+pairing = client.pair("Lea's console", ["library", "saves"])
+show(pairing.code, pairing.verify, pairing.fingerprint)  # and pairing.verify_complete as a QR code
+record = client.wait_for_pairing(pairing, store=store)  # the token, its key, the pinned SPKI
+
+# Later, from what was kept:
+with lantern.LanternClient.paired(store.server(record.uid)) as client:
+    client.handshake().account.bound  # True: signed with the device key
+```
+
+- `verify=False` is for a LAN server whose certificate no CA vouches for:
+  the client reads its key's fingerprint (`pairing.fingerprint`) for the
+  user to compare, pins it as soon as the pairing starts, and from then on
+  talks only over that key (`pin=`). Another key raises `PinMismatch`
+  before a byte of the request is sent: an alarm, not an error to retry
+  (show both fingerprints, pair again only when the user asks).
+- `pair(key=False)` asks for a bearer-only token; a server may refuse it
+  (`key_required`). The private key never leaves the device: a
+  `ServerStore` keeps it with the token (`FileServerStore`, or one over the
+  system's keychain).
+- The clock: the client takes the offset of the server's `Date` from the
+  handshake when it is off by half the server's `auth.skew` or more, and
+  signs again once, with the server's `Date`, after `signature_expired`;
+  once, with a new nonce, after `signature_replayed`. Any other signature
+  refusal (`SignatureRequired`, `SignatureInvalid`, with the server's
+  `Accept-Signature` read in `e.accept_signature`) means pairing again.
+- An invitation's link (§ 5.5) pairs at once, and pins the key it names:
+  `LanternClient.from_invitation(link, "Ines's console", ["library"])`.
+- The handshake shows the token's rating cap (§ 5.6): `client.rating_cap`.
+
+### Writing
+
+```python
+client.save("0100ABCD00010000", archive, kind="account", profile="Lea")  # one request, Content-Digest
+client.upload_save("0100ABCD00010000", "big.zip")  # resumable: chunks, HEAD, resume=
+client.download_save(save, "back.zip")  # checked against its sha256
+client.create_cheat("switch", "0100ABCD00010000", text, build_id="4A1B…", source="Lea")
+request = client.request_title("0100FFFF00090000")
+client.withdraw_request(request.id)
+```
+
+With the scope `admin`, the administration API (§ 5.7): `iter_admin_users()`,
+`create_user()`, `update_user()`, `iter_admin_devices()`, `revoke_device()`,
+`iter_admin_pairings()` (show each code next to the server's fingerprint),
+`approve_pairing(…, rating_cap=…)`, `refuse_pairing()`,
+`create_invitation()`, `revoke_invitation()`.
+
+Each call that writes is in `AsyncLanternClient` too, awaited.
+
+### On the LAN
+
+```python
+from lantern.discovery import directed_broadcast, discover, browse_dnssd
+
+for found in discover([directed_broadcast("192.168.1.20", 24)]):  # UDP 47115 (SPEC.md § 4.1)
+    print(found.name, found.url)
+```
+
+A reply is a hint, never a proof: the client then reads the handshake over
+TLS and pairs. DNS-SD (`_lantern._tcp`) needs an mDNS stack, which the
+standard library has not: `browse_dnssd()` comes with the `dnssd` extra.
+
 ### Transports and the request pipeline
 
 A request is built, then given its credentials and its signer (both for the
 server's origin only), then sent by a transport: `StdlibTransport`
 (`http.client`, the default), `HttpxTransport` or `AsyncHttpxTransport`, or
-any object with the same `send()`. `LanternClient(signer=…)` takes an object
-with `sign(request)`, which may add headers: the place for the request
-signatures of a later draft.
+any object with the same `send()`. `LanternClient(token=…, key=…)` sets a
+`BearerToken` and a `DeviceSigner`; `signer=` takes any object with
+`sign(request)`. Each transport takes `verify` and `pin` (a LAN server's
+key, SPEC.md § 5.3). The standard library's checks the key once the TLS
+handshake is done and before it sends; httpx's, which cannot, reads the
+certificate on a connection of its own, checks its key, and trusts that
+certificate alone.
+
+The client records what a server deprecates (`Deprecation`, `Sunset`, §
+3.4) in `client.core.deprecations` and the log `lantern`, and
+`lantern.client.what_fits(apps, free)` says which apps fit in the device's
+free space (`installed_size`, § 6.3).
 
 ## What both sides check
 
@@ -101,8 +195,14 @@ signatures of a later draft.
   and requirements (`offer()`: offer, warn or refuse).
 - `lantern.profiles`: Annex A, per platform: id forms, `version_code`,
   roots, architectures, cheat paths. Only the Switch's profile is complete.
-- `lantern.pinning`: the key pinned per homebrew id (`KeyPins`, an
-  interface, with a memory and a file implementation).
+- `lantern.pinning`: the key pinned per homebrew id (`KeyPins`), and the
+  servers a client paired with (`ServerStore`), each an interface with a
+  memory and a file implementation.
+- `lantern.signatures`: device keys, and requests signed and checked as
+  SPEC.md § 5.4 says; `lantern.spki`: a certificate's key fingerprint
+  (§ 5.3); `lantern.ratings`: rating caps (§ 5.6). The specification's
+  vectors (`signatures`, `ed25519-refused`, `spki`, `rating-caps`) pass byte
+  for byte.
 - `lantern.store`: files kept by the `schema` rule (a newer file is never
   written over; unknown keys are kept).
 
@@ -141,7 +241,62 @@ init_app(app, LanternApp(library, uid=SERVER_UID, name="Living room shelf", auth
 
 FastAPI is the same with `lantern.server.fastapi.include(app, lantern_app)`.
 
-What `LanternApp` serves:
+### Tokens issued by the toolkit
+
+Rather than an `authenticate` hook over tokens of its own, a server can let
+the toolkit pair devices and issue their tokens: give it an `Accounts`
+store (`MemoryAccounts` is one; implement the interface over your
+database).
+
+```python
+from lantern.server import LanternApp, MemoryAccounts, User
+
+accounts = MemoryAccounts([User("lea", ("library", "saves")), User("ada", ("library", "admin"))])
+app = LanternApp(
+    library,
+    uid=SERVER_UID,
+    name="Living room shelf",
+    accounts=accounts,
+    public=False,
+    spki=MY_TLS_KEY_SHA256,
+    secret=SECRET,
+)
+```
+
+It then offers `pairing` and `signatures` to every caller, and `admin` to
+the accounts that hold it:
+
+- pairing (§ 5.2): codes of the unambiguous alphabet that expire within 10
+  minutes, unguessable poll addresses, `verify_complete`, limits per
+  address (`429 slow_down`); a device key that is not canonical or of small
+  order is refused; `bound_only=True` refuses tokens without a key
+  (`key_required`);
+- signed requests (§ 5.4): every request of a bound token is checked
+  (components, parameters, the token's key, the window `skew`, a replay
+  cache of nonces kept twice the window), then its body against its
+  `Content-Digest`; a refusal carries `Accept-Signature`;
+- the approval: the server's own page at `verify` (`pair_page=`, which
+  signs the user in and calls `app.desk.approve()`); without it, LanternApp
+  serves a page that shows the code and the server's fingerprint and
+  approves nothing, and approval goes through the administration API;
+- invitations (§ 5.5), redeemed at pairing and approved at once, counted
+  so that devices redeeming one together never pass its `devices`; a link
+  that carries the server's `spki` when no CA vouches for its key;
+- rating caps (§ 5.6): what is above a token's cap is left out of every
+  listing and answers `404`, as if the server had none;
+- the administration API (§ 5.7): accounts, devices (never their token or
+  its hash), waiting pairings, invitations.
+
+`LanternApp.handle()` needs the request's `scheme`, `target` (as sent) and
+`remote` address, which the Flask and FastAPI adapters fill; behind a proxy
+that ends TLS, give `scheme="https"`.
+
+`lantern.server.discovery`: `DiscoveryResponder(app, https_port).start()`
+answers LAN discovery on UDP 47115 (local networks only, a few times a
+second per address); `advertise_dnssd()` advertises with DNS-SD (the
+`dnssd` extra).
+
+What `LanternApp` serves, besides what the previous section says:
 
 - the handshake, at `/.well-known/lantern` and `<base>/v1/`, with each
   caller's features and the server's platforms;
@@ -154,8 +309,11 @@ What `LanternApp` serves:
   `422` for a request document of a newer schema, `ETag` and `304`,
   `Cache-Control` and `Vary`.
 
-The families it does not offer (sections, saves, requests, pairing) are at
-0 in the handshake, and their routes answer `404`. Each piece is usable on
+The families it does not offer (sections, saves, requests; pairing,
+signatures and admin without `accounts`) are at 0 in the handshake, and
+their routes answer `404`. JSON is compressed as `Accept-Encoding` asks
+(zstd on Python 3.14, gzip before), problems say their `language`, and a
+body above the adapter's limit is read and answered `413`. Each piece is usable on
 its own: `json_response()`, `problem_response()`, `file_response()`,
 `platform_of()`, `read_document()`, `Cursors` and `SinceTokens` (sealed with
 the server's secret, nothing kept), `check_homebrew()` (what a server checks
@@ -169,8 +327,9 @@ private one.
 ## Errors
 
 A server's error answer raises the `lantern.ProblemError` of its status:
-`BadRequest` (400, 405, 416), `Unauthorized`, `Forbidden` and
-`AccountFrozen`, `NotFound`, `Conflict`, `Gone` (an expired cursor or token:
+`BadRequest` (400, 405, 416), `Unauthorized` and its signature refusals
+(`SignatureRequired`, `SignatureInvalid`, `SignatureExpired`,
+`SignatureReplayed`), `Forbidden` and `AccountFrozen`, `NotFound`, `Conflict`, `Gone` (an expired cursor or token:
 read again from the start), `TooLarge`, `Unprocessable`, `SlowDown`,
 `ServerError` and `Unavailable`. `e.status` is always there; `e.code` is
 the code when this library knows it, `None` otherwise (act on the status
@@ -180,20 +339,43 @@ alone, SPEC.md § 12); `e.detail` is bounded and without control characters;
 The client's own errors: `DocumentError` (a malformed document, or one
 beyond § 13), `NewerSchema` (treat as absent), `IntegrityError` (a download
 that is not its document's), `TransportError` and `InsecureTransport`, and
-`UnexpectedResponse` (a redirect, an unexpected status or content type). All
-derive from `lantern.LanternError`.
+`UnexpectedResponse` (a redirect, an unexpected status or content type),
+`PinMismatch` (a server's key that is not the one pinned). All derive from
+`lantern.LanternError`.
+
+## The malicious test server
+
+`tools/hostile_server.py` serves a server that breaks one rule per
+scenario, and says what a client must do: a wrong or changed TLS key,
+hostile manifests (`..`, relative paths, outside the roots), a newer
+`schema`, documents beyond SPEC.md § 13, a bad digest, a truncated
+download, a wrong `Content-Range`, extra bytes, a forged signature of a
+small-order key, signature refusals that never end, a pairing code that
+points elsewhere, a redirect. `tests/test_hostile.py` proves this client
+refuses each one. It is shared: any language's CI starts it from the
+command line.
+
+```sh
+python tools/hostile_server.py --list                  # every scenario, and what a client must do (JSON)
+python tools/hostile_server.py bad-digest --port 8099  # prints {"url", "token", "pin", "expect", …}, then serves
+```
+
+Every request it reads is logged on standard error, one JSON line each, so
+that a harness checks what its client sent. The TLS scenarios need the
+`cryptography` package.
 
 ## What is not there yet
 
-- Pairing, tokens beyond a bearer token you already have, and certificate
-  pinning (SPKI): draft 0.4 changes them (device-bound keys, request
-  signatures, invitations).
-- The write side: saves (sending and resuming), cheat writes, requests;
-  and sections in the server toolkit.
-- LAN discovery (UDP datagrams and DNS-SD).
+- In the server toolkit: sections, saves, cheat writes and requests (their
+  families are at 0, their routes answer `404` or `405`), and the routes it
+  could mark deprecated (`Deprecation`, `Sunset`).
+- Drawing the QR code of `verify_complete`: the client gives its text; an
+  app draws it with its own toolkit (SPEC.md § 5.2 wants no image from the
+  server).
+- Asking for compressed JSON: the client sends `Accept-Encoding: identity`
+  (a MAY of § 2.1).
 - Installing: the library says what to write and where, and checks it; it
   writes nothing on a device.
-- A malicious test server for clients.
 
 ## Developing
 
@@ -209,9 +391,14 @@ python -m pytest --cov               # unit, integration and conformance tests
 ```
 
 `pytest -m integration` runs the client against the specification's
-reference server (`spec/server`); `pytest -m conformance` runs the
-specification's conformance suite against the demo server (`tests/demo.py`),
-through Flask and FastAPI. Examples and tests use made-up games and names.
+reference server (`spec/server`): over plain HTTP on loopback and over TLS
+with a self-signed key, pairing, a token bound to its key, every write and
+the administration API; and DNS-SD on loopback. `pytest -m conformance` runs
+the specification's conformance suite against the demo server
+(`tests/demo.py`), through Flask and FastAPI, anonymously and with a token
+bound to its key: it reaches Lantern Core +titles +homebrew +cheats +admin.
+`tests/test_hostile.py` runs the client against the malicious test server.
+Examples and tests use made-up games and names.
 
 ## Licence
 

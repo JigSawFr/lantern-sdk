@@ -17,7 +17,8 @@ specification's draft. A security flaw is not an issue: see
   `ci(typescript): …`.
 - Each language's own checks pass before pushing; its README lists them.
 - A change of behaviour comes with its test, in every language it
-  concerns; a client fix also teaches the malicious test server its case.
+  concerns; a client fix also teaches the malicious test server
+  (`python/tools/hostile_server.py`, shared by every language) its case.
 - Examples and tests use made-up games and names, and only reserved
   addresses (`example.org`, `192.0.2.0/24`): never a real person, game,
   server or e-mail address.
