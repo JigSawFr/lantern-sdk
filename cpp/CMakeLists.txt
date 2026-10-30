@@ -5,7 +5,7 @@
 cmake_minimum_required(VERSION 3.28)
 
 project(Lantern
-    VERSION 0.3.0
+    VERSION 0.4.0
     DESCRIPTION "Client library of the Lantern protocol"
     HOMEPAGE_URL "https://github.com/JigSawFr/lantern-sdk"
     LANGUAGES C CXX)
@@ -47,8 +47,11 @@ set_target_properties(lantern_monocypher PROPERTIES
     POSITION_INDEPENDENT_CODE ON)
 
 add_library(lantern
+    src/admin.cpp
     src/client.cpp
+    src/device_key.cpp
     src/digest.cpp
+    src/discovery.cpp
     src/document.cpp
     src/download.cpp
     src/ed25519.cpp
@@ -56,14 +59,18 @@ add_library(lantern
     src/error.cpp
     src/generated/types.cpp
     src/homebrew.cpp
+    src/http_signature.cpp
     src/json.cpp
     src/memory.cpp
+    src/pairing.cpp
     src/paths.cpp
     src/pinning.cpp
     src/profiles.cpp
     src/requires.cpp
     src/sha256.cpp
+    src/tls.cpp
     src/url.cpp
+    src/writes.cpp
     $<TARGET_OBJECTS:lantern_monocypher>)
 add_library(Lantern::lantern ALIAS lantern)
 
@@ -86,9 +93,13 @@ if (LANTERN_NO_EXCEPTIONS)
     lantern_no_exceptions(lantern)
 endif ()
 
+# The TLS adapters, optional (cmake/LanternAdapters.cmake)
+include(cmake/LanternAdapters.cmake)
+
 if (LANTERN_BUILD_TESTS OR LANTERN_BUILD_EXAMPLES OR LANTERN_BUILD_FUZZERS)
     # The blocking HTTP/1.1 client over POSIX sockets, plain HTTP on
-    # loopback only: for tests and examples, never for an app
+    # loopback only, /dev/urandom and a UDP socket: for tests and examples,
+    # never for an app
     if (NOT WIN32)
         add_subdirectory(adapters/posix)
     endif ()
@@ -110,6 +121,16 @@ if (LANTERN_INSTALL)
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
     install(DIRECTORY include/lantern DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    foreach (adapter curl mbedtls)
+        if (TARGET lantern_${adapter})
+            install(TARGETS lantern_${adapter} EXPORT LanternTargets
+                ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+                LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+                RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+            install(FILES adapters/${adapter}/${adapter}_transport.hpp
+                DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/lantern/adapters)
+        endif ()
+    endforeach ()
     install(EXPORT LanternTargets
         NAMESPACE Lantern::
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Lantern)

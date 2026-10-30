@@ -7,8 +7,7 @@
 // wherever it keeps its state (a file on the SD card, a database), and the
 // library only reads and writes pins through it.
 //
-// (Draft 0.4 changes tokens and pairing; server key pinning by SPKI, § 5.3,
-// comes with it.)
+// A server's key, pinned by SPKI at pairing (§ 5.3), is tls.hpp's.
 #pragma once
 
 #include <cstdint>

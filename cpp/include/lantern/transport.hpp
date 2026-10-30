@@ -1,11 +1,12 @@
 // The transport: the library speaks HTTP through it, and has no networking
-// of its own. The app gives one (libcurl and mbedTLS on the consoles, the
-// platform's own elsewhere: adapters in a later version); the tests use
-// adapters/posix, plain HTTP on loopback only.
+// of its own. The app gives one: adapters/curl (libcurl and the platform's
+// TLS) and adapters/mbedtls (mbedTLS, for the consoles) are two, optional
+// targets; adapters/posix, plain HTTP on loopback only, serves the tests.
 //
 // A transport sends one request and hands the answer to a ResponseHandler
 // as it comes: its status, each header, then the body in chunks. It does
-// TLS, and pins a server's key when the app asks it to (SPEC.md § 5.3); it
+// TLS, and checks a server's key through a ServerTrust (tls.hpp) when the
+// app gives one (SPEC.md § 5.3); it
 // follows no redirect, and adds no header of its own but Host and those of
 // the body's framing (Content-Length).
 #pragma once
@@ -109,13 +110,17 @@ struct SigningInput
     std::span<const Header> headers;
     // The SHA-256 of the body, when there is one.
     std::optional<Digest> content_digest;
+    // A poll of a pairing made with a key (SPEC.md § 5.4): signed although
+    // it carries no Authorization.
+    bool keyed_poll = false;
 };
 
-// A hook for draft 0.4's device-bound tokens (RFC 9421 HTTP message
+// The hook of device-bound tokens (SPEC.md § 5.4, RFC 9421 HTTP message
 // signatures): it sees each request's method, target, headers and body
 // digest, and adds its own headers (Signature-Input, Signature,
-// Content-Digest). Nothing in this version uses one; the client calls it
-// last, after every other header is set.
+// Content-Digest). DeviceSigner (http_signature.hpp) is the client's; the
+// client calls it last, after every other header is set, and only for a
+// request to the server's origin (§ 2).
 class RequestSigner
 {
   public:

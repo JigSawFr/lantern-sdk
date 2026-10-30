@@ -1,8 +1,8 @@
 // A minimal blocking HTTP/1.1 client over POSIX sockets, for the tests and
 // the example only: plain HTTP to a loopback address (SPEC.md § 2), one
 // connection per request (Connection: close), Content-Length, chunked or
-// close-delimited bodies. Never for an app: no TLS, no proxy, no redirect.
-// The TLS adapters (libcurl, mbedTLS) come in a later version.
+// close-delimited bodies. Never for an app: no TLS, no proxy, no redirect;
+// an app takes adapters/curl or adapters/mbedtls.
 #pragma once
 
 #include <chrono>

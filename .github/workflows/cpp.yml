@@ -1,22 +1,32 @@
 # The C++ library (cpp/, cpp/README.md): its format, its generated types,
 # its build with warnings as errors on every compiler and standard library
-# of the desktop, its tests (unit, and against the specification's
-# reference server), the sanitizers, clang-tidy, a short fuzz run, the
-# install, and a cross build of the library for every platform Aurore runs
-# on, each with the toolchain Aurore's CI uses.
+# of the desktop, its tests (unit, against the specification's reference
+# server, and each TLS adapter against it over HTTPS), the sanitizers,
+# clang-tidy, a short fuzz run, the install, and a cross build of the
+# library for every platform Aurore runs on, each with the toolchain
+# Aurore's CI uses (with the mbedTLS adapter where the image ships mbedTLS).
 name: cpp
 
+# Only what the C++ library is made of: its folder, the specification it
+# follows (the submodule), this workflow, and the files every library of
+# the repository shares (the submodules' list, the licences)
 on:
   push:
     branches: [ main ]
     paths:
       - "cpp/**"
       - "spec"
+      - ".gitmodules"
+      - "REUSE.toml"
+      - "LICENSES/**"
       - ".github/workflows/cpp.yml"
   pull_request:
     paths:
       - "cpp/**"
       - "spec"
+      - ".gitmodules"
+      - "REUSE.toml"
+      - "LICENSES/**"
       - ".github/workflows/cpp.yml"
 
 # A new push to a pull request stops the run of the previous one
@@ -77,14 +87,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: "gcc, libstdc++", cc: gcc, packages: "" }
-          - { name: "clang, libstdc++", cc: clang, packages: "" }
-          - { name: "clang, libc++", cc: clang, packages: "libcxx", cxxflags: "-stdlib=libc++" }
-          # The 32-bit consoles (3DS, Vita) and armeabi-v7a, on a desktop
-          - { name: "gcc, 32-bit", cc: gcc, packages: "multilib", cxxflags: "-m32", cflags: "-m32" }
-          # The library, its tests and the example with -fno-exceptions -fno-rtti
-          - { name: "gcc, no exceptions", cc: gcc, packages: "", preset: noexcept }
-          - { name: "clang, no exceptions", cc: clang, packages: "libcxx", cxxflags: "-stdlib=libc++", preset: noexcept }
+          # tls: libcurl, mbedTLS and openssl, for the TLS adapters and their
+          # tests against the reference server over HTTPS
+          - { name: "gcc, libstdc++", cc: gcc, packages: "tls" }
+          - { name: "clang, libstdc++", cc: clang, packages: "tls" }
+          - { name: "clang, libc++", cc: clang, packages: "libcxx tls", cxxflags: "-stdlib=libc++" }
+          # The 32-bit consoles (3DS, Vita) and armeabi-v7a, on a desktop;
+          # the adapters' libraries are the runner's 64-bit ones: left out
+          - { name: "gcc, 32-bit", cc: gcc, packages: "multilib", cxxflags: "-m32", cflags: "-m32",
+              cmake: "-DLANTERN_CURL=OFF -DLANTERN_MBEDTLS=OFF" }
+          # The library, its tests, the adapters and the example with -fno-exceptions -fno-rtti
+          - { name: "gcc, no exceptions", cc: gcc, packages: "tls", preset: noexcept }
+          - { name: "clang, no exceptions", cc: clang, packages: "libcxx tls", cxxflags: "-stdlib=libc++", preset: noexcept }
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -95,24 +109,28 @@ jobs:
         run: |
           sudo apt-get update -q
           packages="ninja-build g++-$GCC clang-$CLANG"
-          case "${{ matrix.packages }}" in
-            libcxx) packages="$packages libc++-$CLANG-dev libc++abi-$CLANG-dev" ;;
-            # gcc-multilib brings the i386 asm/ headers the versioned one leaves out
-            multilib) packages="$packages g++-$GCC-multilib gcc-multilib" ;;
-          esac
+          for wanted in ${{ matrix.packages }}; do
+            case "$wanted" in
+              libcxx) packages="$packages libc++-$CLANG-dev libc++abi-$CLANG-dev" ;;
+              # gcc-multilib brings the i386 asm/ headers the versioned one leaves out
+              multilib) packages="$packages g++-$GCC-multilib gcc-multilib" ;;
+              tls) packages="$packages libcurl4-openssl-dev libmbedtls-dev openssl" ;;
+            esac
+          done
           sudo apt-get install -y -q --no-install-recommends $packages
       - name: Build
         working-directory: cpp
         run: |
           if [ "${{ matrix.cc }}" = gcc ]; then export CC=gcc-$GCC CXX=g++-$GCC; else export CC=clang-$CLANG CXX=clang++-$CLANG; fi
-          cmake --preset "$PRESET" -DLANTERN_WERROR=ON \
+          cmake --preset "$PRESET" -DLANTERN_WERROR=ON ${{ matrix.cmake }} \
             -DCMAKE_C_FLAGS="${{ matrix.cflags }}" \
             -DCMAKE_CXX_FLAGS="${{ matrix.cxxflags }}" \
             -DCMAKE_EXE_LINKER_FLAGS="${{ matrix.cxxflags }}"
           cmake --build --preset "$PRESET"
         env:
           PRESET: ${{ matrix.preset || 'dev' }}
-      # Unit tests, then the integration tests against spec/server
+      # Unit tests, then the integration tests against spec/server, then
+      # each TLS adapter against it over HTTPS
       - name: Test
         working-directory: cpp
         run: ctest --preset "$PRESET"
@@ -140,7 +158,8 @@ jobs:
       - name: Install the compilers
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends ninja-build g++-$GCC clang-$CLANG libclang-rt-$CLANG-dev
+          sudo apt-get install -y -q --no-install-recommends ninja-build g++-$GCC clang-$CLANG libclang-rt-$CLANG-dev \
+            libcurl4-openssl-dev libmbedtls-dev openssl
       - name: Build
         working-directory: cpp
         run: |
@@ -165,8 +184,8 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends ninja-build clang-$CLANG clang-tidy-$CLANG \
-            libc++-$CLANG-dev libc++abi-$CLANG-dev
-      # The library and the adapter, against libc++ and against libstdc++;
+            libc++-$CLANG-dev libc++abi-$CLANG-dev libcurl4-openssl-dev libmbedtls-dev
+      # The library and the adapters, against libc++ and against libstdc++;
       # cpp/.clang-tidy says which checks and why some are off; named, since
       # run-clang-tidy lists the checks from the repository root, where none is
       - name: clang-tidy
@@ -210,10 +229,10 @@ jobs:
       - name: Fuzz
         run: |
           mkdir -p fuzz-crashes
-          for target in json paths problem homebrew signature; do
+          for target in json paths problem homebrew signature discovery http_signature certificate; do
             mkdir -p fuzz-corpus/$target
             seeds=cpp/tests/fuzz/corpus/$target
-            case $target in json|problem|homebrew) seeds="$seeds spec/examples/v1 spec/examples/v1/invalid" ;; esac
+            case $target in json|problem|homebrew|discovery) seeds="$seeds spec/examples/v1 spec/examples/v1/invalid" ;; esac
             build/fuzz/tests/fuzz/lantern_fuzz_$target -max_total_time=60 -max_len=16384 -timeout=10 \
               -artifact_prefix=fuzz-crashes/$target- fuzz-corpus/$target $seeds
           done
@@ -272,11 +291,13 @@ jobs:
           persist-credentials: false
           submodules: true
       # Visual Studio's generator, the runner's newest; unit tests only (the
-      # loopback adapter is POSIX)
+      # loopback adapter is POSIX). No TLS adapter: a libcurl the image
+      # carries for other tools is not one to build against
       - name: Build
         shell: bash
         run: |
-          cmake -S cpp -B build ${{ matrix.toolset }} -DLANTERN_WERROR=ON -DLANTERN_BUILD_TESTS=ON -DLANTERN_BUILD_EXAMPLES=OFF
+          cmake -S cpp -B build ${{ matrix.toolset }} -DLANTERN_WERROR=ON -DLANTERN_BUILD_TESTS=ON -DLANTERN_BUILD_EXAMPLES=OFF \
+            -DLANTERN_CURL=OFF -DLANTERN_MBEDTLS=OFF
           cmake --build build --config Debug
       - name: Test
         run: ctest --test-dir build -C Debug --output-on-failure -R unit
@@ -307,6 +328,9 @@ jobs:
   # with -Werror, each with the toolchain Aurore's CI uses (no tests: they
   # run on the desktop).
 
+  # The Switch and the 3DS with the mbedTLS adapter: their images ship
+  # devkitPro's switch-mbedtls and 3ds-mbedtls (2.28). Their libcurl
+  # (switch-curl 7.69) is older than the 7.85 the curl adapter needs.
   switch:
     name: switch (devkitA64)
     runs-on: ubuntu-26.04
@@ -321,7 +345,7 @@ jobs:
       - name: Build
         run: |
           cmake -S cpp -B build -DCMAKE_TOOLCHAIN_FILE="$DEVKITPRO/cmake/Switch.cmake" \
-            -DCMAKE_BUILD_TYPE=Release -DLANTERN_WERROR=ON
+            -DCMAKE_BUILD_TYPE=Release -DLANTERN_WERROR=ON -DLANTERN_MBEDTLS=ON
           cmake --build build -j "$(nproc)"
 
   ctr:
@@ -338,7 +362,7 @@ jobs:
       - name: Build
         run: |
           cmake -S cpp -B build -DCMAKE_TOOLCHAIN_FILE="$DEVKITPRO/cmake/3DS.cmake" \
-            -DCMAKE_BUILD_TYPE=Release -DLANTERN_WERROR=ON
+            -DCMAKE_BUILD_TYPE=Release -DLANTERN_WERROR=ON -DLANTERN_MBEDTLS=ON
           cmake --build build -j "$(nproc)"
 
   psv:
