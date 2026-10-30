@@ -18,6 +18,7 @@ import { contentDigest } from "../digest.ts";
 import { schemaOf } from "../documents.ts";
 import { type EncryptedBackup, encryptionHeader } from "../e2e.ts";
 import {
+  BadRequest,
   Conflict,
   Gone,
   InsecureTransport,
@@ -1698,7 +1699,8 @@ export class LanternClient {
         try {
           granted = (await this.grant(file.sha256)).grant;
         } catch (e) {
-          if (e instanceof IntegrityError || !(e instanceof LanternError)) throw e;
+          // No grant, or one that does not verify (IntegrityError): it goes to no peer; the server serves the file.
+          if (!(e instanceof LanternError)) throw e;
           passed.push({ url: this.v1(`/grants/sha256/${file.sha256}`), error: e });
         }
         for (const peer of granted !== undefined ? asked : []) {
@@ -1825,7 +1827,8 @@ export class LanternClient {
     try {
       doc = await read(since);
     } catch (e) {
-      if (!(e instanceof Gone) || since === undefined) throw e;
+      // 410: deletions dropped that far back; 400: a revision of another generation. Read it whole.
+      if (!(e instanceof Gone || e instanceof BadRequest) || since === undefined) throw e;
       doc = await read(undefined);
     }
     state.revs[collection] = Math.max(doc.rev, ...doc.items.map((i) => i.rev ?? 0));

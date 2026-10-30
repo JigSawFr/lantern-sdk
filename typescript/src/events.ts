@@ -62,14 +62,20 @@ export class SseParser {
   lastEventId = "";
   /** Comments read (heartbeats). */
   comments = 0;
+  #completed: SseBlock[] = [];
 
   constructor(options: { lineLimit?: number; dataLimit?: number } = {}) {
     this.lineLimit = options.lineLimit ?? EVENT_LINE;
     this.dataLimit = options.dataLimit ?? EVENT_DATA;
   }
 
+  /**
+   * The blocks a chunk completes. A bound passed throws DocumentError; the
+   * blocks the chunk completed before it are then in `completed()`.
+   */
   push(chunk: Uint8Array): SseBlock[] {
     const out: SseBlock[] = [];
+    this.#completed = out;
     for (let i = 0; i < chunk.length; i++) {
       const byte = chunk[i] as number;
       if (this.#afterCr) {
@@ -92,6 +98,13 @@ export class SseParser {
       }
       this.#lineBytes[this.#lineLength++] = byte;
     }
+    return out;
+  }
+
+  /** The blocks the last push() completed before it threw. */
+  completed(): SseBlock[] {
+    const out = this.#completed;
+    this.#completed = [];
     return out;
   }
 

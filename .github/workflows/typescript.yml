@@ -1,10 +1,14 @@
 # The TypeScript library (typescript/): the generated types against the
 # specification's schemas, Biome, tsc in strict mode, the build and its
-# package; the unit tests and the specification's vectors on Node 22 and 24;
-# the client against the malicious test server (every scenario) and against
-# the specification's reference server (over TLS, with a token bound to its
-# key); the conformance suite against the toolkit's demo server (node:http and
-# fetchHandler, with the levels it reaches); and the library in Chromium.
+# package (and its lantern-static command); the unit tests and the
+# specification's vectors on Node 22 and 24; the client against the malicious
+# test server (every scenario its --list gives) and against the
+# specification's reference server (over TLS, with a token bound to its key;
+# draft 0.5's events, sync, encrypted saves, grants and its peer, static
+# libraries); the conformance suite against the toolkit's demo server
+# (node:http and fetchHandler, with the levels it reaches, a peer of the
+# toolkit's, and lantern-static's output checked by --static); and the library
+# in Chromium (events and decryption included).
 # Nothing is published: that comes with the first release and its signing.
 name: typescript
 
@@ -59,6 +63,7 @@ jobs:
         run: |
           npx tsc -p tsconfig.build.json
           npm pack --dry-run
+          node dist/node/lantern-static.js --help
       - name: The browser entry imports nothing of Node's
         run: |
           set -o pipefail
@@ -143,11 +148,15 @@ jobs:
       - name: Install
         run: |
           npm ci
-          python -m pip install "cryptography>=42"
+          python -m pip install "cryptography>=42" -r ../spec/tools/requirements.txt
       - name: Reading, pairing over a pinned TLS key, signed requests, writes, administration
         env:
           PYTHON: python
         run: node --test --test-concurrency=1 --test-reporter=spec test/integration/reference.test.ts
+      - name: Draft 0.5, events, sync, encrypted saves, the reference peer, static libraries, deleting an account
+        env:
+          PYTHON: python
+        run: node --test --test-concurrency=1 --test-reporter=spec test/integration/reference-v05.test.ts
 
   conformance:
     name: the conformance suite against the demo server
@@ -170,7 +179,7 @@ jobs:
         run: |
           npm ci
           python -m pip install -r ../spec/tools/requirements.txt
-      - name: node:http and fetchHandler, anonymously and with a token bound to its key
+      - name: node:http and fetchHandler, anonymously and with a token bound to its key; lantern-static and --static
         env:
           PYTHON: python
         run: node --test --test-concurrency=1 --test-reporter=spec test/integration/conformance.test.ts
@@ -183,9 +192,9 @@ jobs:
             curl -fsS http://127.0.0.1:8090/.well-known/lantern >/dev/null && break
             sleep 0.2
           done
-          python ../spec/conformance/run.py http://127.0.0.1:8090/ \
+          python ../spec/conformance/run.py http://127.0.0.1:8090/ --admin-writes \
             --token et_demo-0123456789abcdef0123456789abcdef --key "$RUNNER_TEMP/demo.key" | tee "$RUNNER_TEMP/report.txt"
-          grep -A8 '^Levels reached' "$RUNNER_TEMP/report.txt" >> "$GITHUB_STEP_SUMMARY"
+          grep -A12 '^Levels reached' "$RUNNER_TEMP/report.txt" >> "$GITHUB_STEP_SUMMARY"
           kill "$pid"
 
   browser:
@@ -206,5 +215,5 @@ jobs:
         run: |
           npm ci
           npx playwright-core install --with-deps chromium-headless-shell
-      - name: Build, then read, download, verify, pair and sign in Chromium
+      - name: Build, then read, download, verify, pair, sign, hold an event stream and decrypt in Chromium
         run: npm run test:browser

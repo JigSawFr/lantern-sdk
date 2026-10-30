@@ -11,9 +11,9 @@
  * without a token), or five failures in a row.
  */
 
-import { DocumentError, LanternError } from "../base.ts";
+import { DocumentError } from "../base.ts";
 import { ServerError, SlowDown, TransportError } from "../errors.ts";
-import { backoff, readEvent, type ServerEvent, SseParser } from "../events.ts";
+import { backoff, readEvent, type ServerEvent, type SseBlock, SseParser } from "../events.ts";
 import type { TransportResponse } from "./transport.ts";
 
 /** What opens the stream: given the last id read (or the one to resume from), the open response. */
@@ -60,7 +60,7 @@ export class EventStream implements AsyncIterable<ServerEvent> {
   readonly #onReconnect: EventStreamOptions["onReconnect"];
   readonly #abort = new AbortController();
   #response: TransportResponse | undefined;
-  #reading = false;
+  #iterator: AsyncGenerator<ServerEvent> | undefined;
 
   constructor(connect: Connect, options: EventStreamOptions = {}) {
     this.#connect = connect;
@@ -79,9 +79,13 @@ export class EventStream implements AsyncIterable<ServerEvent> {
     return this.#abort.signal.aborted;
   }
 
-  async *[Symbol.asyncIterator](): AsyncGenerator<ServerEvent> {
-    if (this.#reading) throw new LanternError("an event stream is read by one loop");
-    this.#reading = true;
+  /** The stream's events: the same iterator each time it is asked for (one loop reads a stream). */
+  [Symbol.asyncIterator](): AsyncGenerator<ServerEvent> {
+    this.#iterator ??= this.#run();
+    return this.#iterator;
+  }
+
+  async *#run(): AsyncGenerator<ServerEvent> {
     let failures = 0;
     let wait = 0;
     try {
@@ -95,7 +99,16 @@ export class EventStream implements AsyncIterable<ServerEvent> {
           this.serverStopping = false;
           const parser = new SseParser();
           for await (const chunk of this.#response.body()) {
-            for (const block of parser.push(chunk)) {
+            let blocks: SseBlock[];
+            let refused: unknown;
+            try {
+              blocks = parser.push(chunk);
+            } catch (e) {
+              // What came before a bound passed is given; then the stream is refused.
+              blocks = parser.completed();
+              refused = e;
+            }
+            for (const block of blocks) {
               if (block.retry !== undefined) this.retry = block.retry;
               const event = readEvent(block);
               if (parser.lastEventId) this.lastId = parser.lastEventId;
@@ -109,6 +122,7 @@ export class EventStream implements AsyncIterable<ServerEvent> {
               if (this.closed) return;
               if (this.serverStopping) break;
             }
+            if (refused !== undefined) throw refused;
             if (this.serverStopping) break;
           }
         } catch (e) {
@@ -127,7 +141,7 @@ export class EventStream implements AsyncIterable<ServerEvent> {
         this.#onReconnect?.(ended, wait / 1000);
       }
     } finally {
-      this.#reading = false;
+      this.#abort.abort();
     }
   }
 }
