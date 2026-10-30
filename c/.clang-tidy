@@ -1,0 +1,126 @@
+---
+# The C API's sources (c/src), checked by the CI with the newest
+# clang-tidy: cpp/.clang-tidy's checks and reasons, but for the headers
+# looked at, c/src's alone (lantern.h is C, and cpp/'s headers are
+# cpp/'s to check), and one more check turned off for the C ABI's sake.
+# The generated accessors (src/generated/) are left out by the CI's list.
+#
+# Turned off here besides cpp/.clang-tidy's:
+# - cppcoreguidelines-pro-bounds-array-to-pointer-decay: the ABI's structs
+#   hold C arrays (an error's texts, keys, digests), filled with memcpy and
+#   passed as the C strings they are
+#
+# Turned off in cpp/.clang-tidy, and here, and why:
+# - bugprone-easily-swappable-parameters: (string_view, string_view) is the
+#   shape of most of the protocol's functions
+# - cppcoreguidelines-avoid-magic-numbers, readability-magic-numbers: the
+#   protocol's numbers (limits, SHA-256's constants) are its text
+# - cppcoreguidelines-pro-bounds-pointer-arithmetic,
+#   cppcoreguidelines-pro-bounds-constant-array-index: the parser and SHA-256
+#   index bytes they have bounded themselves
+# - cppcoreguidelines-pro-type-reinterpret-cast: bytes seen as chars, at the
+#   transport's edge only
+# - cppcoreguidelines-avoid-do-while, readability-identifier-length,
+#   readability-function-cognitive-complexity: style, not correctness; the
+#   tokenizer is one function on purpose
+# - cppcoreguidelines-pro-type-union-access, cppcoreguidelines-owning-memory:
+#   no unions, and ownership is pmr's
+# - misc-non-private-member-variables-in-classes,
+#   cppcoreguidelines-non-private-member-variables-in-classes: plain
+#   aggregates are the documents' shape
+# - modernize-use-trailing-return-type: style
+# - misc-include-cleaner: needs an IWYU mapping for the standard library
+# - cppcoreguidelines-pro-type-vararg: none used; kept off for the asserts of
+#   some standard libraries
+# - readability-braces-around-statements, readability-math-missing-parentheses,
+#   modernize-use-designated-initializers: Aurore's style (.clang-format)
+#   writes a single statement without braces, and aggregates in order
+# - cppcoreguidelines-avoid-const-or-ref-data-members: the response handlers
+#   hold references to what they fill, for one request
+# - bugprone-exception-escape: the library is built to run without
+#   exceptions; what it flags are the standard library's precondition throws
+#   (string_view::substr past the end, which the code never asks, and the
+#   fuzzers check) and bad_alloc, which -fno-exceptions makes an abort
+# - bugprone-suspicious-stringview-data-usage: it flags
+#   std::from_chars(text.data(), text.data() + text.size()), which is given
+#   its end
+# - cppcoreguidelines-noexcept-move-operations,
+#   performance-noexcept-move-constructor: the documents' move assignment
+#   copies when the two sides use different memory resources (pmr), so it
+#   may allocate and cannot be noexcept
+# - cppcoreguidelines-pro-bounds-avoid-unchecked-container-access: as the
+#   constant-array-index check above, indices the code has bounded
+# - portability-avoid-pragma-once: every compiler of the CI's platforms
+#   knows it, and Aurore uses it
+# - readability-inconsistent-ifelse-braces: Aurore's style, as
+#   readability-braces-around-statements
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  cert-*,
+  clang-analyzer-*,
+  cppcoreguidelines-*,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -cppcoreguidelines-pro-bounds-constant-array-index,
+  -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+  -cppcoreguidelines-pro-type-reinterpret-cast,
+  -cppcoreguidelines-avoid-do-while,
+  -cppcoreguidelines-pro-type-union-access,
+  -cppcoreguidelines-owning-memory,
+  -cppcoreguidelines-non-private-member-variables-in-classes,
+  -cppcoreguidelines-pro-type-vararg,
+  misc-*,
+  -misc-non-private-member-variables-in-classes,
+  -misc-include-cleaner,
+  -misc-no-recursion,
+  modernize-*,
+  -modernize-use-trailing-return-type,
+  performance-*,
+  portability-*,
+  readability-*,
+  -readability-magic-numbers,
+  -readability-identifier-length,
+  -readability-function-cognitive-complexity,
+  -readability-braces-around-statements,
+  -readability-math-missing-parentheses,
+  -modernize-use-designated-initializers,
+  -cppcoreguidelines-avoid-const-or-ref-data-members,
+  -bugprone-exception-escape,
+  -bugprone-suspicious-stringview-data-usage,
+  -cppcoreguidelines-noexcept-move-operations,
+  -performance-noexcept-move-constructor,
+  -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,
+  -portability-avoid-pragma-once,
+  -readability-inconsistent-ifelse-braces
+WarningsAsErrors: '*'
+HeaderFilterRegex: '.*/c/src/.*'
+CheckOptions:
+  - key: readability-identifier-naming.ClassCase
+    value: CamelCase
+  - key: readability-identifier-naming.StructCase
+    value: CamelCase
+  - key: readability-identifier-naming.FunctionCase
+    value: lower_case
+  - key: readability-identifier-naming.VariableCase
+    value: lower_case
+  - key: readability-identifier-naming.NamespaceCase
+    value: lower_case
+  - key: readability-identifier-naming.EnumConstantCase
+    value: lower_case
+  - key: readability-identifier-naming.PrivateMemberSuffix
+    value: _
+  - key: readability-implicit-bool-conversion.AllowPointerConditions
+    value: true
+  # The allocator-extended move constructors move member by member
+  - key: cppcoreguidelines-rvalue-reference-param-not-moved.AllowPartialMove
+    value: true
+  # The generated documents move every member alike, trivial ones included
+  - key: performance-move-const-arg.CheckTriviallyCopyableMove
+    value: false
+  - key: cppcoreguidelines-special-member-functions.AllowSoleDefaultDtor
+    value: true
+  - key: misc-non-private-member-variables-in-classes.IgnoreClassesWithAllMemberVariablesBeingPublic
+    value: true
+...

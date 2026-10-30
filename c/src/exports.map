@@ -1,0 +1,9 @@
+/* The shared library's exports on ELF systems (GNU ld, gold, lld): the C
+ * API alone, under one version node per ABI version (LANTERN_C_ABI_VERSION).
+ * Everything else, the C++ library linked inside included, stays local. */
+LANTERN_C_1 {
+    global:
+        lantern_*;
+    local:
+        *;
+};
