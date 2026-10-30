@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/admin-user.json",
+  "title": "Account",
+  "description": "POST <base>/v1/admin/users and PATCH <base>/v1/admin/users/{name} (SPEC.md § 5.7): the account.",
+  "allOf": [
+    {
+      "$ref": "common.json#/$defs/admin_user"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "$ref": "common.json#/$defs/schema1"
+        }
+      },
+      "required": [
+        "schema"
+      ]
+    }
+  ]
+}

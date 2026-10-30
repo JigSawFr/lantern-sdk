@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/admin-devices.json",
+  "title": "Devices",
+  "description": "GET <base>/v1/admin/devices (SPEC.md § 5.7): a page of paired devices, one token each.",
+  "allOf": [
+    {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "$ref": "common.json#/$defs/admin_device"
+          }
+        },
+        "total": {
+          "$ref": "common.json#/$defs/uint64"
+        },
+        "next": {
+          "oneOf": [
+            {
+              "$ref": "common.json#/$defs/opaque"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "next"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "$ref": "common.json#/$defs/schema1"
+        }
+      },
+      "required": [
+        "schema"
+      ]
+    }
+  ]
+}

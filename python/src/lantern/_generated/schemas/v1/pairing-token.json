@@ -23,6 +23,13 @@
       "description": "Seconds until the token expires; absent, it lasts until revoked.",
       "type": "integer",
       "minimum": 1
+    },
+    "bound": {
+      "type": "boolean",
+      "description": "Whether the token is bound to the key sent at pairing (SPEC.md § 5.4)."
+    },
+    "rating_cap": {
+      "$ref": "common.json#/$defs/rating_cap"
     }
   },
   "required": [

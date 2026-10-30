@@ -67,6 +67,13 @@
             "$ref": "common.json#/$defs/scope"
           },
           "uniqueItems": true
+        },
+        "bound": {
+          "type": "boolean",
+          "description": "Whether the caller's token is bound to a device key (SPEC.md § 5.4)."
+        },
+        "rating_cap": {
+          "$ref": "common.json#/$defs/rating_cap"
         }
       },
       "required": [
@@ -113,6 +120,14 @@
         "pairing": {
           "type": "integer",
           "minimum": 0
+        },
+        "signatures": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "admin": {
+          "type": "integer",
+          "minimum": 0
         }
       },
       "additionalProperties": {
@@ -142,6 +157,30 @@
           "description": "Backups kept per title, platform and account (SPEC.md § 9.1)."
         }
       }
+    },
+    "language": {
+      "$ref": "common.json#/$defs/language",
+      "description": "The language of motd (SPEC.md § 2.2)."
+    },
+    "auth": {
+      "type": "object",
+      "description": "Signed requests (SPEC.md § 5.4).",
+      "properties": {
+        "bearer_only": {
+          "type": "boolean",
+          "description": "Whether the server still issues and takes tokens no key binds."
+        },
+        "skew": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 900,
+          "description": "Seconds a signature's created may differ from the server's clock."
+        }
+      },
+      "required": [
+        "bearer_only",
+        "skew"
+      ]
     }
   },
   "required": [

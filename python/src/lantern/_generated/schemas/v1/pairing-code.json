@@ -30,12 +30,17 @@
       "type": "integer",
       "minimum": 1,
       "maximum": 600
+    },
+    "verify_complete": {
+      "$ref": "common.json#/$defs/url",
+      "description": "verify with the code in its query (RFC 8628 verification_uri_complete), for a QR code the client draws (SPEC.md § 5.2)."
     }
   },
   "required": [
     "schema",
     "code",
     "verify",
+    "verify_complete",
     "poll",
     "interval",
     "expires"

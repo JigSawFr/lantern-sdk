@@ -154,6 +154,13 @@
         },
         "file": {
           "$ref": "common.json#/$defs/url"
+        },
+        "atlas": {
+          "$ref": "common.json#/$defs/atlas"
+        },
+        "installed_size": {
+          "$ref": "common.json#/$defs/uint64",
+          "description": "The bytes it takes once installed, when the server knows them (SPEC.md § 6.1, § 6.3)."
         }
       },
       "required": [
@@ -400,25 +407,7 @@
           }
         },
         "ratings": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "system": {
-                "type": "string",
-                "pattern": "^[A-Z][A-Z0-9-]{1,15}$"
-              },
-              "rating": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 16
-              }
-            },
-            "required": [
-              "system",
-              "rating"
-            ]
-          }
+          "$ref": "common.json#/$defs/ratings"
         },
         "languages": {
           "type": "array",
@@ -459,6 +448,9 @@
             "url",
             "external"
           ]
+        },
+        "atlas": {
+          "$ref": "common.json#/$defs/atlas"
         }
       },
       "required": [
@@ -628,6 +620,10 @@
         "signer_sha256": {
           "$ref": "common.json#/$defs/sha256",
           "description": "The SHA-256 of the platform's own signing certificate, where the profile has one (SPEC.md § 8.2, Annex A.5)."
+        },
+        "installed_size": {
+          "$ref": "common.json#/$defs/uint64",
+          "description": "What it takes once installed (SPEC.md § 8.2)."
         }
       },
       "required": [
@@ -782,6 +778,12 @@
         },
         "port": {
           "$ref": "common.json#/$defs/port"
+        },
+        "atlas": {
+          "$ref": "common.json#/$defs/atlas"
+        },
+        "ratings": {
+          "$ref": "common.json#/$defs/ratings"
         }
       },
       "required": [
@@ -1676,6 +1678,328 @@
       },
       "required": [
         "text"
+      ]
+    },
+    "atlas": {
+      "description": "A game's id in Atlas (SPEC.md § 6.1): its Wikidata item, the key of Atlas's links.json. A hint, never an identity.",
+      "type": "string",
+      "pattern": "^Q[1-9][0-9]{0,15}$"
+    },
+    "ratings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "system": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9-]{1,15}$"
+          },
+          "rating": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16
+          }
+        },
+        "required": [
+          "system",
+          "rating"
+        ]
+      },
+      "description": "Age ratings, each an organisation's short name and its rating as it writes it (SPEC.md § 7.1); rating caps read them (§ 5.6)."
+    },
+    "rating_cap": {
+      "description": "A rating cap a token carries (SPEC.md § 5.6): an age, or a rating of one system; unrated says what becomes of what has no rating the table reads.",
+      "type": "object",
+      "properties": {
+        "age": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 99
+        },
+        "system": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9-]{1,15}$"
+        },
+        "rating": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16
+        },
+        "unrated": {
+          "enum": [
+            "show",
+            "hide"
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "age"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "system"
+                ]
+              },
+              {
+                "required": [
+                  "rating"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "required": [
+            "system",
+            "rating"
+          ],
+          "not": {
+            "required": [
+              "age"
+            ]
+          }
+        }
+      ]
+    },
+    "device_key": {
+      "description": "A device's public key, made at pairing (SPEC.md § 5.4): Ed25519, its 32 bytes in base64.",
+      "type": "object",
+      "properties": {
+        "alg": {
+          "const": "ed25519"
+        },
+        "public_key": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/]{43}=$"
+        }
+      },
+      "required": [
+        "alg",
+        "public_key"
+      ]
+    },
+    "short_fingerprint": {
+      "description": "A key's short fingerprint (SPEC.md § 5.3): 16 upper-case hex digits in groups of 4.",
+      "type": "string",
+      "pattern": "^[0-9A-F]{4}( [0-9A-F]{4}){3}$"
+    },
+    "invitation_code": {
+      "description": "An invitation's code (SPEC.md § 5.5): 16 to 32 symbols of the pairing alphabet, in groups of 4.",
+      "type": "string",
+      "pattern": "^[2-9A-HJ-NP-Z]{4}(-[2-9A-HJ-NP-Z]{4}){3,7}$"
+    },
+    "account_name": {
+      "description": "An account's name (SPEC.md § 5.7): 1 to 64 letters, digits, '.', '_' and '-'.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]{1,64}$"
+    },
+    "scopes": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/scope"
+      },
+      "uniqueItems": true
+    },
+    "admin_user": {
+      "description": "An account, as the administration API shows it (SPEC.md § 5.7). No password, nor its hash.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "$ref": "common.json#/$defs/account_name"
+        },
+        "state": {
+          "enum": [
+            "active",
+            "frozen"
+          ]
+        },
+        "scopes": {
+          "$ref": "common.json#/$defs/scopes"
+        },
+        "devices": {
+          "$ref": "common.json#/$defs/uint32"
+        },
+        "created": {
+          "$ref": "common.json#/$defs/time"
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "password"
+            ]
+          },
+          {
+            "required": [
+              "token"
+            ]
+          }
+        ]
+      },
+      "required": [
+        "name",
+        "state",
+        "scopes"
+      ]
+    },
+    "admin_device": {
+      "description": "A paired device and its token, as the administration API shows it (SPEC.md § 5.7). Never the token, nor its hash.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "common.json#/$defs/opaque"
+        },
+        "user": {
+          "$ref": "common.json#/$defs/account_name"
+        },
+        "device": {
+          "$ref": "common.json#/$defs/name"
+        },
+        "scopes": {
+          "$ref": "common.json#/$defs/scopes"
+        },
+        "created": {
+          "$ref": "common.json#/$defs/time"
+        },
+        "expires": {
+          "$ref": "common.json#/$defs/time"
+        },
+        "bound": {
+          "type": "boolean"
+        },
+        "key": {
+          "$ref": "common.json#/$defs/short_fingerprint"
+        },
+        "rating_cap": {
+          "$ref": "common.json#/$defs/rating_cap"
+        },
+        "invitation": {
+          "$ref": "common.json#/$defs/opaque"
+        },
+        "last_used": {
+          "$ref": "common.json#/$defs/time"
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "token"
+            ]
+          },
+          {
+            "required": [
+              "token_hash"
+            ]
+          }
+        ]
+      },
+      "required": [
+        "id",
+        "user",
+        "device",
+        "scopes",
+        "created",
+        "bound"
+      ]
+    },
+    "admin_pairing": {
+      "description": "A pairing waiting for approval (SPEC.md § 5.7). Its id is not its poll address.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "common.json#/$defs/opaque"
+        },
+        "code": {
+          "type": "string",
+          "pattern": "^[2-9A-HJ-NP-Z]{4}(-[2-9A-HJ-NP-Z]{4}){1,7}$"
+        },
+        "device": {
+          "$ref": "common.json#/$defs/name"
+        },
+        "scopes": {
+          "$ref": "common.json#/$defs/scopes"
+        },
+        "key": {
+          "$ref": "common.json#/$defs/short_fingerprint"
+        },
+        "created": {
+          "$ref": "common.json#/$defs/time"
+        },
+        "expires": {
+          "$ref": "common.json#/$defs/time"
+        }
+      },
+      "not": {
+        "required": [
+          "poll"
+        ]
+      },
+      "required": [
+        "id",
+        "code",
+        "device",
+        "scopes",
+        "expires"
+      ]
+    },
+    "invitation": {
+      "description": "An invitation (SPEC.md § 5.5).",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "common.json#/$defs/opaque"
+        },
+        "code": {
+          "$ref": "common.json#/$defs/invitation_code"
+        },
+        "link": {
+          "$ref": "common.json#/$defs/url"
+        },
+        "user": {
+          "$ref": "common.json#/$defs/account_name"
+        },
+        "scopes": {
+          "$ref": "common.json#/$defs/scopes",
+          "minItems": 1
+        },
+        "expires": {
+          "$ref": "common.json#/$defs/time"
+        },
+        "devices": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "used": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "rating_cap": {
+          "$ref": "common.json#/$defs/rating_cap"
+        },
+        "note": {
+          "$ref": "common.json#/$defs/note"
+        },
+        "created": {
+          "$ref": "common.json#/$defs/time"
+        }
+      },
+      "required": [
+        "id",
+        "code",
+        "link",
+        "user",
+        "scopes",
+        "expires",
+        "devices",
+        "used"
       ]
     }
   }

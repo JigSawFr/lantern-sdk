@@ -37,7 +37,7 @@ OUT = PACKAGE / "src" / "lantern" / "_generated"
 NAMES = {
     "common#page": "AppsPage",
     "common#title/players": "Players",
-    "common#title/ratings[]": "Rating",
+    "common#ratings[]": "Rating",
     "common#title/video": "Video",
     "common#request": "TitleRequest",
     "common#required_file/accept[]": "AcceptedVersion",
@@ -245,9 +245,16 @@ class Generator:
                 _, target = self.ref(node["$ref"])
                 self.documents[name] = self.model(self.ref(node["$ref"])[0], target)
             elif "allOf" in node:
-                ref = next(p["$ref"] for p in node["allOf"] if isinstance(p, dict) and "$ref" in p)
-                where, target = self.ref(ref)
-                model = self.model(where, target)
+                # A document is a definition of common.json (a $ref) or an object of its own, and then the
+                # part that adds its `schema`.
+                parts = [p for p in node["allOf"] if isinstance(p, dict)]
+                ref = next((p["$ref"] for p in parts if "$ref" in p), None)
+                if ref is not None:
+                    where, target = self.ref(ref)
+                    model = self.model(where, target)
+                else:
+                    own = next(p for p in parts if "schema" not in p.get("properties", {}))
+                    model = self.model(name, {"description": node.get("description", ""), **own})
                 self.documents[name] = model
                 if not any(f.key == "schema" for f in self.models[model].fields):
                     self.models[model].fields.insert(0, Field("schema", "schema", self.scalar("int"), False))

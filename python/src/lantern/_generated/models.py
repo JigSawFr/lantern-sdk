@@ -62,7 +62,12 @@ GPU_NAMES: tuple[str, ...] = (
 #: The error codes of SPEC.md § 12.
 ERROR_CODES: tuple[str, ...] = (
     "bad_request",
+    "key_required",
     "unauthorized",
+    "signature_required",
+    "signature_invalid",
+    "signature_expired",
+    "signature_replayed",
     "forbidden",
     "account_frozen",
     "not_found",
@@ -89,6 +94,431 @@ REQUEST_STATUSES: tuple[str, ...] = (
     "done",
     "declined",
 )
+
+
+@dataclass(kw_only=True, slots=True)
+class AdminDevices:
+    """GET <base>/v1/admin/devices (SPEC.md § 5.7): a page of paired devices, one token each.
+
+    From admin-devices.
+    """
+
+    schema: int | None = None
+    items: list[AdminDevice]
+    total: int | None = None
+    next: str | None
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "items", "total", "next"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "AdminDevices") -> AdminDevices:
+        o = _m.obj(data, where)
+        return cls(
+            schema=_m.opt(o, "schema", where, _m.as_int),
+            items=_m.req(o, "items", where, lambda v, w: _m.as_list(v, w, AdminDevice.from_json)),
+            total=_m.opt(o, "total", where, _m.as_int),
+            next=_m.req(o, "next", where, _m.nullable(_m.as_str)),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        if self.schema is not None:
+            out["schema"] = self.schema
+        out["items"] = _m.json_list(x.to_json() for x in self.items)
+        if self.total is not None:
+            out["total"] = self.total
+        out["next"] = None if self.next is None else self.next
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class AdminDevice:
+    """A paired device and its token, as the administration API shows it (SPEC.md § 5.7).
+
+    From common.json#/$defs/admin_device.
+    """
+
+    id: str
+    user: str
+    device: str
+    scopes: list[str]
+    created: str
+    expires: str | None = None
+    bound: bool
+    key: str | None = None
+    rating_cap: RatingCap | None = None
+    invitation: str | None = None
+    last_used: str | None = None
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"id", "user", "device", "scopes", "created", "expires", "bound", "key", "rating_cap", "invitation", "last_used"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "AdminDevice") -> AdminDevice:
+        o = _m.obj(data, where)
+        return cls(
+            id=_m.req(o, "id", where, _m.as_str),
+            user=_m.req(o, "user", where, _m.as_str),
+            device=_m.req(o, "device", where, _m.as_str),
+            scopes=_m.req(o, "scopes", where, lambda v, w: _m.as_list(v, w, _m.as_str)),
+            created=_m.req(o, "created", where, _m.as_str),
+            expires=_m.opt(o, "expires", where, _m.as_str),
+            bound=_m.req(o, "bound", where, _m.as_bool),
+            key=_m.opt(o, "key", where, _m.as_str),
+            rating_cap=_m.opt(o, "rating_cap", where, RatingCap.from_json),
+            invitation=_m.opt(o, "invitation", where, _m.as_str),
+            last_used=_m.opt(o, "last_used", where, _m.as_str),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        out["id"] = self.id
+        out["user"] = self.user
+        out["device"] = self.device
+        out["scopes"] = _m.json_list(self.scopes)
+        out["created"] = self.created
+        if self.expires is not None:
+            out["expires"] = self.expires
+        out["bound"] = self.bound
+        if self.key is not None:
+            out["key"] = self.key
+        if self.rating_cap is not None:
+            out["rating_cap"] = self.rating_cap.to_json()
+        if self.invitation is not None:
+            out["invitation"] = self.invitation
+        if self.last_used is not None:
+            out["last_used"] = self.last_used
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class RatingCap:
+    """A rating cap a token carries (SPEC.md § 5.6): an age, or a rating of one system; unrated says what becomes of what has no rating the table reads.
+
+    From common.json#/$defs/rating_cap.
+    """
+
+    age: int | None = None
+    system: str | None = None
+    rating: str | None = None
+    unrated: str | None = None
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"age", "system", "rating", "unrated"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "RatingCap") -> RatingCap:
+        o = _m.obj(data, where)
+        return cls(
+            age=_m.opt(o, "age", where, _m.as_int),
+            system=_m.opt(o, "system", where, _m.as_str),
+            rating=_m.opt(o, "rating", where, _m.as_str),
+            unrated=_m.opt(o, "unrated", where, _m.as_str),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        if self.age is not None:
+            out["age"] = self.age
+        if self.system is not None:
+            out["system"] = self.system
+        if self.rating is not None:
+            out["rating"] = self.rating
+        if self.unrated is not None:
+            out["unrated"] = self.unrated
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class AdminPairingDecision:
+    """POST <base>/v1/admin/pairings/{id} (SPEC.md § 5.7).
+
+    From admin-pairing-decision.
+    """
+
+    schema: int | None = None
+    decision: str
+    user: str | None = None
+    scopes: list[str] | None = None
+    rating_cap: RatingCap | None = None
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "decision", "user", "scopes", "rating_cap"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "AdminPairingDecision") -> AdminPairingDecision:
+        o = _m.obj(data, where)
+        return cls(
+            schema=_m.opt(o, "schema", where, _m.as_int),
+            decision=_m.req(o, "decision", where, _m.as_str),
+            user=_m.opt(o, "user", where, _m.as_str),
+            scopes=_m.opt(o, "scopes", where, lambda v, w: _m.as_list(v, w, _m.as_str)),
+            rating_cap=_m.opt(o, "rating_cap", where, RatingCap.from_json),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        if self.schema is not None:
+            out["schema"] = self.schema
+        out["decision"] = self.decision
+        if self.user is not None:
+            out["user"] = self.user
+        if self.scopes is not None:
+            out["scopes"] = _m.json_list(self.scopes)
+        if self.rating_cap is not None:
+            out["rating_cap"] = self.rating_cap.to_json()
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class AdminPairings:
+    """GET <base>/v1/admin/pairings (SPEC.md § 5.7).
+
+    From admin-pairings.
+    """
+
+    schema: int | None = None
+    items: list[AdminPairing]
+    total: int | None = None
+    next: str | None
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "items", "total", "next"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "AdminPairings") -> AdminPairings:
+        o = _m.obj(data, where)
+        return cls(
+            schema=_m.opt(o, "schema", where, _m.as_int),
+            items=_m.req(o, "items", where, lambda v, w: _m.as_list(v, w, AdminPairing.from_json)),
+            total=_m.opt(o, "total", where, _m.as_int),
+            next=_m.req(o, "next", where, _m.nullable(_m.as_str)),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        if self.schema is not None:
+            out["schema"] = self.schema
+        out["items"] = _m.json_list(x.to_json() for x in self.items)
+        if self.total is not None:
+            out["total"] = self.total
+        out["next"] = None if self.next is None else self.next
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class AdminPairing:
+    """A pairing waiting for approval (SPEC.md § 5.7).
+
+    From common.json#/$defs/admin_pairing.
+    """
+
+    id: str
+    code: str
+    device: str
+    scopes: list[str]
+    key: str | None = None
+    created: str | None = None
+    expires: str
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"id", "code", "device", "scopes", "key", "created", "expires"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "AdminPairing") -> AdminPairing:
+        o = _m.obj(data, where)
+        return cls(
+            id=_m.req(o, "id", where, _m.as_str),
+            code=_m.req(o, "code", where, _m.as_str),
+            device=_m.req(o, "device", where, _m.as_str),
+            scopes=_m.req(o, "scopes", where, lambda v, w: _m.as_list(v, w, _m.as_str)),
+            key=_m.opt(o, "key", where, _m.as_str),
+            created=_m.opt(o, "created", where, _m.as_str),
+            expires=_m.req(o, "expires", where, _m.as_str),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        out["id"] = self.id
+        out["code"] = self.code
+        out["device"] = self.device
+        out["scopes"] = _m.json_list(self.scopes)
+        if self.key is not None:
+            out["key"] = self.key
+        if self.created is not None:
+            out["created"] = self.created
+        out["expires"] = self.expires
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class AdminUser:
+    """An account, as the administration API shows it (SPEC.md § 5.7).
+
+    From common.json#/$defs/admin_user.
+    """
+
+    schema: int | None = None
+    name: str
+    state: str
+    scopes: list[str]
+    devices: int | None = None
+    created: str | None = None
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "name", "state", "scopes", "devices", "created"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "AdminUser") -> AdminUser:
+        o = _m.obj(data, where)
+        return cls(
+            schema=_m.opt(o, "schema", where, _m.as_int),
+            name=_m.req(o, "name", where, _m.as_str),
+            state=_m.req(o, "state", where, _m.as_str),
+            scopes=_m.req(o, "scopes", where, lambda v, w: _m.as_list(v, w, _m.as_str)),
+            devices=_m.opt(o, "devices", where, _m.as_int),
+            created=_m.opt(o, "created", where, _m.as_str),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        if self.schema is not None:
+            out["schema"] = self.schema
+        out["name"] = self.name
+        out["state"] = self.state
+        out["scopes"] = _m.json_list(self.scopes)
+        if self.devices is not None:
+            out["devices"] = self.devices
+        if self.created is not None:
+            out["created"] = self.created
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class AdminUserCreate:
+    """POST <base>/v1/admin/users (SPEC.md § 5.7).
+
+    From admin-user-create.
+    """
+
+    schema: int | None = None
+    name: str
+    scopes: list[str]
+    state: str | None = None
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "name", "scopes", "state"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "AdminUserCreate") -> AdminUserCreate:
+        o = _m.obj(data, where)
+        return cls(
+            schema=_m.opt(o, "schema", where, _m.as_int),
+            name=_m.req(o, "name", where, _m.as_str),
+            scopes=_m.req(o, "scopes", where, lambda v, w: _m.as_list(v, w, _m.as_str)),
+            state=_m.opt(o, "state", where, _m.as_str),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        if self.schema is not None:
+            out["schema"] = self.schema
+        out["name"] = self.name
+        out["scopes"] = _m.json_list(self.scopes)
+        if self.state is not None:
+            out["state"] = self.state
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class AdminUserUpdate:
+    """PATCH <base>/v1/admin/users/{name} (SPEC.md § 5.7): its state, or its scopes.
+
+    From admin-user-update.
+    """
+
+    schema: int | None = None
+    state: str | None = None
+    scopes: list[str] | None = None
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "state", "scopes"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "AdminUserUpdate") -> AdminUserUpdate:
+        o = _m.obj(data, where)
+        return cls(
+            schema=_m.opt(o, "schema", where, _m.as_int),
+            state=_m.opt(o, "state", where, _m.as_str),
+            scopes=_m.opt(o, "scopes", where, lambda v, w: _m.as_list(v, w, _m.as_str)),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        if self.schema is not None:
+            out["schema"] = self.schema
+        if self.state is not None:
+            out["state"] = self.state
+        if self.scopes is not None:
+            out["scopes"] = _m.json_list(self.scopes)
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class AdminUsers:
+    """GET <base>/v1/admin/users (SPEC.md § 5.7): a page of accounts.
+
+    From admin-users.
+    """
+
+    schema: int | None = None
+    items: list[AdminUser]
+    total: int | None = None
+    next: str | None
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "items", "total", "next"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "AdminUsers") -> AdminUsers:
+        o = _m.obj(data, where)
+        return cls(
+            schema=_m.opt(o, "schema", where, _m.as_int),
+            items=_m.req(o, "items", where, lambda v, w: _m.as_list(v, w, AdminUser.from_json)),
+            total=_m.opt(o, "total", where, _m.as_int),
+            next=_m.req(o, "next", where, _m.nullable(_m.as_str)),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        if self.schema is not None:
+            out["schema"] = self.schema
+        out["items"] = _m.json_list(x.to_json() for x in self.items)
+        if self.total is not None:
+            out["total"] = self.total
+        out["next"] = None if self.next is None else self.next
+        out.update(self.extra)
+        return out
 
 
 @dataclass(kw_only=True, slots=True)
@@ -148,9 +578,11 @@ class App:
     sha256: str
     added: str | None = None
     file: str
+    atlas: str | None = None
+    installed_size: int | None = None
     extra: JSONObject = field(default_factory=dict)
 
-    KEYS: ClassVar[frozenset[str]] = frozenset({"id", "platform", "title_id", "app_id", "type", "version_code", "version_name", "name", "size", "format", "sha256", "added", "file"})
+    KEYS: ClassVar[frozenset[str]] = frozenset({"id", "platform", "title_id", "app_id", "type", "version_code", "version_name", "name", "size", "format", "sha256", "added", "file", "atlas", "installed_size"})
 
     @classmethod
     def from_json(cls, data: JSONValue, where: str = "App") -> App:
@@ -169,6 +601,8 @@ class App:
             sha256=_m.req(o, "sha256", where, _m.as_str),
             added=_m.opt(o, "added", where, _m.as_str),
             file=_m.req(o, "file", where, _m.as_str),
+            atlas=_m.opt(o, "atlas", where, _m.as_str),
+            installed_size=_m.opt(o, "installed_size", where, _m.as_int),
             extra=_m.extras(o, cls.KEYS),
         )
 
@@ -190,6 +624,10 @@ class App:
         if self.added is not None:
             out["added"] = self.added
         out["file"] = self.file
+        if self.atlas is not None:
+            out["atlas"] = self.atlas
+        if self.installed_size is not None:
+            out["installed_size"] = self.installed_size
         out.update(self.extra)
         return out
 
@@ -460,9 +898,11 @@ class Handshake:
     account: Account
     features: dict[str, int]
     limits: Limits | None = None
+    language: str | None = None
+    auth: HandshakeAuth | None = None
     extra: JSONObject = field(default_factory=dict)
 
-    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "uid", "name", "software", "base", "versions", "platforms", "motd", "account", "features", "limits"})
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "uid", "name", "software", "base", "versions", "platforms", "motd", "account", "features", "limits", "language", "auth"})
 
     @classmethod
     def from_json(cls, data: JSONValue, where: str = "Handshake") -> Handshake:
@@ -479,6 +919,8 @@ class Handshake:
             account=_m.req(o, "account", where, Account.from_json),
             features=_m.req(o, "features", where, lambda v, w: _m.as_map(v, w, _m.as_int)),
             limits=_m.opt(o, "limits", where, Limits.from_json),
+            language=_m.opt(o, "language", where, _m.as_str),
+            auth=_m.opt(o, "auth", where, HandshakeAuth.from_json),
             extra=_m.extras(o, cls.KEYS),
         )
 
@@ -498,6 +940,10 @@ class Handshake:
         out["features"] = _m.json_map(self.features)
         if self.limits is not None:
             out["limits"] = self.limits.to_json()
+        if self.language is not None:
+            out["language"] = self.language
+        if self.auth is not None:
+            out["auth"] = self.auth.to_json()
         out.update(self.extra)
         return out
 
@@ -544,9 +990,11 @@ class Account:
     name: str | None = None
     state: str
     scopes: list[str]
+    bound: bool | None = None
+    rating_cap: RatingCap | None = None
     extra: JSONObject = field(default_factory=dict)
 
-    KEYS: ClassVar[frozenset[str]] = frozenset({"name", "state", "scopes"})
+    KEYS: ClassVar[frozenset[str]] = frozenset({"name", "state", "scopes", "bound", "rating_cap"})
 
     @classmethod
     def from_json(cls, data: JSONValue, where: str = "Account") -> Account:
@@ -555,6 +1003,8 @@ class Account:
             name=_m.opt(o, "name", where, _m.as_str),
             state=_m.req(o, "state", where, _m.as_str),
             scopes=_m.req(o, "scopes", where, lambda v, w: _m.as_list(v, w, _m.as_str)),
+            bound=_m.opt(o, "bound", where, _m.as_bool),
+            rating_cap=_m.opt(o, "rating_cap", where, RatingCap.from_json),
             extra=_m.extras(o, cls.KEYS),
         )
 
@@ -564,6 +1014,10 @@ class Account:
             out["name"] = self.name
         out["state"] = self.state
         out["scopes"] = _m.json_list(self.scopes)
+        if self.bound is not None:
+            out["bound"] = self.bound
+        if self.rating_cap is not None:
+            out["rating_cap"] = self.rating_cap.to_json()
         out.update(self.extra)
         return out
 
@@ -609,6 +1063,36 @@ class Limits:
 
 
 @dataclass(kw_only=True, slots=True)
+class HandshakeAuth:
+    """Signed requests (SPEC.md § 5.4).
+
+    From handshake/auth.
+    """
+
+    bearer_only: bool
+    skew: int
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"bearer_only", "skew"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "HandshakeAuth") -> HandshakeAuth:
+        o = _m.obj(data, where)
+        return cls(
+            bearer_only=_m.req(o, "bearer_only", where, _m.as_bool),
+            skew=_m.req(o, "skew", where, _m.as_int),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        out["bearer_only"] = self.bearer_only
+        out["skew"] = self.skew
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
 class Homebrew:
     """A homebrew (SPEC.md § 8.1).
 
@@ -640,9 +1124,11 @@ class Homebrew:
     packages: list[Package] | None = None
     signature: Signature | None = None
     port: Port | None = None
+    atlas: str | None = None
+    ratings: list[Rating] | None = None
     extra: JSONObject = field(default_factory=dict)
 
-    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "id", "system_id", "platform", "kind", "name", "author", "genres", "tags", "version", "build", "license", "assets_license", "source", "language", "summary", "description", "icon", "screenshots", "requires", "updated", "package", "packages", "signature", "port"})
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "id", "system_id", "platform", "kind", "name", "author", "genres", "tags", "version", "build", "license", "assets_license", "source", "language", "summary", "description", "icon", "screenshots", "requires", "updated", "package", "packages", "signature", "port", "atlas", "ratings"})
 
     @classmethod
     def from_json(cls, data: JSONValue, where: str = "Homebrew") -> Homebrew:
@@ -673,6 +1159,8 @@ class Homebrew:
             packages=_m.opt(o, "packages", where, lambda v, w: _m.as_list(v, w, Package.from_json)),
             signature=_m.opt(o, "signature", where, Signature.from_json),
             port=_m.opt(o, "port", where, Port.from_json),
+            atlas=_m.opt(o, "atlas", where, _m.as_str),
+            ratings=_m.opt(o, "ratings", where, lambda v, w: _m.as_list(v, w, Rating.from_json)),
             extra=_m.extras(o, cls.KEYS),
         )
 
@@ -722,6 +1210,10 @@ class Homebrew:
             out["signature"] = self.signature.to_json()
         if self.port is not None:
             out["port"] = self.port.to_json()
+        if self.atlas is not None:
+            out["atlas"] = self.atlas
+        if self.ratings is not None:
+            out["ratings"] = _m.json_list(x.to_json() for x in self.ratings)
         out.update(self.extra)
         return out
 
@@ -865,9 +1357,10 @@ class Package:
     arch: list[str] | None = None
     signature: Signature | None = None
     signer_sha256: str | None = None
+    installed_size: int | None = None
     extra: JSONObject = field(default_factory=dict)
 
-    KEYS: ClassVar[frozenset[str]] = frozenset({"format", "file", "size", "sha256", "manifest_sha256", "path", "manifest", "arch", "signature", "signer_sha256"})
+    KEYS: ClassVar[frozenset[str]] = frozenset({"format", "file", "size", "sha256", "manifest_sha256", "path", "manifest", "arch", "signature", "signer_sha256", "installed_size"})
 
     @classmethod
     def from_json(cls, data: JSONValue, where: str = "Package") -> Package:
@@ -883,6 +1376,7 @@ class Package:
             arch=_m.opt(o, "arch", where, lambda v, w: _m.as_list(v, w, _m.as_str)),
             signature=_m.opt(o, "signature", where, Signature.from_json),
             signer_sha256=_m.opt(o, "signer_sha256", where, _m.as_str),
+            installed_size=_m.opt(o, "installed_size", where, _m.as_int),
             extra=_m.extras(o, cls.KEYS),
         )
 
@@ -903,6 +1397,8 @@ class Package:
             out["signature"] = self.signature.to_json()
         if self.signer_sha256 is not None:
             out["signer_sha256"] = self.signer_sha256
+        if self.installed_size is not None:
+            out["installed_size"] = self.installed_size
         out.update(self.extra)
         return out
 
@@ -1276,6 +1772,36 @@ class RequiredDataGroup:
 
 
 @dataclass(kw_only=True, slots=True)
+class Rating:
+    """Rating..
+
+    From common.json#/$defs/ratings[].
+    """
+
+    system: str
+    rating: str
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"system", "rating"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "Rating") -> Rating:
+        o = _m.obj(data, where)
+        return cls(
+            system=_m.req(o, "system", where, _m.as_str),
+            rating=_m.req(o, "rating", where, _m.as_str),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        out["system"] = self.system
+        out["rating"] = self.rating
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
 class HomebrewPage:
     """GET <base>/v1/homebrew and POST <base>/v1/homebrew/updates (SPEC.md § 8.5).
 
@@ -1373,6 +1899,156 @@ class InstalledHomebrew:
 
 
 @dataclass(kw_only=True, slots=True)
+class Invitation:
+    """An invitation (SPEC.md § 5.5).
+
+    From common.json#/$defs/invitation.
+    """
+
+    schema: int | None = None
+    id: str
+    code: str
+    link: str
+    user: str
+    scopes: list[str]
+    expires: str
+    devices: int
+    used: int
+    rating_cap: RatingCap | None = None
+    note: str | None = None
+    created: str | None = None
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "id", "code", "link", "user", "scopes", "expires", "devices", "used", "rating_cap", "note", "created"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "Invitation") -> Invitation:
+        o = _m.obj(data, where)
+        return cls(
+            schema=_m.opt(o, "schema", where, _m.as_int),
+            id=_m.req(o, "id", where, _m.as_str),
+            code=_m.req(o, "code", where, _m.as_str),
+            link=_m.req(o, "link", where, _m.as_str),
+            user=_m.req(o, "user", where, _m.as_str),
+            scopes=_m.req(o, "scopes", where, lambda v, w: _m.as_list(v, w, _m.as_str)),
+            expires=_m.req(o, "expires", where, _m.as_str),
+            devices=_m.req(o, "devices", where, _m.as_int),
+            used=_m.req(o, "used", where, _m.as_int),
+            rating_cap=_m.opt(o, "rating_cap", where, RatingCap.from_json),
+            note=_m.opt(o, "note", where, _m.as_str),
+            created=_m.opt(o, "created", where, _m.as_str),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        if self.schema is not None:
+            out["schema"] = self.schema
+        out["id"] = self.id
+        out["code"] = self.code
+        out["link"] = self.link
+        out["user"] = self.user
+        out["scopes"] = _m.json_list(self.scopes)
+        out["expires"] = self.expires
+        out["devices"] = self.devices
+        out["used"] = self.used
+        if self.rating_cap is not None:
+            out["rating_cap"] = self.rating_cap.to_json()
+        if self.note is not None:
+            out["note"] = self.note
+        if self.created is not None:
+            out["created"] = self.created
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class InvitationCreate:
+    """POST <base>/v1/admin/invitations (SPEC.md § 5.5, § 5.7).
+
+    From invitation-create.
+    """
+
+    schema: int | None = None
+    user: str
+    scopes: list[str]
+    expires: str
+    devices: int
+    rating_cap: RatingCap | None = None
+    note: str | None = None
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "user", "scopes", "expires", "devices", "rating_cap", "note"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "InvitationCreate") -> InvitationCreate:
+        o = _m.obj(data, where)
+        return cls(
+            schema=_m.opt(o, "schema", where, _m.as_int),
+            user=_m.req(o, "user", where, _m.as_str),
+            scopes=_m.req(o, "scopes", where, lambda v, w: _m.as_list(v, w, _m.as_str)),
+            expires=_m.req(o, "expires", where, _m.as_str),
+            devices=_m.req(o, "devices", where, _m.as_int),
+            rating_cap=_m.opt(o, "rating_cap", where, RatingCap.from_json),
+            note=_m.opt(o, "note", where, _m.as_str),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        if self.schema is not None:
+            out["schema"] = self.schema
+        out["user"] = self.user
+        out["scopes"] = _m.json_list(self.scopes)
+        out["expires"] = self.expires
+        out["devices"] = self.devices
+        if self.rating_cap is not None:
+            out["rating_cap"] = self.rating_cap.to_json()
+        if self.note is not None:
+            out["note"] = self.note
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class Invitations:
+    """GET <base>/v1/admin/invitations (SPEC.md § 5.5, § 5.7): those that can still be redeemed.
+
+    From invitations.
+    """
+
+    schema: int | None = None
+    items: list[Invitation]
+    total: int | None = None
+    next: str | None
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "items", "total", "next"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "Invitations") -> Invitations:
+        o = _m.obj(data, where)
+        return cls(
+            schema=_m.opt(o, "schema", where, _m.as_int),
+            items=_m.req(o, "items", where, lambda v, w: _m.as_list(v, w, Invitation.from_json)),
+            total=_m.opt(o, "total", where, _m.as_int),
+            next=_m.req(o, "next", where, _m.nullable(_m.as_str)),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        if self.schema is not None:
+            out["schema"] = self.schema
+        out["items"] = _m.json_list(x.to_json() for x in self.items)
+        if self.total is not None:
+            out["total"] = self.total
+        out["next"] = None if self.next is None else self.next
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
 class MissingRequest:
     """POST <base>/v1/apps/missing, with a platform (SPEC.md § 6.3).
 
@@ -1448,9 +2124,10 @@ class PairingCode:
     poll: str
     interval: int
     expires: int
+    verify_complete: str
     extra: JSONObject = field(default_factory=dict)
 
-    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "code", "verify", "poll", "interval", "expires"})
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "code", "verify", "poll", "interval", "expires", "verify_complete"})
 
     @classmethod
     def from_json(cls, data: JSONValue, where: str = "PairingCode") -> PairingCode:
@@ -1462,6 +2139,7 @@ class PairingCode:
             poll=_m.req(o, "poll", where, _m.as_str),
             interval=_m.req(o, "interval", where, _m.as_int),
             expires=_m.req(o, "expires", where, _m.as_int),
+            verify_complete=_m.req(o, "verify_complete", where, _m.as_str),
             extra=_m.extras(o, cls.KEYS),
         )
 
@@ -1473,6 +2151,7 @@ class PairingCode:
         out["poll"] = self.poll
         out["interval"] = self.interval
         out["expires"] = self.expires
+        out["verify_complete"] = self.verify_complete
         out.update(self.extra)
         return out
 
@@ -1487,9 +2166,11 @@ class PairingRequest:
     schema: int
     device: str
     scopes: list[str]
+    key: DeviceKey | None = None
+    invitation: str | None = None
     extra: JSONObject = field(default_factory=dict)
 
-    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "device", "scopes"})
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "device", "scopes", "key", "invitation"})
 
     @classmethod
     def from_json(cls, data: JSONValue, where: str = "PairingRequest") -> PairingRequest:
@@ -1498,6 +2179,8 @@ class PairingRequest:
             schema=_m.req(o, "schema", where, _m.as_int),
             device=_m.req(o, "device", where, _m.as_str),
             scopes=_m.req(o, "scopes", where, lambda v, w: _m.as_list(v, w, _m.as_str)),
+            key=_m.opt(o, "key", where, DeviceKey.from_json),
+            invitation=_m.opt(o, "invitation", where, _m.as_str),
             extra=_m.extras(o, cls.KEYS),
         )
 
@@ -1506,6 +2189,40 @@ class PairingRequest:
         out["schema"] = self.schema
         out["device"] = self.device
         out["scopes"] = _m.json_list(self.scopes)
+        if self.key is not None:
+            out["key"] = self.key.to_json()
+        if self.invitation is not None:
+            out["invitation"] = self.invitation
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class DeviceKey:
+    """A device's public key, made at pairing (SPEC.md § 5.4): Ed25519, its 32 bytes in base64.
+
+    From common.json#/$defs/device_key.
+    """
+
+    alg: str
+    public_key: str
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"alg", "public_key"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "DeviceKey") -> DeviceKey:
+        o = _m.obj(data, where)
+        return cls(
+            alg=_m.req(o, "alg", where, _m.as_str),
+            public_key=_m.req(o, "public_key", where, _m.as_str),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        out["alg"] = self.alg
+        out["public_key"] = self.public_key
         out.update(self.extra)
         return out
 
@@ -1521,9 +2238,11 @@ class PairingToken:
     token: str
     scopes: list[str]
     expires: int | None = None
+    bound: bool | None = None
+    rating_cap: RatingCap | None = None
     extra: JSONObject = field(default_factory=dict)
 
-    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "token", "scopes", "expires"})
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "token", "scopes", "expires", "bound", "rating_cap"})
 
     @classmethod
     def from_json(cls, data: JSONValue, where: str = "PairingToken") -> PairingToken:
@@ -1533,6 +2252,8 @@ class PairingToken:
             token=_m.req(o, "token", where, _m.as_str),
             scopes=_m.req(o, "scopes", where, lambda v, w: _m.as_list(v, w, _m.as_str)),
             expires=_m.opt(o, "expires", where, _m.as_int),
+            bound=_m.opt(o, "bound", where, _m.as_bool),
+            rating_cap=_m.opt(o, "rating_cap", where, RatingCap.from_json),
             extra=_m.extras(o, cls.KEYS),
         )
 
@@ -1543,6 +2264,10 @@ class PairingToken:
         out["scopes"] = _m.json_list(self.scopes)
         if self.expires is not None:
             out["expires"] = self.expires
+        if self.bound is not None:
+            out["bound"] = self.bound
+        if self.rating_cap is not None:
+            out["rating_cap"] = self.rating_cap.to_json()
         out.update(self.extra)
         return out
 
@@ -1560,9 +2285,10 @@ class Problem:
     status: int
     detail: str | None = None
     code: str
+    language: str | None = None
     extra: JSONObject = field(default_factory=dict)
 
-    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "type", "title", "status", "detail", "code"})
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "type", "title", "status", "detail", "code", "language"})
 
     @classmethod
     def from_json(cls, data: JSONValue, where: str = "Problem") -> Problem:
@@ -1574,6 +2300,7 @@ class Problem:
             status=_m.req(o, "status", where, _m.as_int),
             detail=_m.opt(o, "detail", where, _m.as_str),
             code=_m.req(o, "code", where, _m.as_str),
+            language=_m.opt(o, "language", where, _m.as_str),
             extra=_m.extras(o, cls.KEYS),
         )
 
@@ -1588,6 +2315,8 @@ class Problem:
         if self.detail is not None:
             out["detail"] = self.detail
         out["code"] = self.code
+        if self.language is not None:
+            out["language"] = self.language
         out.update(self.extra)
         return out
 
@@ -1893,9 +2622,10 @@ class Title:
     banner: Image | None = None
     screenshots: list[Image] | None = None
     video: Video | None = None
+    atlas: str | None = None
     extra: JSONObject = field(default_factory=dict)
 
-    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "platform", "title_id", "language", "name", "publisher", "developer", "release", "updated", "genres", "tags", "players", "ratings", "languages", "summary", "description", "icon", "banner", "screenshots", "video"})
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "platform", "title_id", "language", "name", "publisher", "developer", "release", "updated", "genres", "tags", "players", "ratings", "languages", "summary", "description", "icon", "banner", "screenshots", "video", "atlas"})
 
     @classmethod
     def from_json(cls, data: JSONValue, where: str = "Title") -> Title:
@@ -1921,6 +2651,7 @@ class Title:
             banner=_m.opt(o, "banner", where, Image.from_json),
             screenshots=_m.opt(o, "screenshots", where, lambda v, w: _m.as_list(v, w, Image.from_json)),
             video=_m.opt(o, "video", where, Video.from_json),
+            atlas=_m.opt(o, "atlas", where, _m.as_str),
             extra=_m.extras(o, cls.KEYS),
         )
 
@@ -1963,6 +2694,8 @@ class Title:
             out["screenshots"] = _m.json_list(x.to_json() for x in self.screenshots)
         if self.video is not None:
             out["video"] = self.video.to_json()
+        if self.atlas is not None:
+            out["atlas"] = self.atlas
         out.update(self.extra)
         return out
 
@@ -2008,36 +2741,6 @@ class Players:
             out["online"] = self.online
         if self.online_max is not None:
             out["online_max"] = self.online_max
-        out.update(self.extra)
-        return out
-
-
-@dataclass(kw_only=True, slots=True)
-class Rating:
-    """Rating..
-
-    From common.json#/$defs/title/ratings[].
-    """
-
-    system: str
-    rating: str
-    extra: JSONObject = field(default_factory=dict)
-
-    KEYS: ClassVar[frozenset[str]] = frozenset({"system", "rating"})
-
-    @classmethod
-    def from_json(cls, data: JSONValue, where: str = "Rating") -> Rating:
-        o = _m.obj(data, where)
-        return cls(
-            system=_m.req(o, "system", where, _m.as_str),
-            rating=_m.req(o, "rating", where, _m.as_str),
-            extra=_m.extras(o, cls.KEYS),
-        )
-
-    def to_json(self) -> JSONObject:
-        out: JSONObject = {}
-        out["system"] = self.system
-        out["rating"] = self.rating
         out.update(self.extra)
         return out
 
@@ -2278,6 +2981,13 @@ def read_required_data(data: JSONValue, where: str) -> RequiredData:
 
 #: Each document of spec/schemas/v1, by its file's name, and its model.
 DOCUMENTS: dict[str, type[Any]] = {
+    "admin-devices": AdminDevices,
+    "admin-pairing-decision": AdminPairingDecision,
+    "admin-pairings": AdminPairings,
+    "admin-user": AdminUser,
+    "admin-user-create": AdminUserCreate,
+    "admin-user-update": AdminUserUpdate,
+    "admin-users": AdminUsers,
     "apps": AppsPage,
     "changes": Changes,
     "cheat": CheatSet,
@@ -2289,6 +2999,9 @@ DOCUMENTS: dict[str, type[Any]] = {
     "homebrew": Homebrew,
     "homebrew-page": HomebrewPage,
     "homebrew-updates-request": HomebrewUpdatesRequest,
+    "invitation": Invitation,
+    "invitation-create": InvitationCreate,
+    "invitations": Invitations,
     "missing-request": MissingRequest,
     "pairing-code": PairingCode,
     "pairing-request": PairingRequest,
@@ -2311,6 +3024,15 @@ __all__ = [
     "ACCOUNT_STATES",
     "AcceptedVersion",
     "Account",
+    "AdminDevice",
+    "AdminDevices",
+    "AdminPairing",
+    "AdminPairingDecision",
+    "AdminPairings",
+    "AdminUser",
+    "AdminUserCreate",
+    "AdminUserUpdate",
+    "AdminUsers",
     "App",
     "AppsPage",
     "Changes",
@@ -2318,18 +3040,23 @@ __all__ = [
     "CheatSets",
     "CheatWrite",
     "DOCUMENTS",
+    "DeviceKey",
     "Discovery",
     "DiscoveryRequest",
     "ERROR_CODES",
     "GENRES",
     "GPU_NAMES",
     "Handshake",
+    "HandshakeAuth",
     "Homebrew",
     "HomebrewPage",
     "HomebrewUpdatesRequest",
     "Image",
     "InstalledApp",
     "InstalledHomebrew",
+    "Invitation",
+    "InvitationCreate",
+    "Invitations",
     "Limits",
     "ManifestEntry",
     "MissingRequest",
@@ -2346,6 +3073,7 @@ __all__ = [
     "Problem",
     "REQUEST_STATUSES",
     "Rating",
+    "RatingCap",
     "RemovedTitle",
     "RequestCreate",
     "RequiredData",
