@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
 from pathlib import Path
@@ -382,7 +383,8 @@ def test_the_servers_a_client_keeps(tmp_path: Path) -> None:
     store = FileServerStore(path)
     assert store.server("6f1c2a8e") is None and store.servers() == []  # absent
     store.save(RECORD)
-    assert store.server("6f1c2a8e") == RECORD and path.stat().st_mode & 0o077 == 0
+    assert store.server("6f1c2a8e") == RECORD
+    assert os.name == "nt" or path.stat().st_mode & 0o077 == 0  # its owner's alone (POSIX modes)
     raw = json.loads(path.read_text())
     raw["x-other-app"] = {"kept": True}
     raw["servers"]["6f1c2a8e"]["x-note"] = "living room"

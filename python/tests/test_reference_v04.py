@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import io
 import json
+import os
 import ssl
 import sys
 import threading
@@ -162,7 +163,7 @@ def test_pairing_with_a_key_over_a_pinned_tls_key(tls: Reference, tmp_path: Path
         assert len(list(c.iter_apps(page_size=4))) == fiction.SWITCH
     kept = store.server(record.uid)
     assert kept is not None and kept.token == record.token
-    assert (tmp_path / "servers.json").stat().st_mode & 0o077 == 0
+    assert os.name == "nt" or (tmp_path / "servers.json").stat().st_mode & 0o077 == 0
     with LanternClient.paired(kept, user_agent=AGENT) as again:
         assert again.handshake().account.bound
         with pytest.raises(lantern.Unauthorized):  # the token without its key is worth nothing

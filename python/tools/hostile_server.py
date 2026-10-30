@@ -448,7 +448,7 @@ class Handler(BaseHTTPRequestHandler):
             )
             self.close_connection = True
             self.wfile.flush()
-            self.connection.shutdown(socket.SHUT_RDWR)
+            self.connection.shutdown(socket.SHUT_WR)  # a FIN after the half: the client reads it, then the end
             return
         self.send(200, data, "application/octet-stream", Repr_Digest=digest)
 
