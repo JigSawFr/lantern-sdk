@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <span>
 #include <string>
@@ -60,7 +61,7 @@ json::Document vectors(std::string_view name)
 {
     const std::string text = spec_file(std::string("vectors/") + std::string(name));
     REQUIRE(!text.empty());
-    static std::vector<std::string> keep; // the DOM's views live as long as the text
+    static std::deque<std::string> keep; // the DOM's views live as long as the text, which never moves
     keep.push_back(text);
     json::Limits limits;
     limits.max_depth = 32;
@@ -167,7 +168,7 @@ TEST_CASE("encrypted saves: HKDF-SHA-256, HChaCha20 and XChaCha20-Poly1305 as th
         const auto ikm              = unhex(text_of(v, "ikm"));
         const auto salt             = unhex(text_of(v, "salt"));
         const std::string_view info = text_of(v, "info");
-        std::vector<std::uint8_t> okm(number_of(v, "length"));
+        std::vector<std::uint8_t> okm(static_cast<std::size_t>(number_of(v, "length")));
         REQUIRE(hkdf_sha256(
             salt, ikm, std::span(reinterpret_cast<const std::uint8_t*>(info.data()), info.size()), okm));
         CHECK(hex(okm) == text_of(v, "okm"));
@@ -430,6 +431,12 @@ TEST_CASE("grants: what a peer decides of each (vectors/grants.json)")
     CHECK(text_of(root, "grant").starts_with("eyJleHAiOjE3OTMzNDYwMDAs"));
     const std::string long_grant(1100, 'A');
     CHECK_FALSE(verify_grant(long_grant, Digest {}, 0, {}));
+    // A payload cut after its exp (found by fuzz_grant): refused, not read past
+    String cut;
+    const std::string_view head = R"({"exp":1793346000)";
+    base64url_encode(std::span(reinterpret_cast<const std::uint8_t*>(head.data()), head.size()), cut);
+    const std::string truncated = std::string(cut) + "." + std::string(86, 'A');
+    CHECK_FALSE(verify_grant(truncated, Digest {}, 0, {}));
 }
 
 TEST_CASE("sync: the merge rule of every vector (vectors/sync-merge.json)")

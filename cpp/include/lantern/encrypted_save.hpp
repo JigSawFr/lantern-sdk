@@ -188,7 +188,7 @@ class DecryptingSink final : public DownloadSink
 {
   public:
     // `out` gets the archive, a chunk at a time, each once it opened.
-    DecryptingSink(const SaveKey& key, DownloadSink& out, Allocator allocator = {});
+    DecryptingSink(SaveKey key, DownloadSink& out, Allocator allocator = {});
     DecryptingSink(const DecryptingSink&)            = delete;
     DecryptingSink& operator=(const DecryptingSink&) = delete;
     DecryptingSink(DecryptingSink&&)                 = delete;

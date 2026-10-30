@@ -1,15 +1,17 @@
 # The C++ library (cpp/, cpp/README.md): its format, its generated types,
 # its build with warnings as errors on every compiler and standard library
 # of the desktop, its tests (unit, against the specification's reference
-# server, and each TLS adapter against it over HTTPS), the sanitizers,
-# clang-tidy, a short fuzz run, the install, and a cross build of the
+# server, its peer and a static export, every scenario of the
+# repository's malicious server, and each TLS adapter over HTTPS), the
+# sanitizers, clang-tidy, a short fuzz run, the install, and a cross build of the
 # library for every platform Aurore runs on, each with the toolchain
 # Aurore's CI uses (with the mbedTLS adapter where the image ships mbedTLS).
 name: cpp
 
 # Only what the C++ library is made of: its folder, the specification it
 # follows (the submodule), this workflow, and the files every library of
-# the repository shares (the submodules' list, the licences)
+# the repository shares (the submodules' list, the licences), and the
+# malicious test server its integration tests run
 on:
   push:
     branches: [ main ]
@@ -19,6 +21,7 @@ on:
       - ".gitmodules"
       - "REUSE.toml"
       - "LICENSES/**"
+      - "python/tools/hostile_server.py"
       - ".github/workflows/cpp.yml"
   pull_request:
     paths:
@@ -27,6 +30,7 @@ on:
       - ".gitmodules"
       - "REUSE.toml"
       - "LICENSES/**"
+      - "python/tools/hostile_server.py"
       - ".github/workflows/cpp.yml"
 
 # A new push to a pull request stops the run of the previous one
@@ -88,7 +92,8 @@ jobs:
       matrix:
         include:
           # tls: libcurl, mbedTLS and openssl, for the TLS adapters and their
-          # tests against the reference server over HTTPS
+          # tests against the reference server over HTTPS, and Python's
+          # cryptography for the malicious server's TLS scenarios
           - { name: "gcc, libstdc++", cc: gcc, packages: "tls" }
           - { name: "clang, libstdc++", cc: clang, packages: "tls" }
           - { name: "clang, libc++", cc: clang, packages: "libcxx tls", cxxflags: "-stdlib=libc++" }
@@ -114,7 +119,7 @@ jobs:
               libcxx) packages="$packages libc++-$CLANG-dev libc++abi-$CLANG-dev" ;;
               # gcc-multilib brings the i386 asm/ headers the versioned one leaves out
               multilib) packages="$packages g++-$GCC-multilib gcc-multilib" ;;
-              tls) packages="$packages libcurl4-openssl-dev libmbedtls-dev openssl" ;;
+              tls) packages="$packages libcurl4-openssl-dev libmbedtls-dev openssl python3-cryptography" ;;
             esac
           done
           sudo apt-get install -y -q --no-install-recommends $packages
@@ -129,8 +134,10 @@ jobs:
           cmake --build --preset "$PRESET"
         env:
           PRESET: ${{ matrix.preset || 'dev' }}
-      # Unit tests, then the integration tests against spec/server, then
-      # each TLS adapter against it over HTTPS
+      # Unit tests, then the integration tests against spec/server (its
+      # peer, its static export, and each plain HTTP scenario of
+      # python/tools/hostile_server.py), then each TLS adapter against it
+      # over HTTPS (and the malicious server's TLS scenarios)
       - name: Test
         working-directory: cpp
         run: ctest --preset "$PRESET"
@@ -159,7 +166,7 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends ninja-build g++-$GCC clang-$CLANG libclang-rt-$CLANG-dev \
-            libcurl4-openssl-dev libmbedtls-dev openssl
+            libcurl4-openssl-dev libmbedtls-dev openssl python3-cryptography
       - name: Build
         working-directory: cpp
         run: |
@@ -229,10 +236,10 @@ jobs:
       - name: Fuzz
         run: |
           mkdir -p fuzz-crashes
-          for target in json paths problem homebrew signature discovery http_signature certificate; do
+          for target in json paths problem homebrew signature discovery http_signature certificate sse save grant; do
             mkdir -p fuzz-corpus/$target
             seeds=cpp/tests/fuzz/corpus/$target
-            case $target in json|problem|homebrew|discovery) seeds="$seeds spec/examples/v1 spec/examples/v1/invalid" ;; esac
+            case $target in json|problem|homebrew|discovery|grant) seeds="$seeds spec/examples/v1 spec/examples/v1/invalid" ;; esac
             build/fuzz/tests/fuzz/lantern_fuzz_$target -max_total_time=60 -max_len=16384 -timeout=10 \
               -artifact_prefix=fuzz-crashes/$target- fuzz-corpus/$target $seeds
           done

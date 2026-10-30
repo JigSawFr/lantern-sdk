@@ -163,7 +163,8 @@ std::optional<std::int64_t> parse_sync_time(std::string_view text) noexcept
         const auto value                = digits(fraction);
         if (text[19] != '.' || fraction.empty() || !value)
             return std::nullopt;
-        millis = *value * (fraction.size() == 1 ? 100U : fraction.size() == 2 ? 10U : 1U);
+        static constexpr std::array<unsigned, 3> scale { 100U, 10U, 1U };
+        millis = *value * scale[fraction.size() - 1];
     }
     if (!year || !month || !day || !hour || !minute || !second || *month < 1 || *month > 12 || *day < 1
         || *hour > 23 || *minute > 59 || *second > 59)

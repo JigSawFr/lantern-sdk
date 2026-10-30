@@ -65,8 +65,10 @@ std::optional<unsigned> ipv6_first(std::string_view host) noexcept
     const std::string_view first = address.substr(0, address.find(':'));
     if (first.empty() || first.size() > 4)
         return std::nullopt;
-    unsigned value = 0;
-    std::from_chars(first.data(), first.data() + first.size(), value, 16);
+    unsigned value    = 0;
+    const auto result = std::from_chars(first.data(), first.data() + first.size(), value, 16);
+    if (result.ec != std::errc {} || result.ptr != first.data() + first.size())
+        return std::nullopt;
     return value;
 }
 
@@ -180,7 +182,7 @@ Result<GrantClaims> verify_grant(std::string_view grant, const Digest& sha256, s
     if (base64url_decode(grant.substr(dot + 1), signature) != signature.size())
         return std::unexpected(refused("a grant's signature is not 64 bytes"));
     std::copy_n(reinterpret_cast<const char*>(payload_bytes.data()), *size, text.begin());
-    std::string_view payload(text.data(), *size);
+    const std::string_view payload(text.data(), *size);
 
     // The canonical form, and nothing else: these keys, in this order, no space
     GrantClaims claims;
@@ -190,7 +192,8 @@ Result<GrantClaims> verify_grant(std::string_view grant, const Digest& sha256, s
     const bool negative = take(rest, "-");
     std::size_t digits  = rest.find(',');
     const auto exp      = canonical_number(rest.substr(0, digits));
-    if (!exp || *exp > static_cast<std::uint64_t>(INT64_MAX) || (negative && *exp == 0))
+    if (digits == std::string_view::npos || !exp || *exp > static_cast<std::uint64_t>(INT64_MAX)
+        || (negative && *exp == 0))
         return std::unexpected(refused("a grant's exp is not a whole number"));
     claims.exp = negative ? -static_cast<std::int64_t>(*exp) : static_cast<std::int64_t>(*exp);
     rest.remove_prefix(digits);
@@ -205,7 +208,7 @@ Result<GrantClaims> verify_grant(std::string_view grant, const Digest& sha256, s
         return std::unexpected(refused("a grant's payload not of SPEC.md 19.3's form"));
     digits           = rest.find(',');
     const auto bytes = canonical_number(rest.substr(0, digits));
-    if (!bytes)
+    if (digits == std::string_view::npos || !bytes)
         return std::unexpected(refused("a grant's size is not a whole number"));
     claims.size = *bytes;
     rest.remove_prefix(digits);

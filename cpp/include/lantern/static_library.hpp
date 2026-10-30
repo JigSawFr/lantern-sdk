@@ -112,10 +112,8 @@ class StaticLibrary
     StaticLibrary(StaticFiles& files, const DecodeOptions& options);
     [[nodiscard]] Result<String> fetch(std::string_view path, bool missing_ok, bool& missing);
     [[nodiscard]] Result<void> platform_ok(std::string_view platform) const;
-    [[nodiscard]] Result<std::uint64_t> page_number(std::string_view cursor) const;
     [[nodiscard]] Result<String> page_path(
         std::string_view family, std::string_view platform, std::string_view cursor) const;
-    [[nodiscard]] Result<void> next_ok(std::string_view cursor, std::string_view next) const;
 
     StaticFiles* files_;
     DecodeOptions decode_;

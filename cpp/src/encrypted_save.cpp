@@ -72,7 +72,7 @@ std::array<char, symbols> encode_symbols(const SaveKeyBytes& key) noexcept
         for (std::size_t b = 0; b < 5; ++b)
         {
             const std::size_t bit = s * 5 + b;
-            value = (value << 1U) | ((bytes[bit / 8] >> (7U - static_cast<unsigned>(bit % 8))) & 1U);
+            value = (value << 1U) | ((static_cast<unsigned>(bytes[bit / 8]) >> (7U - static_cast<unsigned>(bit % 8))) & 1U);
         }
         out[s] = alphabet[value];
     }
@@ -156,7 +156,7 @@ Result<SaveKey> SaveKey::from_phrase(std::string_view phrase) noexcept
         for (std::size_t b = 0; b < 5; ++b)
         {
             const std::size_t bit = s * 5 + b;
-            if (((values[s] >> (4U - static_cast<unsigned>(b))) & 1U) != 0)
+            if (((static_cast<unsigned>(values[s]) >> (4U - static_cast<unsigned>(b))) & 1U) != 0)
                 bytes[bit / 8] = static_cast<std::uint8_t>(bytes[bit / 8] | (0x80U >> (bit % 8)));
         }
     }
@@ -181,23 +181,8 @@ Result<SaveKey> SaveKey::from_qr(std::string_view text) noexcept
     return from_phrase(text.substr(qr_prefix.size()));
 }
 
-SaveKey::SaveKey(const SaveKey& other) noexcept
-    : key_(other.key_)
-    , wrap_(other.wrap_)
-    , id_(other.id_)
-{
-}
-
-SaveKey& SaveKey::operator=(const SaveKey& other) noexcept
-{
-    if (this != &other)
-    {
-        key_  = other.key_;
-        wrap_ = other.wrap_;
-        id_   = other.id_;
-    }
-    return *this;
-}
+SaveKey::SaveKey(const SaveKey& other) noexcept            = default;
+SaveKey& SaveKey::operator=(const SaveKey& other) noexcept = default;
 
 SaveKey::SaveKey(SaveKey&& other) noexcept
     : key_(other.key_)
@@ -333,18 +318,8 @@ Result<SaveCipher> SaveCipher::open(const SaveKey& key, const SaveHeader& header
     return cipher;
 }
 
-SaveCipher::SaveCipher(const SaveCipher& other) noexcept
-    : file_key_(other.file_key_)
-    , header_(other.header_)
-{
-}
-
-SaveCipher& SaveCipher::operator=(const SaveCipher& other) noexcept
-{
-    file_key_ = other.file_key_;
-    header_   = other.header_;
-    return *this;
-}
+SaveCipher::SaveCipher(const SaveCipher& other) noexcept            = default;
+SaveCipher& SaveCipher::operator=(const SaveCipher& other) noexcept = default;
 
 SaveCipher::SaveCipher(SaveCipher&& other) noexcept
     : file_key_(other.file_key_)
@@ -538,8 +513,8 @@ Result<void> EncryptingSource::describe(UploadRequest& request)
 
 // Decrypting as it downloads.
 
-DecryptingSink::DecryptingSink(const SaveKey& key, DownloadSink& out, Allocator allocator)
-    : key_(key)
+DecryptingSink::DecryptingSink(SaveKey key, DownloadSink& out, Allocator allocator)
+    : key_(std::move(key))
     , out_(&out)
     , sealed_(allocator)
     , plain_(allocator)
@@ -567,6 +542,8 @@ Result<void> DecryptingSink::open_chunk(bool last)
     // L-9.4-1: an empty last chunk only for an empty archive, its only chunk
     if (last && index_ != 0 && sealed_.size() == save_tag_size)
         return failed(Error::make(Category::integrity, "an empty chunk after the last one (SPEC.md 9.4)"));
+    if (!cipher_)
+        return failed(Error::make(Category::usage, "a chunk before the backup's header"));
     const std::size_t length = sealed_.size() - std::min(sealed_.size(), save_tag_size);
     const std::span<std::byte> plain(plain_.data(), length);
     if (auto opened = cipher_->unseal(index_, last, sealed_, plain); !opened)

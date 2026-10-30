@@ -1,0 +1,12 @@
+retry: 5000
+
+id: s_9f2c01aa_1042
+event: ready
+data: {"schema":1}
+
+: heartbeat
+
+id: s_9f2c01aa_1043
+event: request
+data: {"schema":1,"id":"r_7Qm2","platform":"switch","title_id":"0100ABCD00010000","status":"done"}
+

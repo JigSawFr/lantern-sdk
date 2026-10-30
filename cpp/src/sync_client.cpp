@@ -94,7 +94,7 @@ Read<SyncCollection> Client::sync_items(
     if (since)
     {
         std::array<char, 24> digits {};
-        const auto end = std::to_chars(digits.data(), digits.data() + digits.size(), *since).ptr;
+        auto* const end = std::to_chars(digits.data(), digits.data() + digits.size(), *since).ptr;
         add_query(*url, first, "since",
             std::string_view(digits.data(), static_cast<std::size_t>(end - digits.data())));
     }
@@ -147,7 +147,7 @@ Read<SyncCollection> Client::sync_write(
     if (if_match)
     {
         std::array<char, 24> digits {};
-        const auto end = std::to_chars(digits.data(), digits.data() + digits.size(), *if_match).ptr;
+        auto* const end = std::to_chars(digits.data(), digits.data() + digits.size(), *if_match).ptr;
         match.push_back('"');
         match.append(sync_generation_);
         match.push_back('-');

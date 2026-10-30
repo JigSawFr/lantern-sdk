@@ -37,13 +37,10 @@ bool segment(std::string_view id) noexcept
 // The families a static library cannot offer (L-21.2-1).
 bool offers_none_it_cannot(const HandshakeFeatures& f) noexcept
 {
-    for (const auto* value : { &f.changes, &f.sections, &f.saves, &f.encrypted_saves, &f.requests, &f.pairing,
-             &f.signatures, &f.admin, &f.events, &f.peers, &f.sync })
-    {
-        if (value->value_or(0) != 0)
-            return false;
-    }
-    return true;
+    const std::array families { &f.changes, &f.sections, &f.saves, &f.encrypted_saves, &f.requests,
+        &f.pairing, &f.signatures, &f.admin, &f.events, &f.peers, &f.sync };
+    return std::ranges::all_of(
+        families, [](const std::optional<std::uint64_t>* value) { return value->value_or(0) == 0; });
 }
 
 // Hashes what it passes on, bounded by the file's size.
@@ -350,7 +347,11 @@ Result<void> StaticLibrary::platform_ok(std::string_view platform) const
     return {};
 }
 
-Result<std::uint64_t> StaticLibrary::page_number(std::string_view cursor) const
+namespace
+{
+
+// A cursor of § 21.1: the page's number, 2 at least; empty for the first.
+Result<std::uint64_t> page_number(std::string_view cursor)
 {
     if (cursor.empty())
         return 1;
@@ -361,6 +362,24 @@ Result<std::uint64_t> StaticLibrary::page_number(std::string_view cursor) const
         return fail(Category::usage, "a static library's cursor is a page number (SPEC.md 21.1)");
     return page;
 }
+
+// A page's `next`: none, or the page after it (§ 21.1).
+Result<void> next_ok(std::string_view cursor, std::string_view next)
+{
+    if (next.empty())
+        return {};
+    const auto page = page_number(cursor);
+    if (!page)
+        return std::unexpected(page.error());
+    std::array<char, 24> digits {};
+    auto* const end = std::to_chars(digits.data(), digits.data() + digits.size(), *page + 1).ptr;
+    if (next != std::string_view(digits.data(), static_cast<std::size_t>(end - digits.data())))
+        return fail(
+            Category::invalid_response, "a static page whose next is not the page after it (SPEC.md 21.1)");
+    return {};
+}
+
+} // namespace
 
 Result<String> StaticLibrary::page_path(
     std::string_view family, std::string_view platform, std::string_view cursor) const
@@ -377,23 +396,10 @@ Result<String> StaticLibrary::page_path(
     path.append(platform);
     path.append("/pages/");
     std::array<char, 24> digits {};
-    const auto end = std::to_chars(digits.data(), digits.data() + digits.size(), *page).ptr;
+    auto* const end = std::to_chars(digits.data(), digits.data() + digits.size(), *page).ptr;
     path.append(digits.data(), end);
     path.append(".json");
     return path;
-}
-
-Result<void> StaticLibrary::next_ok(std::string_view cursor, std::string_view next) const
-{
-    if (next.empty())
-        return {};
-    const auto page = page_number(cursor);
-    std::array<char, 24> digits {};
-    const auto end = std::to_chars(digits.data(), digits.data() + digits.size(), *page + 1).ptr;
-    if (next != std::string_view(digits.data(), static_cast<std::size_t>(end - digits.data())))
-        return fail(
-            Category::invalid_response, "a static page whose next is not the page after it (SPEC.md 21.1)");
-    return {};
 }
 
 Read<AppsPage> StaticLibrary::apps(std::string_view platform, std::string_view cursor)
@@ -628,10 +634,16 @@ Result<Vector<App>> StaticLibrary::missing(std::string_view platform, const Miss
                 item.app_id, [](char c) { return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'); }))
         {
             // Annex A.1: base ...000, update ...800, an add-on otherwise
-            std::uint64_t id = 0;
-            std::from_chars(item.app_id.data(), item.app_id.data() + 16, id, 16);
+            std::uint64_t id  = 0;
+            const auto parsed = std::from_chars(item.app_id.data(), item.app_id.data() + 16, id, 16);
+            if (parsed.ec != std::errc {})
+                continue;
             const std::uint64_t low = id & 0x1FFFU;
-            kind                    = low == 0 ? "base" : low == 0x800 ? "update" : "dlc";
+            kind                    = "dlc";
+            if (low == 0)
+                kind = "base";
+            else if (low == 0x800)
+                kind = "update";
             std::array<char, 16> hex {};
             const std::uint64_t base = id & ~std::uint64_t { 0x1FFF };
             for (std::size_t i = 0; i < 16; ++i)
