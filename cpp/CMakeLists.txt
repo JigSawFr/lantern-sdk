@@ -84,7 +84,10 @@ add_library(lantern
 add_library(Lantern::lantern ALIAS lantern)
 
 target_compile_features(lantern PUBLIC cxx_std_23)
+# Position-independent, so that a shared library (the C API, an app's
+# plugin) can link the static one
 set_target_properties(lantern PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
     CXX_EXTENSIONS OFF
     EXPORT_NAME lantern
     VERSION ${PROJECT_VERSION}
