@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/admin-pairing-decision.json",
+  "title": "A decision on a pairing",
+  "description": "POST <base>/v1/admin/pairings/{id} (SPEC.md § 5.7).",
+  "allOf": [
+    {
+      "type": "object",
+      "properties": {
+        "decision": {
+          "enum": [
+            "approve",
+            "refuse"
+          ]
+        },
+        "user": {
+          "$ref": "common.json#/$defs/account_name"
+        },
+        "scopes": {
+          "$ref": "common.json#/$defs/scopes"
+        },
+        "rating_cap": {
+          "$ref": "common.json#/$defs/rating_cap"
+        }
+      },
+      "required": [
+        "decision"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "$ref": "common.json#/$defs/schema1"
+        }
+      },
+      "required": [
+        "schema"
+      ]
+    }
+  ]
+}

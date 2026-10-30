@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/admin-user-update.json",
+  "title": "An account's change",
+  "description": "PATCH <base>/v1/admin/users/{name} (SPEC.md § 5.7): its state, or its scopes.",
+  "allOf": [
+    {
+      "type": "object",
+      "properties": {
+        "state": {
+          "enum": [
+            "active",
+            "frozen"
+          ]
+        },
+        "scopes": {
+          "$ref": "common.json#/$defs/scopes"
+        }
+      },
+      "not": {
+        "required": [
+          "password"
+        ]
+      },
+      "anyOf": [
+        {
+          "required": [
+            "state"
+          ]
+        },
+        {
+          "required": [
+            "scopes"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "$ref": "common.json#/$defs/schema1"
+        }
+      },
+      "required": [
+        "schema"
+      ]
+    }
+  ]
+}

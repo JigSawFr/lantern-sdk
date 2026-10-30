@@ -1,11 +1,13 @@
-"""The keys a client pinned for each homebrew (SPEC.md § 8.4): on the first
+"""What a client pins: the servers it paired with (SPEC.md § 5.3, § 5.4:
+their key's fingerprint, its token and device key, `ServerStore`), and the
+keys of each homebrew (SPEC.md § 8.4): on the first
 install of an id, its signing key (or that it had none); later, a version
 signed by another key, or unsigned after a signed one, is refused unless the
 user explicitly accepts the change, after seeing both keys' fingerprints.
 
-`KeyPins` is the interface; a client keeps its pins where it keeps its
-state. `MemoryKeyPins` and `FileKeyPins` (a JSON file, by the `schema` rule)
-are two implementations.
+`KeyPins` and `ServerStore` are the interfaces; a client keeps its pins where
+it keeps its state. `MemoryKeyPins`, `FileKeyPins`, `MemoryServerStore` and
+`FileServerStore` (JSON files, by the `schema` rule) are implementations.
 
     decision = check_key(pins, entry)
     if decision.change == "changed" and not ask_user(decision):
@@ -16,12 +18,14 @@ are two implementations.
 
 from __future__ import annotations
 
+import contextlib
+import os
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Protocol
 
-from lantern._base import SCHEMA, JSONObject
+from lantern._base import SCHEMA, JSONObject, JSONValue
 from lantern._generated.models import Homebrew
 from lantern.homebrew import key_change, key_fingerprint
 from lantern.store import load_document, save_document
@@ -129,3 +133,157 @@ class FileKeyPins:
 
     def forget(self, platform: str, homebrew_id: str) -> None:
         self._update(f"{platform}/{homebrew_id}", None)
+
+
+# The servers a client paired with (SPEC.md § 5.2 to § 5.4).
+
+
+@dataclass
+class ServerRecord:
+    """What a client keeps of a server it paired with, by its `uid`: where it
+    is, the fingerprint of the key it pinned (`spki`, SHA-256 hex, None when a
+    CA vouches for its certificate), its token, the device key the token is
+    bound to (`key`: its secret seed, base64; None for a bearer-only token),
+    the scopes and rating cap the token carries, and when it paired. Fields
+    this library does not know are kept in `extra`, and written back."""
+
+    uid: str
+    url: str
+    token: str
+    name: str = ""
+    spki: str | None = None
+    key: str | None = None
+    scopes: list[str] = field(default_factory=list)
+    bound: bool = False
+    rating_cap: JSONObject | None = None
+    paired: str = ""
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS = frozenset({"uid", "url", "token", "name", "spki", "key", "scopes", "bound", "rating_cap", "paired"})
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {"uid": self.uid, "url": self.url, "token": self.token, "name": self.name}
+        if self.spki is not None:
+            out["spki"] = self.spki
+        if self.key is not None:
+            out["key"] = self.key
+        scopes: list[JSONValue] = list(self.scopes)
+        out.update({"scopes": scopes, "bound": self.bound, "paired": self.paired})
+        if self.rating_cap is not None:
+            out["rating_cap"] = self.rating_cap
+        return {**self.extra, **out}
+
+    @classmethod
+    def from_json(cls, data: JSONValue) -> ServerRecord | None:
+        """A record, or None when it is not one this library can use."""
+        if not isinstance(data, dict):
+            return None
+        uid, url, token = data.get("uid"), data.get("url"), data.get("token")
+        if not (isinstance(uid, str) and isinstance(url, str) and isinstance(token, str)):
+            return None
+        spki, key, cap = data.get("spki"), data.get("key"), data.get("rating_cap")
+        scopes = data.get("scopes")
+        return cls(
+            uid=uid,
+            url=url,
+            token=token,
+            name=str(data.get("name") or ""),
+            spki=spki if isinstance(spki, str) else None,
+            key=key if isinstance(key, str) else None,
+            scopes=[s for s in scopes if isinstance(s, str)] if isinstance(scopes, list) else [],
+            bound=data.get("bound") is True,
+            rating_cap=cap if isinstance(cap, dict) else None,
+            paired=str(data.get("paired") or ""),
+            extra={k: v for k, v in data.items() if k not in cls.KEYS},
+        )
+
+    def __repr__(self) -> str:
+        return f"ServerRecord(uid={self.uid!r}, url={self.url!r}, spki={self.spki!r}, bound={self.bound})"
+
+
+class ServerStore(Protocol):
+    """Where a client keeps the servers it paired with: their tokens and
+    device keys are secrets, kept where the system protects them when it has
+    such a place (SPEC.md § 5.4)."""
+
+    def server(self, uid: str) -> ServerRecord | None: ...
+
+    def servers(self) -> list[ServerRecord]: ...
+
+    def save(self, record: ServerRecord) -> None:
+        """Keep `record` (a new pairing replaces the server's former one)."""
+        ...
+
+    def forget(self, uid: str) -> None: ...
+
+
+class MemoryServerStore:
+    """Servers kept in memory."""
+
+    def __init__(self) -> None:
+        self._servers: dict[str, ServerRecord] = {}
+        self._lock = threading.Lock()
+
+    def server(self, uid: str) -> ServerRecord | None:
+        with self._lock:
+            return self._servers.get(uid)
+
+    def servers(self) -> list[ServerRecord]:
+        with self._lock:
+            return list(self._servers.values())
+
+    def save(self, record: ServerRecord) -> None:
+        with self._lock:
+            self._servers[record.uid] = record
+
+    def forget(self, uid: str) -> None:
+        with self._lock:
+            self._servers.pop(uid, None)
+
+
+class FileServerStore:
+    """Servers kept in a JSON file, readable by its owner alone:
+    {"schema": 1, "servers": {"<uid>": {…}}}. A file of a newer schema is
+    read as absent and never written over (save() raises store.NewerOnDisk);
+    keys this library does not know, the file's and each record's, are kept."""
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+        self._lock = threading.Lock()
+
+    def _read(self) -> JSONObject:
+        doc = load_document(self.path, known=SCHEMA)
+        return doc if doc is not None else {"schema": SCHEMA, "servers": {}}
+
+    def _records(self) -> dict[str, JSONValue]:
+        servers = self._read().get("servers")
+        return dict(servers) if isinstance(servers, dict) else {}
+
+    def server(self, uid: str) -> ServerRecord | None:
+        with self._lock:
+            return ServerRecord.from_json(self._records().get(uid))
+
+    def servers(self) -> list[ServerRecord]:
+        with self._lock:
+            found = [ServerRecord.from_json(v) for v in self._records().values()]
+        return [r for r in found if r is not None]
+
+    def _update(self, uid: str, value: JSONObject | None) -> None:
+        with self._lock:
+            doc = self._read()
+            servers = doc.get("servers")
+            servers = dict(servers) if isinstance(servers, dict) else {}
+            if value is None:
+                servers.pop(uid, None)
+            else:
+                servers[uid] = value
+            doc["servers"] = servers
+            save_document(self.path, doc, known=SCHEMA)
+            with contextlib.suppress(OSError):
+                os.chmod(self.path, 0o600)
+
+    def save(self, record: ServerRecord) -> None:
+        self._update(record.uid, record.to_json())
+
+    def forget(self, uid: str) -> None:
+        self._update(uid, None)

@@ -1,9 +1,12 @@
 # The Python library (python/): the generated models against the
 # specification's schemas, ruff, mypy --strict, the tests with coverage on
-# Linux (3.11 to 3.14), Windows and macOS, the core without any extra, the
-# client against the specification's reference server, the conformance suite
-# against the demo servers (Flask and FastAPI), and the sdist and wheel.
-# Nothing is published: that comes with the first release and its signing.
+# Linux (3.11 to 3.14), Windows and macOS (the client against the malicious
+# test server among them), the core without any extra, the client against
+# the specification's reference server (over TLS, with a token bound to its
+# key), the malicious test server from its command line, the conformance
+# suite against the demo servers (Flask and FastAPI, with the levels they
+# reach), and the sdist and wheel. Nothing is published: that comes with the
+# first release and its signing.
 name: python
 
 on:
@@ -119,11 +122,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e . --group dev
-      - name: pytest -m integration (stdlib, httpx and async transports)
+      - name: pytest -m integration (stdlib, httpx and async transports; TLS, pairing, bound tokens, DNS-SD)
         run: python -m pytest -m integration -v
 
-  conformance:
-    name: the conformance suite against the demo servers
+  hostile:
+    name: the malicious test server, from its command line
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
@@ -137,21 +140,59 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e . --group dev
-      - name: pytest -m conformance (Flask and FastAPI, anonymously and with a token)
-        run: python -m pytest -m conformance -v
-      - name: The suite's own report, against each framework
+          python -m pip install -e ".[crypto]" pytest
+      - name: Every scenario, listed
+        run: python tools/hostile_server.py --list
+      - name: The Python client against every scenario
+        run: python -m pytest tests/test_hostile.py -v
+      - name: One scenario served as another language's CI starts it
         run: |
+          python tools/hostile_server.py bad-digest --port 8099 > "$RUNNER_TEMP/hostile.json" 2> "$RUNNER_TEMP/hostile.log" &
+          pid=$!
+          for _ in $(seq 50); do
+            curl -fsS http://127.0.0.1:8099/.well-known/lantern >/dev/null && break
+            sleep 0.2
+          done
+          head -n 1 "$RUNNER_TEMP/hostile.json"
+          curl -fsS -D - -o /dev/null http://127.0.0.1:8099/api/lantern/v1/files/f_frost | grep -i '^repr-digest'
+          grep -q '"path": "/.well-known/lantern"' "$RUNNER_TEMP/hostile.log"
+          kill "$pid"
+
+  conformance:
+    name: the conformance suite against the demo servers
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"  # zstd in the standard library: JSON compressed as § 2.1 recommends
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . --group dev
+      - name: pytest -m conformance (Flask and FastAPI, anonymously and with a token bound to its key)
+        run: python -m pytest -m conformance -v
+      - name: The suite's own report, against each framework, and the levels reached
+        run: |
+          set -o pipefail
           for framework in flask fastapi; do
             port=$([ "$framework" = flask ] && echo 8080 || echo 8081)
-            python tests/demo.py --framework "$framework" --port "$port" &
+            python tests/demo.py --framework "$framework" --port "$port" --key-file "$RUNNER_TEMP/demo.key" &
+            pid=$!
             for _ in $(seq 50); do
               curl -fsS "http://127.0.0.1:$port/.well-known/lantern" >/dev/null && break
               sleep 0.2
             done
             echo "::group::$framework"
-            python ../spec/conformance/run.py "http://127.0.0.1:$port/" --token et_demo-0123456789abcdef0123456789abcdef
+            python ../spec/conformance/run.py "http://127.0.0.1:$port/" \
+              --token et_demo-0123456789abcdef0123456789abcdef --key "$RUNNER_TEMP/demo.key" | tee "$RUNNER_TEMP/$framework.txt"
             echo "::endgroup::"
+            grep -A8 '^Levels reached' "$RUNNER_TEMP/$framework.txt" >> "$GITHUB_STEP_SUMMARY"
+            kill "$pid"
           done
 
   build:

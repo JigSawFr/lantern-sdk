@@ -1,0 +1,2 @@
+lantern=("@method" "@target-uri" "authorization");created=1793345400;nonce="ZGVsZXRlLXRoZS1yZXF1ZXN0";keyid="If4x36FUomFia_hUBG_SJxt77UtqvkWqWId-9H-XIbk";alg="ed25519"
+lantern=:SU/1VZf6qBLeQR/dU5F2ybA9LwWhzRY48eD2aJRaTt/hr7lW9fIGpWfXgknK2ZqK94O+zJa1Jn/XwkLzODTYBA==:

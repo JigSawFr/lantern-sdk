@@ -1,5 +1,6 @@
 #include <lantern/encoding.hpp>
 
+#include <algorithm>
 #include <array>
 
 namespace lantern
@@ -66,6 +67,57 @@ std::optional<std::size_t> base64_decoded_size(std::string_view text) noexcept
     if (!text.empty() && text.back() == '=')
         padding = (text.size() >= 2 && text[text.size() - 2] == '=') ? 2 : 1;
     return text.size() / 4 * 3 - padding;
+}
+
+void base64url_encode(std::span<const std::uint8_t> bytes, String& out)
+{
+    const std::size_t start = out.size();
+    base64_encode(bytes, out);
+    while (out.size() > start && out.back() == '=')
+        out.pop_back();
+    for (std::size_t i = start; i < out.size(); ++i)
+    {
+        if (out[i] == '+')
+            out[i] = '-';
+        else if (out[i] == '/')
+            out[i] = '_';
+    }
+}
+
+std::size_t base64url_encode(std::span<const std::uint8_t> bytes, std::span<char> out) noexcept
+{
+    static constexpr std::string_view url
+        = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const std::size_t size = (bytes.size() * 4 + 2) / 3;
+    if (out.size() < size)
+        return 0;
+    std::size_t at      = 0;
+    std::uint32_t group = 0;
+    unsigned bits       = 0;
+    for (const std::uint8_t byte : bytes)
+    {
+        group = (group << 8U) | byte;
+        bits += 8;
+        while (bits >= 6)
+        {
+            bits -= 6;
+            out[at++] = url[(group >> bits) & 63U];
+        }
+    }
+    if (bits > 0)
+        out[at++] = url[(group << (6 - bits)) & 63U];
+    return at;
+}
+
+bool is_base64url(std::string_view text, std::size_t min, std::size_t max) noexcept
+{
+    return text.size() >= min && text.size() <= max
+        && std::ranges::all_of(text,
+            [](char c)
+            {
+                return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'
+                    || c == '_';
+            });
 }
 
 bool base64_decode(std::string_view text, std::span<std::uint8_t> out) noexcept

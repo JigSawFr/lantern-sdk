@@ -47,8 +47,9 @@ def test_client_and_adapters(framework: str, tmp_path: Path) -> None:
         )
         with pytest.raises(urllib.error.HTTPError) as too_large:
             urllib.request.urlopen(request, timeout=10)
-        assert too_large.value.code == 413
-        assert json.loads(too_large.value.read())["code"] == "too_large"
+        with too_large.value as error:
+            assert error.code == 413
+            assert json.loads(error.read())["code"] == "too_large"
         head = urllib.request.Request(url + "api/lantern/v1/apps", method="HEAD")
         with urllib.request.urlopen(head, timeout=10) as r:
             assert r.status == 200 and int(r.headers["Content-Length"]) > 0 and r.read() == b""

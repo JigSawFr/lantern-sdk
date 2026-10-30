@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/invitation-create.json",
+  "title": "A new invitation",
+  "description": "POST <base>/v1/admin/invitations (SPEC.md § 5.5, § 5.7).",
+  "allOf": [
+    {
+      "type": "object",
+      "properties": {
+        "user": {
+          "$ref": "common.json#/$defs/account_name"
+        },
+        "scopes": {
+          "$ref": "common.json#/$defs/scopes",
+          "minItems": 1
+        },
+        "expires": {
+          "$ref": "common.json#/$defs/time"
+        },
+        "devices": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "rating_cap": {
+          "$ref": "common.json#/$defs/rating_cap"
+        },
+        "note": {
+          "$ref": "common.json#/$defs/note"
+        }
+      },
+      "required": [
+        "user",
+        "scopes",
+        "expires",
+        "devices"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "$ref": "common.json#/$defs/schema1"
+        }
+      },
+      "required": [
+        "schema"
+      ]
+    }
+  ]
+}

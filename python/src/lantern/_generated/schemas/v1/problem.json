@@ -25,7 +25,12 @@
     "code": {
       "enum": [
         "bad_request",
+        "key_required",
         "unauthorized",
+        "signature_required",
+        "signature_invalid",
+        "signature_expired",
+        "signature_replayed",
         "forbidden",
         "account_frozen",
         "not_found",
@@ -38,6 +43,10 @@
         "internal",
         "unavailable"
       ]
+    },
+    "language": {
+      "$ref": "common.json#/$defs/language",
+      "description": "The language of title and detail (SPEC.md § 2.2)."
     }
   },
   "required": [

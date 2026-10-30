@@ -1,4 +1,13 @@
 @PACKAGE_INIT@
 
+# What the optional adapters link to, when they were built
+include(CMakeFindDependencyMacro)
+if (@LANTERN_HAS_CURL@)
+    find_dependency(CURL 7.85)
+endif ()
+if (@LANTERN_HAS_MBEDTLS@ AND @LANTERN_MBEDTLS_PACKAGE@)
+    find_dependency(MbedTLS CONFIG)
+endif ()
+
 include("${CMAKE_CURRENT_LIST_DIR}/LanternTargets.cmake")
 check_required_components(Lantern)

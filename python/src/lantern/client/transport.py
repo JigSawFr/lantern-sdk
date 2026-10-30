@@ -94,6 +94,8 @@ class Response:
     ) -> None:
         self.status, self.headers = status, headers
         self._chunks, self._close = chunks, close
+        #: The fingerprint (SHA-256 of the SPKI, hex) of the key of the TLS connection, when the transport knows it.
+        self.spki: str | None = None
 
     def iter_bytes(self) -> Iterator[bytes]:
         yield from self._chunks
@@ -125,6 +127,7 @@ class AsyncResponse:
     ) -> None:
         self.status, self.headers = status, headers
         self._chunks, self._close = chunks, close
+        self.spki: str | None = None
 
     async def iter_bytes(self) -> AsyncIterator[bytes]:
         async for chunk in self._chunks:

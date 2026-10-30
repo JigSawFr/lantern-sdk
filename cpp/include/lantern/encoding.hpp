@@ -14,12 +14,21 @@ namespace lantern
 {
 
 void base64_encode(std::span<const std::uint8_t> bytes, String& out);
+// RFC 4648 § 5, without padding: a key's thumbprint (keyid) and a
+// signature's nonce (SPEC.md § 5.4).
+void base64url_encode(std::span<const std::uint8_t> bytes, String& out);
+// The same into a buffer the caller gives, without allocating: the
+// characters written, 0 when `out` is too small (it needs 4 per 3 bytes).
+[[nodiscard]] std::size_t base64url_encode(std::span<const std::uint8_t> bytes, std::span<char> out) noexcept;
 // Decodes into `out`, which must be exactly the decoded size: a key of 32
 // bytes, a signature of 64. Refuses anything not canonical (missing or
 // extra padding, bits set past the end, characters outside the alphabet).
 [[nodiscard]] bool base64_decode(std::string_view text, std::span<std::uint8_t> out) noexcept;
 // The decoded size of a well-padded text, or nothing.
 [[nodiscard]] std::optional<std::size_t> base64_decoded_size(std::string_view text) noexcept;
+
+// Whether `text` is base64url without padding, of `min` to `max` characters.
+[[nodiscard]] bool is_base64url(std::string_view text, std::size_t min, std::size_t max) noexcept;
 
 // Percent-encodes everything but RFC 3986's unreserved characters.
 void percent_encode(std::string_view text, String& out);

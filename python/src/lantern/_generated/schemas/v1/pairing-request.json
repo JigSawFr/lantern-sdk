@@ -18,6 +18,14 @@
       },
       "minItems": 1,
       "uniqueItems": true
+    },
+    "key": {
+      "$ref": "common.json#/$defs/device_key",
+      "description": "The device's public key (SPEC.md § 5.4); without it, a bearer-only token."
+    },
+    "invitation": {
+      "$ref": "common.json#/$defs/invitation_code",
+      "description": "An invitation's code (SPEC.md § 5.5)."
     }
   },
   "required": [

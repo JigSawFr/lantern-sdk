@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/invitations.json",
+  "title": "Invitations",
+  "description": "GET <base>/v1/admin/invitations (SPEC.md § 5.5, § 5.7): those that can still be redeemed.",
+  "allOf": [
+    {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "$ref": "common.json#/$defs/invitation"
+          }
+        },
+        "total": {
+          "$ref": "common.json#/$defs/uint64"
+        },
+        "next": {
+          "oneOf": [
+            {
+              "$ref": "common.json#/$defs/opaque"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "next"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "$ref": "common.json#/$defs/schema1"
+        }
+      },
+      "required": [
+        "schema"
+      ]
+    }
+  ]
+}
