@@ -330,6 +330,21 @@ describe("grants, peers and mirrors (SPEC.md § 19)", () => {
   });
 });
 
+describe("a peer's discovery reply (SPEC.md § 19.5)", () => {
+  test("only to a datagram that asks for peers, from its own networks", async () => {
+    const peer = new PeerServer({ files: new Map(), keys: { [UID]: new Uint8Array(32) }, name: "Lea's Switch" });
+    const ask = (doc: unknown) => new TextEncoder().encode(JSON.stringify(doc));
+    const reply = peer.reply(ask({ schema: 1, lantern: "discover", peers: true }), "192.168.1.5");
+    assert.ok(reply);
+    const doc = JSON.parse(new TextDecoder().decode(reply)) as Record<string, unknown>;
+    assert.equal(doc["lantern"], "peer");
+    assert.deepEqual(doc["servers"], [UID]);
+    assert.equal(peer.reply(ask({ schema: 1, lantern: "discover" }), "192.168.1.5"), undefined);
+    assert.equal(peer.reply(ask({ schema: 1, lantern: "discover", peers: true }), "203.0.113.9"), undefined);
+    assert.throws(() => new PeerServer({ files: new Map(), keys: {}, slots: 9 }), RangeError);
+  });
+});
+
 describe("deleting an account (SPEC.md § 5.7)", () => {
   test("confirmed by its name; never one's own; then 404", async () => {
     const mira = admin();

@@ -199,14 +199,17 @@ export class PeerServer {
   }
 
   /**
-   * Serves over plain HTTP, on a loopback or private address only (a grant
-   * goes nowhere else in clear, L-19.4-6); resolves with its URL and a close().
+   * Serves over plain HTTP, on a loopback or private address, or every
+   * address of the device, answering its own networks alone (a grant goes
+   * nowhere else in clear, L-19.4-6); resolves with its URL and a close().
    */
   async listen(
     options: { host?: string; port?: number } = {},
   ): Promise<{ url: string; port: number; close(): Promise<void> }> {
     const host = options.host ?? "127.0.0.1";
-    if (!plainHttpToPeer(host)) throw new RangeError(`${host}: a peer speaks plain HTTP on a private network only`);
+    // Every address of the device ("0.0.0.0", "::") is allowed: a request from outside its networks is refused (403).
+    if (!plainHttpToPeer(host) && host !== "0.0.0.0" && host !== "::")
+      throw new RangeError(`${host}: a peer speaks plain HTTP on a private network only`);
     const server = http.createServer(this.handler());
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
