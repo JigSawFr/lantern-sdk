@@ -72,7 +72,8 @@ std::array<char, symbols> encode_symbols(const SaveKeyBytes& key) noexcept
         for (std::size_t b = 0; b < 5; ++b)
         {
             const std::size_t bit = s * 5 + b;
-            value = (value << 1U) | ((static_cast<unsigned>(bytes[bit / 8]) >> (7U - static_cast<unsigned>(bit % 8))) & 1U);
+            value                 = (value << 1U)
+                | ((static_cast<unsigned>(bytes[bit / 8]) >> (7U - static_cast<unsigned>(bit % 8))) & 1U);
         }
         out[s] = alphabet[value];
     }

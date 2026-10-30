@@ -45,6 +45,7 @@ struct Scenario
     std::string token;
     std::string pin;
     std::string entry;
+    std::string static_root;
 };
 
 Scenario scenario()
@@ -63,11 +64,12 @@ Scenario scenario()
         const json::Value* value = root.find(key);
         return value != nullptr && value->is_string() ? std::string(value->text()) : std::string();
     };
-    s.name  = text("scenario");
-    s.url   = text("url");
-    s.token = text("token");
-    s.pin   = text("pin");
-    s.entry = text("entry");
+    s.name        = text("scenario");
+    s.url         = text("url");
+    s.token       = text("token");
+    s.pin         = text("pin");
+    s.entry       = text("entry");
+    s.static_root = text("static");
     while (!s.url.empty() && s.url.back() == '/')
         s.url.pop_back(); // an origin, as a ClientConfig takes it
     return s;
@@ -394,6 +396,69 @@ TEST_CASE("hostile: the scenario run_server.py serves, refused as the Python cli
         CHECK(shaken.error().status() == 302);
         CHECK(server_log().size() == 1);
         token_only_here(s);
+    }
+    else if (s.name == "forged-grant" || s.name == "expired-grant")
+    {
+        // Refused before it goes to any peer
+        Device device(s, false);
+        device.shake_with_token(s);
+        const App app    = first_app(device);
+        const auto grant = device->grant(app.sha256);
+        REQUIRE_FALSE(grant);
+        CHECK(grant.error().category() == Category::integrity);
+    }
+    else if (s.name == "oversized-event")
+    {
+        // Stopped at the bound, never holding the whole line
+        Device device(s, false);
+        device.shake_with_token(s);
+        struct Seen final : EventHandler
+        {
+            unsigned events = 0;
+            bool on_event(const StreamEvent& /*event*/) override
+            {
+                ++events;
+                return true;
+            }
+        } seen;
+        EventStreamState state;
+        const auto streamed = device->events(state, seen);
+        REQUIRE_FALSE(streamed);
+        CHECK(streamed.error().category() == Category::limit);
+        CHECK(seen.events <= 1);
+    }
+    else if (s.name == "mirror-wrong-bytes")
+    {
+        // The mirror's bytes refused, the file from the server, no token to the mirror
+        Device device(s, false);
+        device.shake_with_token(s);
+        const App app = first_app(device);
+        REQUIRE(!app.mirrors.empty());
+        DownloadState state;
+        Sink sink;
+        REQUIRE(device->download_with_mirrors(app.mirrors, { app.file, app.size, app.sha256 }, state, sink));
+        CHECK(sink.bytes.size() == app.size);
+        bool asked_mirror = false;
+        for (const Logged& entry : server_log())
+        {
+            if (entry.path.starts_with("/mirror/"))
+            {
+                asked_mirror = true;
+                CHECK(entry.authorization.empty());
+            }
+        }
+        CHECK(asked_mirror);
+    }
+    else if (s.name == "static-newer-schema")
+    {
+        // Absent, not an error
+        REQUIRE(!s.static_root.empty());
+        posix::LoopbackTransport transport(std::chrono::seconds(30));
+        auto files = HttpStaticFiles::create(transport, s.static_root, "LanternCppTests/0.5");
+        REQUIRE(files);
+        const auto library = StaticLibrary::open(*files);
+        REQUIRE(library);
+        CHECK_FALSE(*library);
     }
     else
         FAIL("a scenario this client does not know: answer it in hostile_tests.cpp");

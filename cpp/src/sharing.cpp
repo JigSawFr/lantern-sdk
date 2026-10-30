@@ -33,8 +33,25 @@ Read<Grant> Client::grant(const Digest& sha256)
     const auto hex = to_hex(sha256);
     url->append(hex.data(), hex.size());
     auto read_one = read<Grant>(Method::get, *url, read_grant);
-    if (read_one && *read_one && !same_digest((*read_one)->sha256, sha256))
+    if (!read_one || !*read_one)
+        return read_one;
+    const Grant& got = **read_one;
+    if (!same_digest(got.sha256, sha256))
         return fail(Category::invalid_response, "a grant for another file than the one asked (SPEC.md 19.3)");
+    // Checked as a peer would check it, before it goes to any: by the
+    // handshake's peers.key, for this server and file, not expired by the
+    // server's clock (the device's, corrected by its Date)
+    if (!handshake_)
+        return fail(Category::usage, "no handshake yet");
+    const auto key = grant_key_of(*handshake_);
+    if (!key)
+        return std::unexpected(key.error());
+    const GrantKey server { handshake_->uid, *key };
+    const auto claims
+        = verify_grant(got.grant, sha256, clock_->unix_seconds() + clock_offset_, std::span(&server, 1));
+    if (!claims || claims->size != got.size)
+        return fail(Category::integrity,
+            "a grant that does not verify by the server's peers.key, or expired (SPEC.md 19.3)");
     return read_one;
 }
 

@@ -64,9 +64,18 @@ Answer problem_answer(std::uint16_t status, std::string_view code)
     return a;
 }
 
+// The grants vectors' time: before their exp (vectors/grants.json)
+class GrantClock final : public Clock
+{
+  public:
+    std::int64_t now = 1793345400;
+    std::int64_t unix_seconds() override { return now; }
+};
+
 struct Setup
 {
     FakeTransport transport;
+    GrantClock clock;
     std::optional<Client> client;
 
     Setup(const Setup&)            = delete;
@@ -78,6 +87,7 @@ struct Setup
         config.origin     = "https://shelf.example.org";
         config.user_agent = "LanternTests/0.5";
         config.platform   = "switch";
+        config.clock      = &clock;
         auto made         = Client::create(transport, config);
         REQUIRE(made);
         client.emplace(std::move(*made));
@@ -474,19 +484,40 @@ TEST_CASE("mirrors: nothing of the server's sent, checked by the server's docume
     CHECK(longer.error().category() == Category::integrity);
 }
 
-TEST_CASE("peers: a grant asked, then the file from a peer with the grant alone")
+TEST_CASE("peers: a grant asked and checked by peers.key, then the file from a peer with the grant alone")
 {
     Setup setup;
-    const std::string file      = "Moss and Ember, a homebrew package";
-    const Digest sha            = Sha256::of(file);
-    const auto hex              = to_hex(sha);
-    const std::string grant_doc = R"({"schema":1,"sha256":")" + std::string(hex.data(), hex.size())
-        + R"(","size":)" + std::to_string(file.size()) + R"(,"grant":")" + std::string(vector_grant)
+    const std::string grant_doc = R"({"schema":1,"sha256":")" + std::string(vector_sha)
+        + R"(","size":734003200,"grant":")" + std::string(vector_grant)
         + R"(","expires":"2026-10-30T09:40:00Z"})";
+    setup.transport.respond    = [&](const Recorded&) { return json_answer(grant_doc); };
+    const Digest vector_digest = *digest_from_hex(vector_sha);
+    const auto grant           = setup.client->grant(vector_digest);
+    REQUIRE(grant);
+    REQUIRE(*grant);
+    CHECK(setup.transport.requests.back().url
+        == "https://shelf.example.org/api/lantern/v1/grants/sha256/" + std::string(vector_sha));
+    // Refused before it goes to any peer: another key's, expired, another file's
+    std::string forged = grant_doc;
+    forged.replace(forged.find(".-4SQt"), 7, ".WoDhJ6"); // another signature
+    setup.transport.respond = [&](const Recorded&) { return json_answer(forged); };
+    const auto refused      = setup.client->grant(vector_digest);
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().category() == Category::integrity);
+    setup.transport.respond = [&](const Recorded&) { return json_answer(grant_doc); };
+    setup.clock.now         = 1793346001;
+    const auto expired      = setup.client->grant(vector_digest);
+    REQUIRE_FALSE(expired);
+    CHECK(expired.error().category() == Category::integrity);
+    setup.clock.now = 1793345400;
+    CHECK_FALSE(setup.client->grant(Digest {}));
+
+    // The peer: HEAD, then the file, with the grant alone
+    const std::string file  = "Moss and Ember, a homebrew package";
+    const Digest sha        = Sha256::of(file);
+    const auto hex          = to_hex(sha);
     setup.transport.respond = [&](const Recorded& r)
     {
-        if (r.url.contains("/v1/grants/"))
-            return json_answer(grant_doc);
         Answer a;
         a.headers = { { "Content-Type", "application/octet-stream" }, { "Repr-Digest", repr_digest(file) } };
         if (r.method == "HEAD")
@@ -494,18 +525,16 @@ TEST_CASE("peers: a grant asked, then the file from a peer with the grant alone"
         a.body = file;
         return a;
     };
-    const auto grant = setup.client->grant(sha);
-    REQUIRE(grant);
-    REQUIRE(*grant);
-    CHECK(setup.transport.requests.back().url
-        == "https://shelf.example.org/api/lantern/v1/grants/sha256/" + std::string(hex.data(), hex.size()));
+    Grant held  = **grant;
+    held.sha256 = sha;
+    held.size   = file.size();
     PeerEndpoint peer { "192.168.1.30", 47116, "/lantern", false };
-    const auto holds = setup.client->peer_holds(peer, **grant);
+    const auto holds = setup.client->peer_holds(peer, held);
     REQUIRE(holds);
     CHECK(*holds);
     DownloadState state;
     Collect sink;
-    REQUIRE(setup.client->download_from_peer(peer, **grant, { "", file.size(), sha }, state, sink));
+    REQUIRE(setup.client->download_from_peer(peer, held, { "", file.size(), sha }, state, sink));
     CHECK(sink.bytes == file);
     const Recorded& asked = setup.transport.requests.back();
     CHECK(asked.url
@@ -515,14 +544,10 @@ TEST_CASE("peers: a grant asked, then the file from a peer with the grant alone"
     CHECK(asked.header("Authorization") == nullptr);
     // L-19.4-6: no grant over plain HTTP outside a private network
     PeerEndpoint outside { "203.0.113.5", 47116, "/lantern", false };
-    CHECK_FALSE(setup.client->peer_holds(outside, **grant));
+    CHECK_FALSE(setup.client->peer_holds(outside, held));
     PeerEndpoint tls { "203.0.113.5", 47116, "/lantern", true };
     CHECK(peer_blob_url(tls, sha));
-    // A grant answered for another file is refused
-    setup.transport.respond = [&](const Recorded&) { return json_answer(grant_doc); };
-    CHECK_FALSE(setup.client->grant(Digest {}));
-    const auto key = grant_key_of(*setup.client->server());
-    REQUIRE(key);
+    CHECK(grant_key_of(*setup.client->server()));
 }
 
 TEST_CASE("peers: the private networks of § 19.2")
