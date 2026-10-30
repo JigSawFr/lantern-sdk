@@ -19,6 +19,7 @@ import type {
   Package,
   RatingCap,
   RemovedTitle,
+  Section,
   Title,
 } from "../generated/models.ts";
 import * as hb from "../homebrew.ts";
@@ -32,14 +33,15 @@ import type { ServerRequest } from "./http.ts";
 import { readZip } from "./zip.ts";
 
 /** The families a Library may offer, beyond `changes` (which needs a Journal). */
-export const LIBRARY_FAMILIES = ["library", "titles", "homebrew", "cheats"] as const;
+export const LIBRARY_FAMILIES = ["library", "titles", "sections", "homebrew", "cheats"] as const;
 
 /**
  * The caller, as `authenticate` (or the server's Accounts) resolves it: its
  * state, its scopes (SPEC.md § 4.2) and the name the handshake shows; `key`,
  * the device key its token is bound to (LanternApp then checks the request's
  * signature, § 5.4); `ratingCap`, the cap its token carries (§ 5.6); `device`,
- * its device's id (§ 5.7).
+ * its device's id (§ 5.7), and `deviceName` the name it paired with (a save
+ * backup's `device`, § 9.1).
  */
 export interface Account {
   scopes: ReadonlySet<string>;
@@ -48,6 +50,18 @@ export interface Account {
   key?: Uint8Array;
   ratingCap?: RatingCap;
   device?: string;
+  deviceName?: string;
+}
+
+/** A cheat set to write (SPEC.md § 10), as LanternApp checked it. */
+export interface CheatInit {
+  platform: string;
+  title_id: string;
+  text: string;
+  source: string;
+  build_id?: string;
+  note?: string;
+  updated?: string;
 }
 
 /** Resolves a request's credentials to an account, or undefined when they are not valid ones. */
@@ -76,7 +90,7 @@ export interface Journal {
 
 /** What a server serves. Every method is called per request: return what is there now (a database query…). */
 export interface Library {
-  /** The families offered, among library, titles, homebrew and cheats. */
+  /** The families offered, among library, titles, sections, homebrew and cheats. */
   readonly families: ReadonlySet<string>;
   apps(): Maybe<readonly App[]>;
   /** Every title, its texts in the best of `languages` it has. */
@@ -84,6 +98,16 @@ export interface Library {
   /** Every entry, with its manifests (the toolkit leaves them out of listings). */
   homebrew(languages: readonly string[]): Maybe<readonly Homebrew[]>;
   cheats(): Maybe<readonly CheatSet[]>;
+  /** The shelves the server curates (SPEC.md § 6.5), with the families' `sections`; the toolkit filters their apps. */
+  sections?(languages: readonly string[]): Maybe<readonly Section[]>;
+  /**
+   * Writes a cheat set (SPEC.md § 10, scope `cheats.write`): a new one, or the
+   * set `replacing` changed in place (its id kept); the set as listed. Both
+   * this and `deleteCheat` make the writes offered; without them, they answer 405.
+   */
+  writeCheat?(init: CheatInit, replacing?: string): Maybe<CheatSet>;
+  /** Removes a cheat set; false when there is none of that id. */
+  deleteCheat?(cheatId: string): Maybe<boolean>;
   /** The file of <base>/v1/files/{fileId}: an app's or a homebrew package's. */
   file(fileId: string): Maybe<FileRef | undefined>;
   /** A cheat set's text. */
@@ -181,6 +205,7 @@ export class MemoryLibrary implements Library, Journal {
   readonly #cheats = new Map<string, CheatSet>();
   readonly #files = new Map<string, FileRef>();
   readonly #cheatFiles = new Map<string, FileRef>();
+  readonly #sections = new Map<string, Section>();
   readonly #journal: MemoryJournal | undefined;
   readonly #listeners: ((changes: LibraryChange[]) => void)[] = [];
 
@@ -291,20 +316,18 @@ export class MemoryLibrary implements Library, Journal {
   }
 
   /** A cheat set from its text (SPEC.md § 10). */
-  addCheat(init: {
-    platform: string;
-    title_id: string;
-    text: string;
-    source: string;
-    build_id?: string;
-    note?: string;
-    updated?: string;
-  }): CheatSet {
+  addCheat(init: CheatInit): CheatSet {
+    return this.writeCheat(init);
+  }
+
+  /** A cheat set written: a new one, or `replacing` changed in place, its id kept (SPEC.md § 10). */
+  writeCheat(init: CheatInit, replacing?: string): CheatSet {
     const data = new TextEncoder().encode(init.text);
     if (data.length > CHEAT_SET) throw new RangeError(`a cheat set is ${CHEAT_SET} bytes at most`);
+    if (replacing !== undefined && !this.#cheats.has(replacing)) throw new RangeError(`no cheat set ${replacing}`);
     const file = FileRef.ofBytes(data, "text/plain; charset=utf-8");
     const cheat: CheatSet = {
-      id: `cs_${token(9)}`,
+      id: replacing ?? `cs_${token(9)}`,
       platform: init.platform,
       title_id: init.title_id,
       source: init.source,
@@ -316,10 +339,44 @@ export class MemoryLibrary implements Library, Journal {
     if (init.note !== undefined) cheat.note = init.note;
     const problems = definition("cheat_set", cheat);
     if (problems.length > 0) throw new RangeError(`cheat set: ${problems.slice(0, 3).join("; ")}`);
+    const before = replacing !== undefined ? this.#cheats.get(replacing) : undefined;
     this.#cheats.set(cheat.id, cheat);
     this.#cheatFiles.set(cheat.id, file);
+    if (before !== undefined && (before.platform !== cheat.platform || before.title_id !== cheat.title_id))
+      this.#changed({ family: "cheats", platform: before.platform, titleId: before.title_id });
     this.#changed({ family: "cheats", platform: cheat.platform, titleId: cheat.title_id });
     return cheat;
+  }
+
+  deleteCheat(cheatId: string): boolean {
+    const cheat = this.#cheats.get(cheatId);
+    if (cheat === undefined) return false;
+    this.#cheats.delete(cheatId);
+    this.#cheatFiles.delete(cheatId);
+    this.#changed({ family: "cheats", platform: cheat.platform, titleId: cheat.title_id });
+    return true;
+  }
+
+  /** A shelf the server curates (SPEC.md § 6.5): its apps by id, in order; one of the same id is replaced. */
+  addSection(section: { id?: string; title: string; apps: readonly string[] }): Section {
+    const out: Section = { id: section.id ?? `sec_${token(6)}`, title: section.title, apps: [...section.apps] };
+    const before = this.#sections.get(out.id);
+    this.#sections.set(out.id, out);
+    this.#sectionChanged([...(before?.apps ?? []), ...out.apps]);
+    return out;
+  }
+
+  removeSection(sectionId: string): void {
+    const before = this.#sections.get(sectionId);
+    if (before === undefined) return;
+    this.#sections.delete(sectionId);
+    this.#sectionChanged(before.apps);
+  }
+
+  /** The event `library` of a shelf changed, for the platforms of its apps. */
+  #sectionChanged(appIds: readonly string[]): void {
+    const platforms = new Set(appIds.map((id) => this.#apps.get(id)?.platform).filter((p) => p !== undefined));
+    for (const platform of [...platforms].sort()) this.#changed({ family: "sections", platform });
   }
 
   // Library.
@@ -335,6 +392,9 @@ export class MemoryLibrary implements Library, Journal {
   }
   cheats(): CheatSet[] {
     return [...this.#cheats.values()];
+  }
+  sections(): Section[] {
+    return [...this.#sections.values()].map((x) => ({ ...x, apps: [...x.apps] }));
   }
   file(fileId: string): FileRef | undefined {
     return this.#files.get(fileId);
