@@ -1,0 +1,29 @@
+---
+# clang-format 18 (the CI pins 18.1.8 from PyPI, as Aurore does): Aurore's
+# style, for a library
+BasedOnStyle: WebKit
+Standard: c++20
+ColumnLimit: 110
+AccessModifierOffset: -2
+AlignConsecutiveAssignments: true
+BreakBeforeBraces: Allman
+IndentCaseLabels: true
+PointerAlignment: Left
+FixNamespaceComments: true
+NamespaceIndentation: None
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLambdasOnASingleLine: All
+InsertBraces: false
+SortIncludes: CaseSensitive
+IncludeBlocks: Preserve
+IncludeCategories:
+  - Regex: '^<lantern/'
+    Priority: 3
+  - Regex: '^<.*\.h>'
+    Priority: 1
+  - Regex: '^<'
+    Priority: 2
+  - Regex: '.*'
+    Priority: 4
+...

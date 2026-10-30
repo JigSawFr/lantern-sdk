@@ -1,0 +1,86 @@
+{
+  "schema": 1,
+  "id": "org.example.harborlights",
+  "platform": "switch",
+  "kind": "port",
+  "name": "Harbor Lights",
+  "author": "Lea",
+  "version": "2.1.0",
+  "build": 20100,
+  "license": "GPL-2.0-or-later",
+  "source": "https://code.example.org/lea/lighthouse",
+  "language": "en",
+  "summary": "The lighthouse-keeping classic, on the Switch. Needs your own copy of the game.",
+  "updated": "2026-10-30T08:00:00Z",
+  "package": {
+    "format": "nro",
+    "file": "/api/lantern/v1/files/f_Hl3Qw7",
+    "size": 3145728,
+    "sha256": "1a938f454b492bc4468cbe305b2ad9970800fcb35b0d492622b9614315c523f2",
+    "manifest_sha256": "bcfc65c55d35b6341e7465e3ea7084bc845e477bf08a279e05f846b647de7486",
+    "path": "/switch/harborlights/harborlights.nro",
+    "manifest": [
+      {
+        "path": "/switch/harborlights/harborlights.nro",
+        "size": 3145728,
+        "sha256": "1a938f454b492bc4468cbe305b2ad9970800fcb35b0d492622b9614315c523f2"
+      }
+    ]
+  },
+  "port": {
+    "original": {
+      "name": "Harbor Lights",
+      "year": 1998,
+      "developer": "Fjord Works",
+      "stores": [
+        {
+          "store": "gog",
+          "id": "1207658000",
+          "url": "https://store.example.org/harbor-lights"
+        }
+      ]
+    },
+    "engine": {
+      "name": "Lighthouse",
+      "version": "2.1.0",
+      "source": "https://code.example.org/lea/lighthouse"
+    },
+    "data_root": "/switch/harborlights/",
+    "assets": "user_owned",
+    "requires_data": [
+      {
+        "path": "data/HARBOR.PAK",
+        "size": 214748364,
+        "accept": [
+          {
+            "sha256": "9fed1136876db26e1ad23fc7f670877229ef6175a0ebb578156745f8e775f95e",
+            "label": "1.0"
+          },
+          {
+            "sha256": "e24786a703c9df277e543a705319fb02c4b85484dcecf396a1a8ea49f889e44e",
+            "md5": "cbfe50c4d03988e3b154e7fb5c56644f",
+            "label": "1.1"
+          }
+        ],
+        "hint": "In the folder where the game is installed on your computer."
+      },
+      {
+        "one_of": [
+          [
+            {
+              "path": "../THEME.OGG",
+              "hint": "From the soundtrack edition."
+            }
+          ],
+          [
+            {
+              "path": "data/MUSIC.PAK",
+              "hint": "Next to HARBOR.PAK, in the editions that have it."
+            }
+          ]
+        ],
+        "optional": true
+      }
+    ]
+  }
+}

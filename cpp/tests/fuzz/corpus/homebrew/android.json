@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "id": "org.example.frostline",
+  "system_id": "org.example.frostline",
+  "platform": "android",
+  "kind": "app",
+  "name": "Frostline",
+  "author": "Noor",
+  "version": "1.4.0",
+  "build": 10400,
+  "license": "MIT",
+  "source": "https://code.example.org/noor/frostline",
+  "language": "en",
+  "summary": "A pocket journal for long nights.",
+  "requires": {
+    "text": "Android 8.0 or later",
+    "min": {
+      "sdk": "26"
+    }
+  },
+  "updated": "2026-10-29T08:00:00Z",
+  "package": {
+    "format": "apk",
+    "arch": [
+      "aarch64"
+    ],
+    "file": "/api/lantern/v1/files/f_Fa64Lp",
+    "size": 6291456,
+    "sha256": "ec53ddabd2c7ecc9960e23566a567a8cb97147fbf0f26c36c69767ee1f5904b6",
+    "manifest_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "signer_sha256": "15167ef57f1836d8c6d550f5b1871c4f21a36278fe9a9d2608f90fa9728f016a"
+  },
+  "packages": [
+    {
+      "format": "apk",
+      "arch": [
+        "arm64-v8a"
+      ],
+      "file": "/api/lantern/v1/files/f_Fa32Lp",
+      "size": 5767168,
+      "sha256": "a73bf7213cd10694a8b9d82526404641b23e0f2fb5f93f9e2c8025615d7d5627",
+      "manifest_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "signer_sha256": "15167ef57f1836d8c6d550f5b1871c4f21a36278fe9a9d2608f90fa9728f016a"
+    },
+    {
+      "format": "apk",
+      "arch": [
+        "x86",
+        "x86_64"
+      ],
+      "file": "/api/lantern/v1/files/f_Fx86Lp",
+      "size": 9437184,
+      "sha256": "acd9a17728605f44acc055d71f7803a8df97b6895e5197470e4b26c1afeb22aa",
+      "manifest_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "signer_sha256": "15167ef57f1836d8c6d550f5b1871c4f21a36278fe9a9d2608f90fa9728f016a"
+    }
+  ]
+}

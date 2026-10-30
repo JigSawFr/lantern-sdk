@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "uid": "6f1c2a8e-4b7d-4e2a-9c31-8d5e2f0a7b14",
+  "name": "Living room shelf",
+  "software": {
+    "name": "ExampleShelf",
+    "version": "2.7.0"
+  },
+  "base": "/api/lantern",
+  "versions": [
+    1
+  ],
+  "platforms": [
+    "switch",
+    "android"
+  ],
+  "motd": "New this week: two co-op games.",
+  "account": {
+    "name": "lea",
+    "state": "active",
+    "scopes": [
+      "library",
+      "saves"
+    ]
+  },
+  "features": {
+    "library": 1,
+    "titles": 1,
+    "changes": 1,
+    "sections": 1,
+    "homebrew": 1,
+    "saves": 1,
+    "cheats": 1,
+    "requests": 0,
+    "pairing": 1
+  },
+  "limits": {
+    "page_size": 500,
+    "save_body": 8388608,
+    "save_size": 1073741824,
+    "saves_kept_per_title": 10
+  }
+}

@@ -1,0 +1,3 @@
+/switch/org.example.fuzz/fuzz.nro
+/config/org.example.fuzz/a.ini
+/atmosphere/contents/0100000000001000/exefs.nsp

@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "id": "org.example.frostline",
+  "platform": "switch",
+  "kind": "app",
+  "name": "Frostline",
+  "author": "Noor",
+  "tags": [
+    "journal",
+    "night mode"
+  ],
+  "version": "1.4.0",
+  "build": 10400,
+  "license": "MIT",
+  "source": "https://code.example.org/noor/frostline",
+  "language": "en",
+  "summary": "A pocket journal for long nights.",
+  "description": "Write a few lines each evening; Frostline keeps them on the SD card, one file a month.",
+  "icon": {
+    "url": "https://media.example.org/frostline/icon.jpg",
+    "width": 256,
+    "height": 256,
+    "external": true
+  },
+  "screenshots": [],
+  "requires": {
+    "text": "Atmosphère 1.7 or later",
+    "min": {
+      "atmosphere": "1.7.0"
+    }
+  },
+  "updated": "2026-10-29T08:00:00Z",
+  "package": {
+    "format": "zip",
+    "file": "/api/lantern/v1/files/f_Hb2Kd9",
+    "size": 482113,
+    "sha256": "66be54ee71174fccdd55efddbbf0bf3a8cb467b774c5a6187c3676e02d1ac9a8",
+    "manifest_sha256": "009dc459107edbdec10ad80d28f531e9080b74f3c27ffee59cc8c3d146ab5dc9",
+    "manifest": [
+      {
+        "path": "/config/org.example.frostline/settings.ini",
+        "sha256": "cde0fb0dec1400c54a0f7e7eafa73624c53e4da258bbd34b3380a0defeba95c1",
+        "size": 96
+      },
+      {
+        "path": "/switch/org.example.frostline/frostline.nro",
+        "sha256": "6ac5afa35a6f2e10eaf361888bbf78269d640f0543e6290f195c6b7331b16f39",
+        "size": 471040
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "public_key": "Lo6XSqeBrOjeAKN/TY95i+sis3qq//8JzbTIncauUa8=",
+    "value": "Z8Ql1Ohpp4lXR/XgmVtXLKHpW/Kc1cj0Ro6qtJJXZEpiOwRlLrXO1H188ClGvUhqPOjYHOCCAN+4cm+ByAdaAg=="
+  }
+}

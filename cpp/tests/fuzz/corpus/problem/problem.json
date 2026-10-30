@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "type": "https://lantern.boreale.dev/errors/account-frozen",
+  "title": "Account frozen",
+  "status": 403,
+  "code": "account_frozen",
+  "detail": "Your access is paused until Sunday."
+}
