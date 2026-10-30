@@ -15,9 +15,14 @@ struct CodeName
     std::string_view name;
 };
 
-constexpr std::array<CodeName, 13> code_names { {
+constexpr std::array<CodeName, 18> code_names { {
     { Code::bad_request, "bad_request" },
+    { Code::key_required, "key_required" },
     { Code::unauthorized, "unauthorized" },
+    { Code::signature_required, "signature_required" },
+    { Code::signature_invalid, "signature_invalid" },
+    { Code::signature_expired, "signature_expired" },
+    { Code::signature_replayed, "signature_replayed" },
     { Code::forbidden, "forbidden" },
     { Code::account_frozen, "account_frozen" },
     { Code::not_found, "not_found" },

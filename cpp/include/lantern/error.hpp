@@ -24,10 +24,11 @@ enum class Category : std::uint8_t
     limit, // beyond SPEC.md § 13's limits, or the app's own lower ones
     integrity, // a size or SHA-256 that does not match: the download is refused
     signature, // a homebrew signature that does not verify, or a changed key
-    refused, // a manifest, path or package the client must refuse (§ 8.3, § 8.6)
+    refused, // a manifest, path or package the client must refuse (§ 8.3, § 8.6), or a server key
+             // that is not the one pinned (§ 5.3)
     unsupported, // a family the server does not offer, a platform with no profile
     usage, // an argument the app gave that the protocol does not allow
-    storage, // the app's sink or key store failed
+    storage, // the app's sink, key store or credential store failed
     memory, // the memory budget the app gave is spent
 };
 
@@ -37,7 +38,12 @@ enum class Code : std::uint8_t
 {
     none,
     bad_request,
+    key_required, // 400: a pairing without a device key, on a server of bound tokens only (§ 5.4)
     unauthorized,
+    signature_required, // 401: a bound token without a signature (§ 5.4)
+    signature_invalid, // 401: a signature not of § 5.4's form, by another key, or that does not verify
+    signature_expired, // 401: `created` outside the server's window: sign again with its Date
+    signature_replayed, // 401: a nonce the server saw
     forbidden,
     account_frozen,
     not_found,

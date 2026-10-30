@@ -19,6 +19,7 @@
 #include <lantern/lantern.hpp>
 
 #include "posix_http.hpp"
+#include "posix_system.hpp"
 
 using namespace lantern;
 
@@ -30,6 +31,15 @@ std::string env(const char* name)
     const char* value = std::getenv(name);
     REQUIRE_MESSAGE(value != nullptr, "run through run_server.py: ", name, " is not set");
     return value;
+}
+
+// The key pair_for_ci.py made and bound the CI token to (its seed, base64).
+DeviceKey test_key()
+{
+    const std::string text = env("LANTERN_TEST_KEY");
+    KeySeed seed {};
+    REQUIRE(base64_decode(text, seed));
+    return DeviceKey::from_seed(seed);
 }
 
 struct Connection
@@ -467,7 +477,7 @@ TEST_CASE("homebrew: updates of what is installed")
     CHECK((*page)->items[0].build == 10400U);
 }
 
-TEST_CASE("a private server: anonymous, then with the paired device's token")
+TEST_CASE("a private server: anonymous, then with the paired device's token and key")
 {
     Connection anonymous("LANTERN_TEST_PRIVATE", "switch");
     CHECK(anonymous.client.server()->account.state == "anonymous");
@@ -490,17 +500,38 @@ TEST_CASE("a private server: anonymous, then with the paired device's token")
         CHECK(shake.error().code() == Code::unauthorized);
     }
 
+    // The token is bound to the device key pair_for_ci.py made (SPEC.md 5.4):
+    // without its key, it is refused, and the error says to pair again
+    {
+        posix::LoopbackTransport transport;
+        ClientConfig config;
+        config.origin     = anonymous.origin;
+        config.user_agent = "LanternCppTests/0.4";
+        auto client       = Client::create(transport, config);
+        REQUIRE(client);
+        REQUIRE(client->set_bearer_token(env("LANTERN_TEST_TOKEN")));
+        const auto shake = client->handshake();
+        REQUIRE_FALSE(shake);
+        CHECK(shake.error().status() == 401);
+        CHECK(shake.error().code() == Code::signature_required);
+        CHECK(shake.error().detail().find("pair again") != std::string_view::npos);
+    }
+
     posix::LoopbackTransport transport;
+    posix::SystemRandom random;
     ClientConfig config;
     config.origin     = anonymous.origin;
-    config.user_agent = "LanternCppTests/0.3";
+    config.user_agent = "LanternCppTests/0.4";
     config.platform   = "switch";
+    config.random     = &random;
     auto client       = Client::create(transport, config);
     REQUIRE(client);
-    REQUIRE(client->set_bearer_token(env("LANTERN_TEST_TOKEN")));
+    REQUIRE(client->set_credentials(env("LANTERN_TEST_TOKEN"), test_key()));
     REQUIRE(client->handshake());
     CHECK(client->server()->account.state == "active");
+    CHECK(client->server()->account.bound == true);
     CHECK(client->offers(Family::cheats) == 1);
+    CHECK(client->offers(Family::signatures) == 1);
 
     // Cheats: two sets for Frostline Tales' build, each text checked
     CheatsQuery query;

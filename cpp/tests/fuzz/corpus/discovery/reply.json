@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "lantern": "server",
+  "uid": "6f1c2a8e-4b7d-4e2a-9c31-8d5e2f0a7b14",
+  "name": "Living room shelf",
+  "port": 443,
+  "base": "/api/lantern",
+  "versions": [
+    1
+  ]
+}

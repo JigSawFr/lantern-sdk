@@ -32,6 +32,44 @@ TEST_CASE("schema: every example of the specification is read")
     ok(read_cheat_sets(spec_file("examples/v1/cheats.json")));
     ok(read_cheat_set(spec_file("examples/v1/cheat.json")));
     ok(read_problem(spec_file("examples/v1/problem.json")));
+    // Draft 0.4's
+    ok(read_pairing_code(spec_file("examples/v1/pairing-code.json")));
+    ok(read_pairing_token(spec_file("examples/v1/pairing-token.json")));
+    ok(read_upload_session(spec_file("examples/v1/upload.json")));
+    ok(read_title_requests(spec_file("examples/v1/requests.json")));
+    ok(read_title_request(spec_file("examples/v1/request.json")));
+    ok(read_admin_users(spec_file("examples/v1/admin-users.json")));
+    ok(read_admin_user(spec_file("examples/v1/admin-user.json")));
+    ok(read_admin_devices(spec_file("examples/v1/admin-devices.json")));
+    ok(read_admin_pairings(spec_file("examples/v1/admin-pairings.json")));
+    ok(read_invitations(spec_file("examples/v1/invitations.json")));
+    ok(read_invitation(spec_file("examples/v1/invitation.json")));
+}
+
+TEST_CASE("schema: draft 0.4's fields, and what its invalid examples break")
+{
+    const auto shake = read_handshake(spec_file("examples/v1/handshake.json"));
+    REQUIRE(shake);
+    REQUIRE(*shake);
+    REQUIRE((*shake)->auth);
+    CHECK((*shake)->auth->skew == 300U);
+    CHECK((*shake)->features.signatures == 1U);
+    const auto token = read_pairing_token(spec_file("examples/v1/pairing-token.json"));
+    REQUIRE(token);
+    REQUIRE(*token);
+    CHECK((*token)->bound == true);
+    const auto devices = read_admin_devices(spec_file("examples/v1/admin-devices.json"));
+    REQUIRE(devices);
+    REQUIRE(*devices);
+    REQUIRE_FALSE((*devices)->items.empty());
+    CHECK((*devices)->items[0].key.size() == 19);
+
+    CHECK_FALSE(read_pairing_code(spec_file("examples/v1/invalid/pairing-code.no-verify-complete.json")));
+    CHECK_FALSE(read_pairing_code(spec_file("examples/v1/invalid/pairing-code.long-lived.json")));
+    CHECK_FALSE(read_handshake(spec_file("examples/v1/invalid/handshake.skew-too-large.json")));
+    // A code a later version adds is read, and acted on by its status (SPEC.md 12)
+    const auto problem = read_problem(spec_file("examples/v1/invalid/problem.unknown-signature-code.json"));
+    REQUIRE(problem);
 }
 
 TEST_CASE("schema: the handshake's fields")

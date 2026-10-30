@@ -8,6 +8,8 @@
 #include <lantern/digest.hpp>
 #include <lantern/encoding.hpp>
 
+#include "client_internal.hpp"
+
 namespace lantern
 {
 
@@ -252,7 +254,10 @@ Result<void> Client::download(const DownloadTarget& target, DownloadState& state
     }
 
     DownloadHandler handler(target, state, sink, max_error_body_, allocator_);
-    const auto sent = exchange(Method::get, *url, {}, {}, handler, std::span(extra.data(), extras));
+    Call call;
+    call.url        = *url;
+    call.extra      = std::span(extra.data(), extras);
+    const auto sent = exchange(call, handler);
     if (handler.error())
     {
         if (handler.error()->category() == Category::integrity)

@@ -1,0 +1,3 @@
+lantern=("@method" "@target-uri" "authorization" "content-digest");created=1793345400;nonce="Wm9nZ2xlLWZyb3N0bGluZQ";keyid="If4x36FUomFia_hUBG_SJxt77UtqvkWqWId-9H-XIbk";alg="ed25519"
+lantern=:EhjpnOAIWX2eymFSC33YADeBtu64PWM+V8ftc5O6SIGOv2Yos91y+N1ttFbJMxwsNWIN+lh3DPtPVjPpT476Cg==:
+sha-256=:AiEqeKhcZ0pwUZhgfcD0XNrb5ZsGsXJ/3UlXI9xRjUo=:
