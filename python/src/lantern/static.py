@@ -57,7 +57,8 @@ from collections.abc import Callable, Iterable, Iterator, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TypeVar
-from urllib.parse import quote, unquote, urljoin, urlsplit
+from urllib.parse import quote, urljoin, urlsplit
+from urllib.request import url2pathname
 
 from lantern._base import SCHEMA, DocumentError, JSONObject, JSONValue, LanternError
 from lantern._generated.models import (
@@ -166,7 +167,8 @@ class StaticLibrary:
         if isinstance(root, Path) or "://" not in text:
             self.folder = Path(root)
         elif text.startswith("file://"):
-            self.folder = Path(unquote(urlsplit(text).path))
+            # url2pathname, not the bare path: file:///D:/x is D:\x on Windows, not /D:/x
+            self.folder = Path(url2pathname(urlsplit(text).path))
         else:
             if not plain_http_allowed(text):
                 raise InsecureTransport(f"{text}: plain HTTP is allowed only to a loopback address (SPEC.md § 2)")
