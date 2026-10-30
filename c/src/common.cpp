@@ -181,7 +181,7 @@ lantern_string* give_string(Resource* resource, std::string_view value)
 
 // The C API's codes, by their value: fixed, appended to, whatever order
 // the C++ library's enum takes (precondition_failed came in the middle of it)
-const std::array<std::string_view, 21> code_names { {
+constexpr std::array<std::string_view, 21> code_names { {
     "",
     "bad_request",
     "key_required",
