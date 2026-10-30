@@ -10,6 +10,10 @@
     },
     "lantern": {
       "const": "discover"
+    },
+    "peers": {
+      "type": "boolean",
+      "description": "Also ask the peers of the network (SPEC.md § 19.5)."
     }
   },
   "required": [

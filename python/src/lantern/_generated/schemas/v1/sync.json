@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/sync.json",
+  "title": "Sync",
+  "description": "GET <base>/v1/sync (SPEC.md § 20.3): what the account keeps, and the caller's device id.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "$ref": "common.json#/$defs/schema1"
+    },
+    "generation": {
+      "$ref": "common.json#/$defs/generation"
+    },
+    "device": {
+      "$ref": "common.json#/$defs/device_id"
+    },
+    "collections": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "rev": {
+            "$ref": "common.json#/$defs/uint64"
+          },
+          "items": {
+            "$ref": "common.json#/$defs/uint64"
+          }
+        },
+        "required": [
+          "rev",
+          "items"
+        ]
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "generation",
+    "collections"
+  ]
+}

@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/sync-collection.json",
+  "title": "A sync collection",
+  "description": "GET <base>/v1/sync/{collection} and the answer to PATCH (SPEC.md § 20.3, § 20.4): items, a page at a time when read.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "$ref": "common.json#/$defs/schema1"
+    },
+    "collection": {
+      "$ref": "common.json#/$defs/collection"
+    },
+    "generation": {
+      "$ref": "common.json#/$defs/generation"
+    },
+    "rev": {
+      "$ref": "common.json#/$defs/uint64"
+    },
+    "items": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "$ref": "common.json#/$defs/sync_item"
+      }
+    },
+    "next": {
+      "oneOf": [
+        {
+          "$ref": "common.json#/$defs/opaque"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "collection",
+    "generation",
+    "rev",
+    "items"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "collection": {
+            "const": "wishes"
+          }
+        },
+        "required": [
+          "collection"
+        ]
+      },
+      "then": {
+        "properties": {
+          "items": {
+            "items": {
+              "properties": {
+                "key": {
+                  "pattern": "^[a-z0-9][a-z0-9-]{0,31}/[A-Za-z0-9._-]{1,128}$"
+                },
+                "value": {
+                  "$ref": "common.json#/$defs/wish"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "collection": {
+            "const": "installed"
+          }
+        },
+        "required": [
+          "collection"
+        ]
+      },
+      "then": {
+        "properties": {
+          "items": {
+            "items": {
+              "properties": {
+                "key": {
+                  "$ref": "common.json#/$defs/device_id"
+                },
+                "value": {
+                  "$ref": "common.json#/$defs/installed"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

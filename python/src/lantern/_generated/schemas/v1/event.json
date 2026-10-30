@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/event.json",
+  "title": "An event",
+  "description": "An event of GET <base>/v1/events, as a long poll lists it (SPEC.md § 18); on the stream, its id, event and data are the fields of the same names.",
+  "$ref": "common.json#/$defs/event"
+}

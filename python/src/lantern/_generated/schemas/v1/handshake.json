@@ -128,6 +128,22 @@
         "admin": {
           "type": "integer",
           "minimum": 0
+        },
+        "events": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "peers": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sync": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "encrypted_saves": {
+          "type": "integer",
+          "minimum": 0
         }
       },
       "additionalProperties": {
@@ -155,6 +171,29 @@
           "type": "integer",
           "minimum": 1,
           "description": "Backups kept per title, platform and account (SPEC.md § 9.1)."
+        },
+        "heartbeat": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 60,
+          "description": "Seconds between two heartbeats of an event stream at most (SPEC.md § 18.4)."
+        },
+        "event_streams": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Event streams a token holds at once (SPEC.md § 18.4)."
+        },
+        "wait": {
+          "type": "integer",
+          "minimum": 30,
+          "maximum": 300,
+          "description": "The longest wait of a long poll, in seconds (SPEC.md § 18.3)."
+        },
+        "sync_items": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000,
+          "description": "Items a sync collection holds at most (SPEC.md § 20.5)."
         }
       }
     },
@@ -181,6 +220,43 @@
         "bearer_only",
         "skew"
       ]
+    },
+    "peers": {
+      "type": "object",
+      "description": "The server's grants (SPEC.md § 19.3): its grant key's public key, the same for every caller, and a grant's lifetime.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/]{43}=$"
+        },
+        "grant_lifetime": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 900
+        }
+      },
+      "required": [
+        "key",
+        "grant_lifetime"
+      ]
+    },
+    "static": {
+      "type": "object",
+      "description": "A static library's (SPEC.md § 21.2): when its files were written, and the size of its pages.",
+      "properties": {
+        "generated": {
+          "$ref": "common.json#/$defs/time"
+        },
+        "page_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        }
+      },
+      "required": [
+        "generated",
+        "page_size"
+      ]
     }
   },
   "required": [
@@ -192,5 +268,119 @@
     "platforms",
     "account",
     "features"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "features": {
+            "properties": {
+              "events": {
+                "minimum": 1
+              }
+            },
+            "required": [
+              "events"
+            ]
+          }
+        },
+        "required": [
+          "features"
+        ]
+      },
+      "then": {
+        "properties": {
+          "limits": {
+            "required": [
+              "heartbeat",
+              "event_streams",
+              "wait"
+            ]
+          }
+        },
+        "required": [
+          "limits"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "features": {
+            "properties": {
+              "peers": {
+                "minimum": 1
+              }
+            },
+            "required": [
+              "peers"
+            ]
+          }
+        },
+        "required": [
+          "features"
+        ]
+      },
+      "then": {
+        "required": [
+          "peers"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "static"
+        ]
+      },
+      "then": {
+        "properties": {
+          "account": {
+            "properties": {
+              "state": {
+                "const": "anonymous"
+              }
+            }
+          },
+          "features": {
+            "properties": {
+              "changes": {
+                "const": 0
+              },
+              "sections": {
+                "const": 0
+              },
+              "saves": {
+                "const": 0
+              },
+              "encrypted_saves": {
+                "const": 0
+              },
+              "requests": {
+                "const": 0
+              },
+              "pairing": {
+                "const": 0
+              },
+              "signatures": {
+                "const": 0
+              },
+              "admin": {
+                "const": 0
+              },
+              "events": {
+                "const": 0
+              },
+              "peers": {
+                "const": 0
+              },
+              "sync": {
+                "const": 0
+              }
+            }
+          }
+        }
+      }
+    }
   ]
 }

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://lantern.boreale.dev/schemas/v1/titles.json",
   "title": "Titles",
-  "description": "GET <base>/v1/titles?ids=… (SPEC.md § 7.2).",
+  "description": "GET <base>/v1/titles?ids=… (SPEC.md § 7.2); in a static library, a page of a platform's titles, with next (§ 21.1).",
   "type": "object",
   "properties": {
     "schema": {
@@ -20,6 +20,16 @@
       "items": {
         "$ref": "common.json#/$defs/id"
       }
+    },
+    "next": {
+      "oneOf": [
+        {
+          "$ref": "common.json#/$defs/opaque"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [
