@@ -1,0 +1,98 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 28,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "LANTERN_C_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "dev",
+      "displayName": "Development",
+      "description": "Debug, the tests; any compiler",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "Release",
+      "description": "Optimised, the tests",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "noexcept",
+      "displayName": "No exceptions, no RTTI",
+      "description": "The C++ inside built with -fno-exceptions -fno-rtti, as the consoles build it",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "LANTERN_NO_EXCEPTIONS": "ON"
+      }
+    },
+    {
+      "name": "asan",
+      "displayName": "AddressSanitizer + UndefinedBehaviorSanitizer",
+      "description": "Debug with ASan and UBSan; GCC or Clang",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=address,undefined"
+      }
+    },
+    {
+      "name": "ubsan",
+      "displayName": "UndefinedBehaviorSanitizer",
+      "description": "Debug with UBSan alone, every report fatal; GCC or Clang",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS": "-fsanitize=undefined -fno-sanitize-recover=all -fno-omit-frame-pointer",
+        "CMAKE_CXX_FLAGS": "-fsanitize=undefined -fno-sanitize-recover=all -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=undefined",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=undefined"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "dev", "configurePreset": "dev" },
+    { "name": "release", "configurePreset": "release" },
+    { "name": "noexcept", "configurePreset": "noexcept" },
+    { "name": "asan", "configurePreset": "asan" },
+    { "name": "ubsan", "configurePreset": "ubsan" }
+  ],
+  "testPresets": [
+    { "name": "dev", "configurePreset": "dev", "output": { "outputOnFailure": true } },
+    { "name": "release", "configurePreset": "release", "output": { "outputOnFailure": true } },
+    { "name": "noexcept", "configurePreset": "noexcept", "output": { "outputOnFailure": true } },
+    { "name": "asan", "configurePreset": "asan", "output": { "outputOnFailure": true } },
+    { "name": "ubsan", "configurePreset": "ubsan", "output": { "outputOnFailure": true } }
+  ],
+  "workflowPresets": [
+    {
+      "name": "dev",
+      "steps": [
+        { "type": "configure", "name": "dev" },
+        { "type": "build", "name": "dev" },
+        { "type": "test", "name": "dev" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+module CLantern [system] {
+    header "shim.h"
+    link "lantern_c"
+    export *
+}

@@ -1,0 +1,301 @@
+# The C API (c/, c/README.md): its generated accessors and ABI dump, its
+# format, its build with warnings as errors on GCC and clang (with the C++
+# library built without exceptions too), MSVC and Xcode, its tests (unit,
+# against the specification's reference server, the header as C11, C17 and
+# C++, the ABI and the shared library's exports), the sanitizers,
+# clang-tidy, the install, and its bindings' sketches: the Swift package on
+# macOS, the JNI glue with the NDK.
+name: c
+
+# What the C API is made of: its folder, the C++ library under it, the
+# specification it follows (the submodule), this workflow, and the files
+# every library of the repository shares
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "c/**"
+      - "cpp/**"
+      - "spec"
+      - ".gitmodules"
+      - "REUSE.toml"
+      - "LICENSES/**"
+      - ".github/workflows/c.yml"
+  pull_request:
+    paths:
+      - "c/**"
+      - "cpp/**"
+      - "spec"
+      - ".gitmodules"
+      - "REUSE.toml"
+      - "LICENSES/**"
+      - ".github/workflows/c.yml"
+
+# A new push to a pull request stops the run of the previous one
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  # As cpp.yml: the newest clang and GCC Ubuntu 26.04 ships
+  CLANG: 22
+  GCC: 15
+
+jobs:
+  generated:
+    name: generated accessors and ABI
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      # The accessors are those cpp/'s model of the pinned schemas gives, and
+      # the ABI is the one kept in c/abi/lantern.abi (c/README.md)
+      - name: gen_c.py --check, abi_dump.py --check
+        run: |
+          python3 c/tools/gen_c.py --check
+          python3 c/tools/abi_dump.py --check
+
+  format:
+    name: format
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    env:
+      CLANG_FORMAT_VERSION: 18.1.8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: clang-format
+        run: |
+          python3 -m venv "$RUNNER_TEMP/clang-format"
+          "$RUNNER_TEMP/clang-format/bin/pip" install -q "clang-format==$CLANG_FORMAT_VERSION"
+          # c/.clang-format; the generated accessors as they are
+          git ls-files 'c/*.c' 'c/*.h' 'c/*.cpp' 'c/*.hpp' ':!:c/src/generated/**' \
+              ':!:c/include/lantern/lantern_documents.h' \
+            | xargs "$RUNNER_TEMP/clang-format/bin/clang-format" --dry-run --Werror
+
+  linux:
+    name: linux (${{ matrix.name }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: "gcc", cc: gcc }
+          - { name: "clang", cc: clang }
+          # The C++ inside with -fno-exceptions -fno-rtti, as the consoles build it
+          - { name: "gcc, no exceptions", cc: gcc, preset: noexcept }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      # libcurl and mbedTLS for the library's transports, a JDK for the JNI glue
+      - name: Install the compilers
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends ninja-build g++-$GCC clang-$CLANG \
+            libcurl4-openssl-dev libmbedtls-dev openssl default-jdk-headless binutils
+      - name: Build
+        working-directory: c
+        run: |
+          if [ "${{ matrix.cc }}" = gcc ]; then export CC=gcc-$GCC CXX=g++-$GCC; else export CC=clang-$CLANG CXX=clang++-$CLANG; fi
+          cmake --preset "$PRESET" -DLANTERN_WERROR=ON
+          cmake --build --preset "$PRESET"
+        env:
+          PRESET: ${{ matrix.preset || 'dev' }}
+      # Unit tests (shared and static), the ABI and the exports, the
+      # README's example, then the integration tests against spec/server
+      - name: Test
+        working-directory: c
+        run: ctest --preset "$PRESET"
+        env:
+          PRESET: ${{ matrix.preset || 'dev' }}
+
+  sanitizers:
+    name: linux (${{ matrix.preset }}, ${{ matrix.cc }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { preset: asan, cc: clang }
+          - { preset: asan, cc: gcc }
+          - { preset: ubsan, cc: gcc }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Install the compilers
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends ninja-build g++-$GCC clang-$CLANG libclang-rt-$CLANG-dev \
+            libcurl4-openssl-dev libmbedtls-dev openssl binutils
+      - name: Build
+        working-directory: c
+        run: |
+          if [ "${{ matrix.cc }}" = gcc ]; then export CC=gcc-$GCC CXX=g++-$GCC; else export CC=clang-$CLANG CXX=clang++-$CLANG; fi
+          cmake --preset ${{ matrix.preset }} -DLANTERN_WERROR=ON
+          cmake --build --preset ${{ matrix.preset }}
+      - name: Test
+        working-directory: c
+        run: ctest --preset ${{ matrix.preset }}
+
+  tidy:
+    name: clang-tidy
+    runs-on: ubuntu-26.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Install clang and clang-tidy
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends ninja-build clang-$CLANG clang-tidy-$CLANG \
+            libc++-$CLANG-dev libc++abi-$CLANG-dev libcurl4-openssl-dev libmbedtls-dev
+      # c/src against libc++ and against libstdc++, with c/.clang-tidy (cpp/'s
+      # checks; it says why one more is off); the generated accessors left out
+      - name: clang-tidy
+        run: |
+          export CC=clang-$CLANG CXX=clang++-$CLANG
+          cmake -S c --preset dev -B build/libcxx -DCMAKE_CXX_FLAGS=-stdlib=libc++ \
+            -DCMAKE_EXE_LINKER_FLAGS=-stdlib=libc++ -DCMAKE_SHARED_LINKER_FLAGS=-stdlib=libc++
+          cmake -S c --preset dev -B build/libstdcxx
+          for build in build/libcxx build/libstdcxx; do
+            run-clang-tidy-$CLANG -clang-tidy-binary clang-tidy-$CLANG -config-file c/.clang-tidy -p $build -quiet \
+              'c/src/[^g].*\.cpp$'
+          done
+
+  install:
+    name: linux (install, ${{ matrix.consumer }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        consumer: [ package, subdirectory ]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Ninja
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends ninja-build
+      # An app's two ways in (c/README.md): find_package(LanternC) after an
+      # install, or add_subdirectory of the source; the shared library and
+      # the static one, from C
+      - name: Build an app with the C API
+        run: |
+          if [ "${{ matrix.consumer }}" = package ]; then
+            cmake -S c -B build/lantern -G Ninja -DCMAKE_BUILD_TYPE=Release -DLANTERN_C_BUILD_TESTS=OFF \
+              -DLANTERN_C_BUILD_EXAMPLES=OFF
+            cmake --build build/lantern
+            cmake --install build/lantern --prefix "$RUNNER_TEMP/prefix"
+          fi
+          cmake -S c/tests/consumer -B build/consumer -G Ninja -DLANTERN_CONSUMER=${{ matrix.consumer }} \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/prefix"
+          cmake --build build/consumer
+          build/consumer/lantern_c_consumer
+          build/consumer/lantern_c_consumer_static
+
+  windows:
+    name: windows (${{ matrix.compiler }})
+    runs-on: windows-2025
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { compiler: msvc, toolset: "" }
+          - { compiler: clang-cl, toolset: "-T ClangCL" }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      # Visual Studio's generator; the DLL (dllexport) and the static
+      # library, unit tests and the ABI dump (the integration tests' adapter
+      # is POSIX); no TLS adapter, as in cpp.yml
+      - name: Build
+        shell: bash
+        run: |
+          cmake -S c -B build ${{ matrix.toolset }} -DLANTERN_WERROR=ON -DLANTERN_C_BUILD_TESTS=ON \
+            -DLANTERN_CURL=OFF -DLANTERN_MBEDTLS=OFF
+          cmake --build build --config Debug
+      - name: Test
+        run: ctest --test-dir build -C Debug --output-on-failure -R "c_unit|c_abi|c_readme"
+
+  macos:
+    # macOS 27 and Xcode 27, a preview image, as cpp.yml's
+    runs-on: xcode-27
+    # Not required, as in cpp.yml and Aurore: GitHub's macOS runners
+    # sometimes leave the job without a machine. A failure is still shown,
+    # and looked at.
+    continue-on-error: true
+    timeout-minutes: 30
+    name: macos (Xcode clang, Swift)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Build
+        run: |
+          cmake -S c -B build -DCMAKE_BUILD_TYPE=Debug -DLANTERN_WERROR=ON
+          cmake --build build -j "$(sysctl -n hw.ncpu)"
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -R "c_unit|c_abi|c_readme"
+      # The Swift package of c/bindings/swift, over the library installed
+      - name: Swift
+        run: |
+          cmake -S c -B build/swift -DCMAKE_BUILD_TYPE=Release -DLANTERN_C_BUILD_TESTS=OFF -DLANTERN_C_BUILD_EXAMPLES=OFF \
+            -DLANTERN_CURL=OFF -DLANTERN_MBEDTLS=OFF
+          cmake --build build/swift -j "$(sysctl -n hw.ncpu)"
+          cmake --install build/swift --prefix "$RUNNER_TEMP/prefix"
+          swift test --package-path c/bindings/swift -Xcc -I"$RUNNER_TEMP/prefix/include" \
+            -Xlinker -L"$RUNNER_TEMP/prefix/lib" -Xlinker -rpath -Xlinker "$RUNNER_TEMP/prefix/lib"
+
+  android:
+    name: android (NDK, JNI, ${{ matrix.abi }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [ arm64-v8a, x86_64 ]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The runner's newest NDK: liblantern_c.so and the JNI glue of
+      # c/bindings/kotlin (the Kotlin side is an app's Gradle build)
+      - name: Build
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends ninja-build
+          cmake -S c/bindings/kotlin/src/main/c -B build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=${{ matrix.abi }} -DANDROID_PLATFORM=android-26 -DCMAKE_BUILD_TYPE=Release -DLANTERN_WERROR=ON
+          cmake --build build
+          test -f build/liblantern_jni.so

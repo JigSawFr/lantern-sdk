@@ -1,0 +1,8 @@
+@PACKAGE_INIT@
+
+# Lantern::c_static links the C++ library and the adapters it was built with
+include(CMakeFindDependencyMacro)
+find_dependency(Lantern @PROJECT_VERSION_MAJOR@.@PROJECT_VERSION_MINOR@)
+
+include("${CMAKE_CURRENT_LIST_DIR}/LanternCTargets.cmake")
+check_required_components(LanternC)
