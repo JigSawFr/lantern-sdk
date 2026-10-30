@@ -1,10 +1,18 @@
-"""Ed25519 signature verification (RFC 8032), for a homebrew's signature
-(SPEC.md § 8.4). It verifies only: a library never signs for an author.
+"""Ed25519 (RFC 8032): the verification of a homebrew's signature (SPEC.md
+§ 8.4) and of a signed request (§ 5.4), and the device key a client makes at
+pairing and signs its requests with (§ 5.4). A library never signs for a
+homebrew's author.
 
-With the `crypto` extra (the `cryptography` package), verification is that
-package's. Without it, a pure-Python verification is used: slow next to a C
-one (milliseconds per signature, enough for a check per package), and not
-constant-time, which it needs not be, since it handles only public data.
+Every verification first refuses what § 8.4 (L-8.4-4) refuses: a key or an R
+that does not decode, is not encoded canonically, or is one of the 8 points
+of small order, and an S of L or more. Only then is the equation checked.
+
+With the `crypto` extra (the `cryptography` package), the equation and the
+signing are that package's. Without it, pure Python is used: slow next to C
+(milliseconds per signature), and not constant-time. That is harmless for a
+verification, which handles only public data; a device key signing in pure
+Python is exposed to timing measurements on the device itself, so a client
+that can install the extra should.
 
 The pure-Python code follows the reference server's server/ed25519.py, in the
 Lantern specification's repository (JigSawFr/lantern, MIT), after RFC 8032's
@@ -14,6 +22,7 @@ own reference code (§ 5.1.7).
 from __future__ import annotations
 
 import hashlib
+import secrets
 
 P = 2**255 - 19
 L = 2**252 + 27742317777372353535851937790883648493
@@ -142,10 +151,29 @@ def verify(public: bytes, message: bytes, signature: bytes) -> bool:
     return True
 
 
+def is_public_key(public: bytes) -> bool:
+    """Whether `public` is a key a server takes at pairing (SPEC.md § 5.4, L-5.4-12): 32 bytes that decode
+    canonically to a point that is not of small order."""
+    point = _decode(public)
+    return point is not None and not _small_order(point)
+
+
+def generate_seed() -> bytes:
+    """A new secret seed of 32 random bytes: a device key (SPEC.md § 5.4)."""
+    return secrets.token_bytes(32)
+
+
 def public_key(seed: bytes) -> bytes:
-    """The public key of a 32-byte secret seed (RFC 8032 § 5.1.5): for tests and tools."""
-    a = _clamp(hashlib.sha512(seed).digest()[:32])
-    return _encode(_multiply(a, G))
+    """The public key of a 32-byte secret seed (RFC 8032 § 5.1.5)."""
+    if len(seed) != 32:
+        raise ValueError("an Ed25519 seed is 32 bytes")
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+    except ImportError:
+        a = _clamp(hashlib.sha512(seed).digest()[:32])
+        return _encode(_multiply(a, G))
+    return Ed25519PrivateKey.from_private_bytes(seed).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
 
 
 def _clamp(raw: bytes) -> int:
@@ -155,8 +183,20 @@ def _clamp(raw: bytes) -> int:
 
 
 def sign(seed: bytes, message: bytes) -> bytes:
-    """An Ed25519 signature by a 32-byte secret seed (RFC 8032 § 5.1.6), in
-    pure Python: for an author's tools and for tests, never a server's."""
+    """An Ed25519 signature by a 32-byte secret seed (RFC 8032 § 5.1.6): a
+    device's request (SPEC.md § 5.4), an author's tools, tests. Deterministic:
+    the same bytes with either backend."""
+    if len(seed) != 32:
+        raise ValueError("an Ed25519 seed is 32 bytes")
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    except ImportError:
+        return sign_pure(seed, message)
+    return Ed25519PrivateKey.from_private_bytes(seed).sign(message)
+
+
+def sign_pure(seed: bytes, message: bytes) -> bytes:
+    """sign(), in pure Python."""
     if len(seed) != 32:
         raise ValueError("an Ed25519 seed is 32 bytes")
     h = hashlib.sha512(seed).digest()
