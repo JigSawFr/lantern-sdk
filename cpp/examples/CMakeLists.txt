@@ -1,0 +1,6 @@
+add_executable(lantern_read_library read_library.cpp)
+target_link_libraries(lantern_read_library PRIVATE Lantern::lantern Lantern::posix_http)
+lantern_warnings(lantern_read_library)
+if (LANTERN_NO_EXCEPTIONS)
+    lantern_no_exceptions(lantern_read_library)
+endif ()

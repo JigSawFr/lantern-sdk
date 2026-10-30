@@ -47,8 +47,10 @@ set_target_properties(lantern_monocypher PROPERTIES
     POSITION_INDEPENDENT_CODE ON)
 
 add_library(lantern
+    src/client.cpp
     src/digest.cpp
     src/document.cpp
+    src/download.cpp
     src/ed25519.cpp
     src/encoding.cpp
     src/error.cpp
@@ -61,6 +63,7 @@ add_library(lantern
     src/profiles.cpp
     src/requires.cpp
     src/sha256.cpp
+    src/url.cpp
     $<TARGET_OBJECTS:lantern_monocypher>)
 add_library(Lantern::lantern ALIAS lantern)
 
@@ -81,6 +84,18 @@ lantern_warnings(lantern)
 if (LANTERN_NO_EXCEPTIONS)
     lantern_no_exceptions(lantern_monocypher)
     lantern_no_exceptions(lantern)
+endif ()
+
+if (LANTERN_BUILD_TESTS OR LANTERN_BUILD_EXAMPLES OR LANTERN_BUILD_FUZZERS)
+    # The blocking HTTP/1.1 client over POSIX sockets, plain HTTP on
+    # loopback only: for tests and examples, never for an app
+    if (NOT WIN32)
+        add_subdirectory(adapters/posix)
+    endif ()
+endif ()
+
+if (LANTERN_BUILD_EXAMPLES AND NOT WIN32)
+    add_subdirectory(examples)
 endif ()
 
 if (LANTERN_INSTALL)
