@@ -414,3 +414,43 @@ def test_a_paired_client() -> None:
         ServerRecord(uid="u", url="https://192.0.2.10/", token="et_lea", spki="0" * 64), user_agent="LanternTest/1.0"
     )
     assert pinned.transport.pin == "0" * 64 and pinned.core.pipeline.signer is None  # type: ignore[attr-defined]
+
+
+def test_deprecations_are_recorded(caplog: pytest.LogCaptureFixture) -> None:
+    link = '<https://lantern.boreale.dev/spec/#34-deprecation-and-sunset>; rel="deprecation"'
+    headers = {"Deprecation": "@1793318400", "Sunset": "Sun, 01 Aug 2027 00:00:00 GMT", "Link": link}
+    c, _ = client(lambda r: doc(200, signed_hello(), **headers))
+    c.handshake()
+    c.handshake()
+    assert c.core.deprecations == [
+        lantern.client.Deprecation(
+            "handshake",
+            "@1793318400",
+            "Sun, 01 Aug 2027 00:00:00 GMT",
+            "https://lantern.boreale.dev/spec/#34-deprecation-and-sunset",
+        )
+    ]
+    assert len([r for r in caplog.records if "deprecated" in r.getMessage()]) == 1
+
+
+def test_what_fits() -> None:
+    from lantern.client import what_fits
+    from lantern.models import App
+
+    def app(size: int, installed: int | None) -> App:
+        return App(
+            id=f"a_{size}",
+            platform="switch",
+            title_id="t",
+            app_id="t",
+            type="base",
+            version_code=0,
+            size=size,
+            format="nsp",
+            sha256="0" * 64,
+            file="/f",
+            installed_size=installed,
+        )
+
+    small, big, unknown = app(10, 20), app(10, 2000), app(500, None)
+    assert what_fits([small, big, unknown], 600) == ([small, unknown], [big])

@@ -4,6 +4,7 @@ pairing and signing need (DeviceSigner, Pairing, invitation links)."""
 
 from lantern.client.aio import AsyncLanternClient
 from lantern.client.auth import DeviceSigner, InvitationLink, Pairing, invitation_link
+from lantern.client.core import Deprecation, what_fits
 from lantern.client.stdlib import StdlibTransport
 from lantern.client.sync import LanternClient
 from lantern.client.transport import (
@@ -23,6 +24,7 @@ __all__ = [
     "AsyncTransport",
     "BearerToken",
     "Credentials",
+    "Deprecation",
     "DeviceSigner",
     "InvitationLink",
     "LanternClient",
@@ -33,4 +35,5 @@ __all__ = [
     "StdlibTransport",
     "Transport",
     "invitation_link",
+    "what_fits",
 ]

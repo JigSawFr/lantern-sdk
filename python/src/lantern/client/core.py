@@ -4,6 +4,7 @@ read. LanternClient (sync) and AsyncLanternClient share it."""
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -20,6 +21,7 @@ from lantern._generated.models import (
     AdminUserCreate,
     AdminUsers,
     AdminUserUpdate,
+    App,
     AppsPage,
     Changes,
     CheatSet,
@@ -69,7 +71,7 @@ from lantern.errors import (
     problem_error,
 )
 from lantern.http import JSON, PLATFORM_HEADER, Headers, media_type, origin, plain_http_allowed
-from lantern.limits import CHEAT_SET, JSON_DOCUMENT, NOTE, PROFILE, TITLES_AT_ONCE, load_json
+from lantern.limits import CHEAT_SET, JSON_DOCUMENT, NOTE, PROFILE, TITLES_AT_ONCE, load_json, printable
 from lantern.pinning import ServerRecord
 from lantern.signatures import SKEW, DeviceKey
 from lantern.vocabulary import BUILD_ID, CORE_ID, FAMILIES, HOMEBREW_ID, is_platform
@@ -80,6 +82,22 @@ USER_AGENT = f"LanternPython/{__version__}"
 #: The `schema` this library reads, per family (sent as Accept-Schema, SPEC.md § 3.2).
 KNOWN: Mapping[str, int] = dict.fromkeys(FAMILIES, SCHEMA)
 MISSING_WANTS = ("base", "update", "dlc")
+
+
+log = logging.getLogger("lantern")
+
+
+@dataclass(frozen=True)
+class Deprecation:
+    """A route or schema a server said is going away (SPEC.md § 3.4): `since`
+    (Deprecation, a Structured Fields date such as `@1793318400`), `sunset`
+    (the HTTP date after which it may stop answering), and the `link` that
+    says what replaces it."""
+
+    what: str
+    since: str
+    sunset: str | None
+    link: str | None
 
 
 @dataclass
@@ -207,6 +225,21 @@ class ClientCore:
         self.clock_offset = 0.0
         #: The fingerprint of the key of the last TLS connection, when the transport said.
         self.last_spki: str | None = None
+        #: What the server said is deprecated (SPEC.md § 3.4), once each.
+        self.deprecations: list[Deprecation] = []
+
+    def note(self, what: str, headers: Headers) -> None:
+        """Records a Deprecation (and its Sunset) where developers see it: `deprecations`, and the log
+        `lantern` (L-3.4-5)."""
+        since = headers.get("Deprecation")
+        if not since:
+            return
+        links = [p for p in (headers.get("Link") or "").split(",") if 'rel="deprecation"' in p]
+        link = links[0].split(";")[0].strip().strip("<>") if links else None
+        found = Deprecation(what, printable(since, 64), printable(headers.get("Sunset") or "", 64) or None, link)
+        if found not in self.deprecations:
+            self.deprecations.append(found)
+            log.warning("%s is deprecated since %s, sunset %s: %s", what, found.since, found.sunset, link or "")
 
     def now(self) -> float:
         """The time to sign with: this device's clock, corrected by its offset to the server's."""
@@ -325,6 +358,7 @@ class ClientCore:
 
     def finish(self, call: Call[T], status: int, headers: Headers, body: bytes) -> T:
         """The answer's document, read; the error of its status otherwise."""
+        self.note(call.what, headers)
         if status in call.statuses:
             if media_type(headers.get("Content-Type")) != JSON:
                 raise UnexpectedResponse(f"{call.what}: Content-Type {headers.get('Content-Type')!r}, not JSON", status)
@@ -760,6 +794,16 @@ def token_record(core: ClientCore, pairing: Pairing, token: PairingToken) -> Ser
     )
 
 
+def what_fits(apps: Iterable[App], free: int) -> tuple[list[App], list[App]]:
+    """The apps that fit in `free` bytes, and those that do not (SPEC.md § 6.3: the client decides): each
+    compared by its `installed_size`, or its `size` without one."""
+    fit: list[App] = []
+    too_big: list[App] = []
+    for app in apps:
+        (fit if (app.installed_size or app.size) <= free else too_big).append(app)
+    return fit, too_big
+
+
 def next_cursor(seen: set[str], page_next: str | None, what: str) -> str | None:
     """The cursor of the next page, None after the last; refuses a server that gives one twice."""
     if page_next is None:
@@ -790,9 +834,11 @@ __all__ = [
     "JSON_DOCUMENT",
     "Call",
     "ClientCore",
+    "Deprecation",
     "chunked",
     "merge_titles",
     "next_cursor",
     "retry_signature",
     "token_record",
+    "what_fits",
 ]
