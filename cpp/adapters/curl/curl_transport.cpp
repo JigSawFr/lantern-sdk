@@ -297,6 +297,10 @@ Result<void> CurlTransport::send(const Request& request, ResponseHandler& handle
         curl_easy_setopt(handle, CURLOPT_SSL_VERIFYPEER, by_ca ? 1L : 0L);
         curl_easy_setopt(handle, CURLOPT_SSL_VERIFYHOST, by_ca ? 2L : 0L);
         curl_easy_setopt(handle, CURLOPT_CERTINFO, 1L);
+        // A resumed TLS session shows no certificate (TLS 1.3 tickets, or a
+        // session ID): every new connection gets a full handshake, its key
+        // seen, and no session made under another trust is taken up
+        curl_easy_setopt(handle, CURLOPT_SSL_SESSIONID_CACHE, 0L);
         curl_easy_setopt(handle, CURLOPT_PREREQFUNCTION, on_connected);
         curl_easy_setopt(handle, CURLOPT_PREREQDATA, &transfer);
         // A connection made under another trust is not taken again

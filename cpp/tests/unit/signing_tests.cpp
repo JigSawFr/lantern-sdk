@@ -481,3 +481,23 @@ TEST_CASE("pairing codes and invitations' links")
     CHECK_FALSE(parse_invitation_link("https://shelf.example.org/pair?code=KQ4M-7TXD"));
     CHECK_FALSE(parse_invitation_link("https://shelf.example.org/pair"));
 }
+
+TEST_CASE("base64url: into a buffer, without allocating, as into a string")
+{
+    std::array<std::uint8_t, 40> bytes {};
+    for (std::size_t i = 0; i < bytes.size(); ++i)
+        bytes[i] = static_cast<std::uint8_t>(i * 37 + 11);
+    for (std::size_t size = 0; size <= bytes.size(); ++size)
+    {
+        CAPTURE(size);
+        String text;
+        base64url_encode(std::span(bytes.data(), size), text);
+        std::array<char, 64> buffer {};
+        const std::size_t written = base64url_encode(std::span(bytes.data(), size), buffer);
+        CHECK(std::string_view(buffer.data(), written) == text);
+        // Too small a buffer: nothing written
+        if (size != 0)
+            CHECK(base64url_encode(std::span(bytes.data(), size), std::span(buffer.data(), text.size() - 1))
+                == 0);
+    }
+}
