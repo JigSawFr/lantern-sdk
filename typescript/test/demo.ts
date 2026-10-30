@@ -7,7 +7,8 @@
  *     node test/demo.ts --port 8080 --key-file /tmp/demo.key
  *     python3 ../spec/conformance/run.py http://127.0.0.1:8080/ --token et_demo-… --key /tmp/demo.key
  *
- * Its accounts are the toolkit's own: mira holds every scope it serves, and
+ * It offers events (a heartbeat every 5 seconds), grants of a fixed key and
+ * sync in memory. Its accounts are the toolkit's own: mira holds every scope it serves, and
  * DEMO_TOKEN, her console's, is bound to the device key DEMO_KEY: every
  * request it carries is signed. `--key-file` writes DEMO_KEY's seed (base64)
  * where the conformance suite's `--key` reads it. It prints one JSON line
@@ -35,7 +36,9 @@ export const DEMO_TOKEN = "et_demo-0123456789abcdef0123456789abcdef";
 /** The demo device's key, made from a fixed phrase: for the demo only, never a real device's. */
 export const DEMO_SEED = new Uint8Array(createHash("sha256").update("Mira's fictional console key").digest());
 /** Every scope the demo serves: its admin's. */
-export const EVERY_SCOPE = ["library", "cheats", "admin"];
+export const EVERY_SCOPE = ["library", "cheats", "admin", "sync.read", "sync.write"];
+/** The demo's grant key (SPEC.md § 19.3), from a fixed phrase: the demo's alone. */
+export const GRANT_SEED = new Uint8Array(createHash("sha256").update("Demo shelf's fictional grant key").digest());
 const AUTHOR_SEED = new Uint8Array(createHash("sha256").update("Mira's fictional signing key").digest()); // for the demo only
 const BASE = "/api/lantern";
 
@@ -384,6 +387,10 @@ export async function makeLantern(options: Partial<LanternAppOptions> = {}): Pro
     base: BASE,
     software: ["lantern-protocol demo (TypeScript)", "0.1"],
     accounts: await demoAccounts(),
+    // Events with the shortest heartbeat (the suite waits for one), grants, and sync in memory.
+    events: { heartbeat: 5 },
+    peers: { seed: GRANT_SEED },
+    sync: true,
     ...options,
   });
 }
@@ -393,10 +400,12 @@ async function main(): Promise<void> {
     options: { port: { type: "string", default: "8080" }, "key-file": { type: "string" } },
   });
   if (values["key-file"] !== undefined) writeFileSync(values["key-file"], `${bytes.toBase64(DEMO_SEED)}\n`);
-  const served = await listen(await makeLantern(), { port: Number(values.port) });
+  const app = await makeLantern();
+  const served = await listen(app, { port: Number(values.port) });
   console.warn(`demo: ${served.url}; token ${DEMO_TOKEN}, bound to its key`);
   process.stdout.write(`${JSON.stringify({ url: served.url, token: DEMO_TOKEN })}\n`);
   const stop = (): void => {
+    app.shutdown(1);
     void served.close().then(() => process.exit(0));
   };
   process.on("SIGTERM", stop);

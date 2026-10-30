@@ -8,13 +8,16 @@
  *
  * It answers the handshake (at /.well-known/lantern and <base>/v1/), the
  * families library (apps, what is missing, files), changes (with a journal),
- * titles, homebrew and cheats (reading), and refuses the others with 404
- * (their features are 0). Who calls is decided one of two ways:
+ * titles, homebrew and cheats (reading), events (a stream and long polls,
+ * § 18), peers (grants signed by the server's own key, § 19.3) and sync
+ * (§ 20, over a SyncStore), and refuses the others with 404 (their features
+ * are 0). Who calls is decided one of two ways:
  *
  * - with `accounts` (MemoryAccounts, or one over the server's database),
  *   LanternApp issues the tokens itself: pairing (§ 5.2) with or without a
  *   device key, signed requests checked with a replay cache and a skew (§ 5.4),
- *   invitations (§ 5.5), rating caps (§ 5.6) and the administration API (§ 5.7);
+ *   invitations (§ 5.5), rating caps (§ 5.6) and the administration API (§ 5.7),
+ *   deleting accounts included;
  * - with an `authenticate` hook, the server resolves its own tokens to an
  *   Account; one with a `key` is still checked for its signature.
  *
@@ -23,19 +26,22 @@
 
 import { createHash } from "node:crypto";
 import { DocumentError, SCHEMA } from "../base.ts";
-import { fromBase64 } from "../bytes.ts";
+import { fromBase64, toBase64 } from "../bytes.ts";
 import { digestSha256 } from "../digest.ts";
 import * as ed25519 from "../ed25519.ts";
 import type { App, CheatSet, Homebrew, Rating, RatingCap, Title } from "../generated/models.ts";
 import * as models from "../generated/models.ts";
 import { effectiveKind } from "../homebrew.ts";
 import { NAME, NOTE, printable, TITLES_AT_ONCE } from "../limits.ts";
+import { missing } from "../missing.ts";
 import type { Check } from "../model.ts";
-import { profile, switchIds } from "../profiles.ts";
+import { signGrant } from "../peers.ts";
 import * as ratings from "../ratings.ts";
+import { definition } from "../schema.ts";
 import * as sig from "../signatures.ts";
 import { short } from "../spki.ts";
-import { BUILD_ID, CORE_ID, FAMILIES, HOMEBREW_ID, WORD } from "../vocabulary.ts";
+import { COLLECTIONS, syncTime, WRITE_LIMIT } from "../sync.ts";
+import { BUILD_ID, CORE_ID, FAMILIES, HOMEBREW_ID, isPlatform, SHA256_HEX, WORD } from "../vocabulary.ts";
 import {
   ACCOUNT_NAME,
   AccountError,
@@ -47,6 +53,7 @@ import {
   SCOPES,
   utc,
 } from "./accounts.ts";
+import { type Audience, EVENT_SCOPES, EventHub, type HubEvent, type LibraryChange, sseEvent } from "./events.ts";
 import { fileResponse } from "./files.ts";
 import {
   badRequest,
@@ -61,11 +68,13 @@ import {
   readDocument,
   type ServerRequest,
   type ServerResponse,
+  type StreamBody,
   unauthorized,
 } from "./http.ts";
 import type { Account, Authenticate, Library } from "./library.ts";
 import { Cursors, pageSize, Sealer, SinceTokens, type SortKey } from "./paging.ts";
 import { approvalPage, Limiter, PairingDesk, slowDown } from "./pairing.ts";
+import { MemorySyncStore, publicItem, type SentItem, type SyncStore } from "./sync.ts";
 
 /** The scope each family needs (SPEC.md § 4.2); pairing needs none. */
 const SCOPE_OF: Readonly<Record<string, string>> = {
@@ -75,6 +84,8 @@ const SCOPE_OF: Readonly<Record<string, string>> = {
   homebrew: "library",
   cheats: "cheats",
   admin: "admin",
+  peers: "library",
+  sync: "sync.read",
 };
 /** How long an invitation may live (SPEC.md § 5.5), and how many may wait at once. */
 const INVITATION_DAYS = 30;
@@ -94,7 +105,11 @@ const ROUTES: Route[] = [
   { pattern: ["apps"], methods: ["GET", "HEAD"], family: "library", handler: "hApps" },
   { pattern: ["apps", "missing"], methods: ["POST"], family: "library", handler: "hMissing" },
   { pattern: ["files", "{}"], methods: ["GET", "HEAD"], family: "library", handler: "hFile" },
-  { pattern: ["changes"], methods: ["GET", "HEAD"], family: "changes", handler: "hChanges" },
+  { pattern: ["changes"], methods: ["GET", "HEAD"], family: "changes|events", handler: "hChanges" },
+  { pattern: ["events"], methods: ["GET"], family: "events", handler: "hEvents" },
+  { pattern: ["grants", "sha256", "{}"], methods: ["GET", "HEAD"], family: "peers", handler: "hGrant" },
+  { pattern: ["sync"], methods: ["GET", "HEAD", "DELETE"], family: "sync", handler: "hSync" },
+  { pattern: ["sync", "{}"], methods: ["GET", "HEAD", "PATCH", "DELETE"], family: "sync", handler: "hSyncCollection" },
   { pattern: ["titles"], methods: ["GET", "HEAD"], family: "titles", handler: "hTitles" },
   { pattern: ["titles", "changes"], methods: ["GET", "HEAD"], family: "titles", handler: "hTitleChanges" },
   { pattern: ["titles", "{}"], methods: ["GET", "HEAD"], family: "titles", handler: "hTitle" },
@@ -106,7 +121,7 @@ const ROUTES: Route[] = [
   { pattern: ["pairing"], methods: ["POST"], family: "pairing", handler: "hPairStart" },
   { pattern: ["pairing", "{}"], methods: ["GET"], family: "pairing", handler: "hPairPoll" },
   { pattern: ["admin", "users"], methods: ["GET", "HEAD", "POST"], family: "admin", handler: "hAdminUsers" },
-  { pattern: ["admin", "users", "{}"], methods: ["PATCH"], family: "admin", handler: "hAdminUser" },
+  { pattern: ["admin", "users", "{}"], methods: ["PATCH", "DELETE"], family: "admin", handler: "hAdminUser" },
   { pattern: ["admin", "devices"], methods: ["GET", "HEAD"], family: "admin", handler: "hAdminDevices" },
   { pattern: ["admin", "devices", "{}"], methods: ["DELETE"], family: "admin", handler: "hAdminDevice" },
   { pattern: ["admin", "pairings"], methods: ["GET", "HEAD"], family: "admin", handler: "hAdminPairings" },
@@ -180,53 +195,6 @@ export function checkContentDigest(request: ServerRequest): void {
   }
 }
 
-/**
- * What a device of `platform` is missing (SPEC.md § 6.3), among `apps` (of that
- * platform): with `update`, each installed game's newest update above its
- * highest installed version; with `dlc`, its add-ons not installed; with
- * `base`, the games not installed.
- */
-export function missing(
-  apps: readonly App[],
-  platform: string,
-  installed: readonly [string, number][],
-  want: ReadonlySet<string>,
-): App[] {
-  const replaces = profile(platform)?.newerBaseReplaces ?? false;
-  const byApp = new Map(apps.map((a) => [a.app_id, a]));
-  const have = new Map<string, number>();
-  for (const [appId, version] of installed) {
-    const known = byApp.get(appId);
-    let title: string;
-    let kind: string;
-    if (known !== undefined) {
-      title = known.title_id;
-      kind = known.type;
-    } else if (platform === "switch" && appId.length === 16) {
-      try {
-        [title, kind] = switchIds(appId);
-      } catch {
-        continue;
-      }
-    } else continue; // a game this server does not know
-    if (kind === "base" || kind === "update") have.set(title, Math.max(have.get(title) ?? -1, version));
-  }
-  const ids = new Set(installed.map(([id]) => id));
-  const out = new Map<string, App>();
-  for (const [title, version] of have) {
-    const mine = apps.filter((a) => a.title_id === title);
-    const updates = replaces
-      ? mine.filter((a) => a.type === "base" && ids.has(a.app_id))
-      : mine.filter((a) => a.type === "update");
-    const newest = updates.reduce((n, a) => Math.max(n, a.version_code), -1);
-    if (want.has("update") && newest > version)
-      for (const a of updates) if (a.version_code === newest) out.set(a.id, a);
-    if (want.has("dlc")) for (const a of mine) if (a.type === "dlc" && !ids.has(a.app_id)) out.set(a.id, a);
-  }
-  if (want.has("base")) for (const a of apps) if (a.type === "base" && !have.has(a.title_id)) out.set(a.id, a);
-  return [...out.values()];
-}
-
 export interface LanternAppOptions {
   /** The server's UUID, which never changes. */
   uid: string;
@@ -266,6 +234,32 @@ export interface LanternAppOptions {
   pairPage?: (request: ServerRequest) => Promise<ServerResponse> | ServerResponse;
   /** Where a failure of the server goes (console.error by default); it answers 500 `internal`. */
   onError?: (error: unknown) => void;
+  /**
+   * Events (SPEC.md § 18), on by default: `heartbeat` (5 to 60 seconds, 15 by
+   * default), `streams` a token holds at once (2), the longest `wait` of a long
+   * poll (30 to 300, 60), `retry` (ms, 5000) and a stream's longest life
+   * (`maxSeconds`, an hour). false turns the family off.
+   */
+  events?: false | { heartbeat?: number; streams?: number; wait?: number; retry?: number; maxSeconds?: number };
+  /**
+   * Grants (SPEC.md § 19.3): the seed (32 bytes) of the server's grant key,
+   * kept with its secrets (a new key when absent, its grants then void at a
+   * restart), and a grant's lifetime (at most 900 seconds; 600). Without it,
+   * the family `peers` is off.
+   */
+  peers?: { seed?: Uint8Array; lifetime?: number };
+  /** Sync (SPEC.md § 20): where it is kept (true: MemorySyncStore), and limits.sync_items (10,000). */
+  sync?: SyncStore | true;
+  syncItems?: number;
+}
+
+/** What a stream counts, and a stream's account checked again at each wake. */
+interface Streams {
+  heartbeat: number;
+  streams: number;
+  wait: number;
+  retry: number;
+  maxSeconds: number;
 }
 
 /** Lantern's routes over a `library` (see the module's comment). */
@@ -294,9 +288,17 @@ export class LanternApp {
   readonly nonces: sig.NonceCache;
   readonly desk: PairingDesk | undefined;
   /** Pairing requests per address. */
-  readonly pairLimiter = new Limiter(10, 60);
+  readonly pairLimiter = new Limiter(30, 60);
   /** Wrong invitation codes per address. */
   readonly attempts = new Limiter(10, 600);
+  /** The journal of events, when the family `events` is on. */
+  readonly hub: EventHub | undefined;
+  readonly streams: Streams;
+  readonly syncStore: SyncStore | undefined;
+  readonly syncItems: number;
+  readonly grantLifetime: number;
+  readonly #grantKey: Promise<ed25519.KeyPair> | undefined;
+  readonly #open = new Map<string, number>();
   onError: (error: unknown) => void;
 
   constructor(library: Library, options: LanternAppOptions) {
@@ -340,6 +342,229 @@ export class LanternApp {
           )
         : undefined;
     this.onError = options.onError ?? ((e) => console.error(e));
+    const ev = options.events === false ? undefined : (options.events ?? {});
+    this.streams = {
+      heartbeat: ev?.heartbeat ?? 15,
+      streams: ev?.streams ?? 2,
+      wait: ev?.wait ?? 60,
+      retry: ev?.retry ?? 5000,
+      maxSeconds: ev?.maxSeconds ?? 3600,
+    };
+    const st = this.streams;
+    if (st.heartbeat < 5 || st.heartbeat > 60) throw new RangeError("heartbeat is 5 to 60 seconds (SPEC.md § 18.4)");
+    if (st.wait < 30 || st.wait > 300) throw new RangeError("wait is 30 to 300 seconds (SPEC.md § 18.4)");
+    if (!Number.isInteger(st.streams) || st.streams < 1) throw new RangeError("streams is 1 or more");
+    this.hub = ev !== undefined ? new EventHub() : undefined;
+    this.syncStore = options.sync === true ? new MemorySyncStore() : options.sync;
+    this.syncItems = options.syncItems ?? 10000;
+    if (this.syncItems < 1 || this.syncItems > 100000) throw new RangeError("syncItems is 1 to 100,000 (SPEC.md § 13)");
+    this.grantLifetime = options.peers?.lifetime ?? 600;
+    if (this.grantLifetime < 1 || this.grantLifetime > 900)
+      throw new RangeError("a grant lives 900 seconds at most (SPEC.md § 19.3)");
+    this.#grantKey =
+      options.peers !== undefined
+        ? options.peers.seed !== undefined
+          ? ed25519.fromSeed(options.peers.seed)
+          : ed25519.generate()
+        : undefined;
+    this.#grantKey?.catch(() => undefined);
+    if (this.hub !== undefined) library.subscribe?.((changes) => void this.libraryChanged(changes));
+  }
+
+  // Events (SPEC.md § 18).
+
+  async #position(): Promise<number> {
+    const journal = this.library.journal();
+    return journal !== undefined ? await journal.position() : 0;
+  }
+
+  /**
+   * Records an event of the server's own (a request done, a backup kept): each
+   * caller gets it when its scopes, account and platform allow (§ 18.2).
+   * Its scope is its type's (EVENT_SCOPES) unless `audience.scope` says.
+   */
+  async emit(event: string, data: Record<string, unknown>, audience: Audience = {}): Promise<void> {
+    if (this.hub === undefined) return;
+    this.hub.emit(event, data, audience, [], await this.#position());
+  }
+
+  /** What changed in the library (the event `library`): a Library with subscribe() tells it by itself. */
+  async libraryChanged(changes: readonly LibraryChange[]): Promise<void> {
+    if (this.hub === undefined || changes.length === 0) return;
+    this.hub.emit("library", {}, {}, [...changes], await this.#position());
+  }
+
+  /** The server stops: every stream gets `shutdown` and ends (§ 18.2, L-18.2-2). */
+  shutdown(retry = 30): void {
+    this.hub?.shutdown(retry);
+  }
+
+  /** A token of /v1/changes and of events: the journal's position and the event's place. */
+  #token(seq: number, position: number): string {
+    const journal = this.library.journal();
+    return this.since.sealer.seal("s", { e: journal?.epoch ?? "", n: position, h: this.hub?.epoch ?? "", v: seq });
+  }
+
+  /** The event a stream or a long poll starts after: `since`'s, or now's; 400 for one never given, 410 too old. */
+  #eventStart(since: string | undefined): number {
+    const hub = this.hub as EventHub;
+    if (since === undefined) return hub.seq;
+    let payload: unknown;
+    try {
+      payload = this.since.sealer.open("s", since);
+    } catch {
+      throw badRequest("Unknown event id: one this server never gave.");
+    }
+    const p = payload as Record<string, unknown> | null;
+    const v = typeof p === "object" && p !== null ? p["v"] : undefined;
+    if (typeof v !== "number" || !Number.isInteger(v)) throw badRequest("Unknown event id.");
+    if (p?.["h"] !== hub.epoch || v < hub.floor)
+      throw new HttpProblem(410, "gone", "This id is too old: read again, then connect without it.");
+    if (v > hub.seq) throw badRequest("Unknown event id.");
+    return v;
+  }
+
+  /** The events after `after` this caller may see (§ 18.2), each with its data for it. */
+  async #visible(
+    account: Account,
+    platform: string | undefined,
+    after: number,
+  ): Promise<[HubEvent, Record<string, unknown>][]> {
+    const hub = this.hub as EventHub;
+    const out: [HubEvent, Record<string, unknown>][] = [];
+    let hide: ((platform: string, titleId: string) => boolean) | undefined;
+    for (const e of hub.after(after)) {
+      if (e.event === "shutdown" || e.event === "ready") continue;
+      const scope = e.audience.scope ?? EVENT_SCOPES[e.event];
+      if (scope === undefined || !account.scopes.has(scope) || account.state === "frozen") continue;
+      if (e.audience.user !== undefined && e.audience.user !== account.name) continue;
+      if (platform !== undefined && e.audience.platform !== undefined && e.audience.platform !== platform) continue;
+      if (account.ratingCap !== undefined && e.audience.titleId !== undefined && e.audience.platform !== undefined) {
+        hide ??= await this.hides(account);
+        if (hide(e.audience.platform, e.audience.titleId)) continue;
+      }
+      if (e.event === "library") {
+        const families = new Set<string>();
+        const platforms = new Set<string>();
+        for (const c of e.changes) {
+          if (platform !== undefined && c.platform !== platform) continue;
+          if (account.ratingCap !== undefined) {
+            hide ??= await this.hides(account);
+            if (c.titleId !== undefined && hide(c.platform, c.titleId)) continue;
+            if (c.ratings !== undefined && ratings.hidden(c.ratings as Rating[], account.ratingCap)) continue;
+          }
+          families.add(c.family);
+          platforms.add(c.platform);
+        }
+        if (families.size === 0) continue;
+        out.push([e, { schema: SCHEMA, families: [...families].sort(), platforms: [...platforms].sort() }]);
+        continue;
+      }
+      out.push([e, e.data]);
+    }
+    return out;
+  }
+
+  /** Whether a stream's caller may still read events (§ 18.1, L-18.1-8): its token not revoked, its account not frozen nor gone. */
+  async #stillAllowed(request: ServerRequest): Promise<Account | undefined> {
+    try {
+      const account = await this.account(request);
+      this.allow(account, "events");
+      return account;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async hEvents(request: ServerRequest, account: Account): Promise<ServerResponse> {
+    const hub = this.hub as EventHub;
+    const platform = platformOf(request);
+    const since = request.query.get("since") || request.header("Last-Event-ID")?.trim() || undefined;
+    let last = this.#eventStart(since);
+    const key = request.header("Authorization")
+      ? `t:${createHash("sha256")
+          .update(request.header("Authorization") ?? "")
+          .digest("hex")}`
+      : `a:${request.remote}`;
+    const held = this.#open.get(key) ?? 0;
+    if (held >= this.streams.streams)
+      throw slowDown(
+        Math.min(this.streams.heartbeat, 5),
+        `At most ${this.streams.streams} event streams at once for a token (SPEC.md § 18.4).`,
+      );
+    this.#open.set(key, held + 1);
+    const abort = new AbortController();
+    let released = false;
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      const n = (this.#open.get(key) ?? 1) - 1;
+      if (n <= 0) this.#open.delete(key);
+      else this.#open.set(key, n);
+    };
+    const encoder = new TextEncoder();
+    const startPosition = await this.#position();
+    const app = this;
+    let caller = account;
+    async function* stream(): AsyncGenerator<Uint8Array> {
+      try {
+        yield encoder.encode(`retry: ${app.streams.retry}
+
+`);
+        const readyAt = hub.after(last - 1).find((e) => e.seq === last)?.position ?? startPosition;
+        yield encoder.encode(sseEvent(app.#token(last, readyAt), "ready", { schema: SCHEMA }));
+        const ends = Date.now() + app.streams.maxSeconds * 1000;
+        let beat = Date.now();
+        while (!abort.signal.aborted) {
+          const top = hub.seq;
+          for (const [e, data] of await app.#visible(caller, platform, last)) {
+            if (e.seq > top) break;
+            yield encoder.encode(sseEvent(app.#token(e.seq, e.position), e.event, data));
+            beat = Date.now();
+          }
+          last = top;
+          if (hub.stopping) {
+            const end = hub
+              .after(0)
+              .filter((e) => e.event === "shutdown")
+              .at(-1);
+            yield encoder.encode(
+              sseEvent(
+                app.#token(end?.seq ?? hub.seq, end?.position ?? 0),
+                "shutdown",
+                end?.data ?? { schema: SCHEMA, retry: 30 },
+              ),
+            );
+            return;
+          }
+          const still = await app.#stillAllowed(request);
+          if (still === undefined) return;
+          caller = still;
+          if (Date.now() - beat >= app.streams.heartbeat * 1000) {
+            yield encoder.encode(": heartbeat\n\n");
+            beat = Date.now();
+          }
+          if (Date.now() >= ends) return;
+          await hub.wait(Math.max(50, app.streams.heartbeat * 1000 - (Date.now() - beat)), abort.signal);
+        }
+      } finally {
+        release();
+      }
+    }
+    const headers = new Headers({
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Accel-Buffering": "no",
+      Vary: "Authorization, Lantern-Platform",
+    });
+    const body: StreamBody = {
+      stream: stream(),
+      cancel: () => {
+        abort.abort();
+        release();
+      },
+    };
+    return { status: 200, headers, body };
   }
 
   // Dispatch.
@@ -508,18 +733,37 @@ export class LanternApp {
   }
 
   offered(family: string): boolean {
+    if (family === "changes|events") return this.offered("changes") || this.offered("events");
+    if (family === "events") return this.hub !== undefined;
+    if (family === "peers") return this.#grantKey !== undefined && this.library.families.has("library");
+    if (family === "sync") return this.syncStore !== undefined;
     if (family === "pairing" || family === "signatures" || family === "admin") return this.accounts !== undefined;
     if (family === "changes") return this.library.families.has("library") && this.library.journal() !== undefined;
     return this.library.families.has(family);
   }
 
   allow(account: Account, family: string): void {
+    if (family === "changes|events") {
+      try {
+        this.allow(account, "changes");
+      } catch (e) {
+        if (!(e instanceof HttpProblem)) throw e;
+        this.allow(account, "events");
+      }
+      return;
+    }
     if (!this.offered(family)) throw notFound("This server does not offer it.");
     if (family === "pairing") return; // whoever reaches the server may ask to pair (SPEC.md § 4.2, § 5.2)
-    if (account.state === "anonymous" && (!this.public || family === "admin"))
+    if (account.state === "anonymous" && (!this.public || family === "admin" || family === "sync"))
       throw unauthorized("This server asks for a token.");
     if (account.state === "frozen")
       throw new HttpProblem(403, "account_frozen", "This account may do nothing for now.", { title: "Account frozen" });
+    if (family === "events") {
+      // Offered to whoever may read one kind of event (SPEC.md § 18.2).
+      if (![...new Set(Object.values(EVENT_SCOPES))].some((s) => account.scopes.has(s)))
+        throw new HttpProblem(403, "forbidden", "This account may read no event.");
+      return;
+    }
     const scope = SCOPE_OF[family];
     if (scope === undefined || !account.scopes.has(scope))
       throw new HttpProblem(403, "forbidden", `This account lacks the scope ${scope}.`);
@@ -529,7 +773,7 @@ export class LanternApp {
     const out: Record<string, number> = {};
     for (const family of FAMILIES) {
       try {
-        if (!(family in SCOPE_OF)) throw notFound();
+        if (!(family in SCOPE_OF) && family !== "events") throw notFound();
         this.allow(account, family);
         out[family] = SCHEMA;
       } catch (e) {
@@ -573,7 +817,17 @@ export class LanternApp {
     doc["account"] = acc;
     doc["features"] = features;
     if (features["signatures"]) doc["auth"] = { bearer_only: !this.boundOnly, skew: this.skew };
-    doc["limits"] = { page_size: this.pageLimit };
+    if (features["peers"] && this.#grantKey !== undefined) {
+      doc["peers"] = { key: toBase64((await this.#grantKey).publicKey), grant_lifetime: this.grantLifetime };
+    }
+    const limits: Record<string, number> = { page_size: this.pageLimit };
+    if (features["events"]) {
+      limits["heartbeat"] = this.streams.heartbeat;
+      limits["event_streams"] = this.streams.streams;
+      limits["wait"] = this.streams.wait;
+    }
+    if (features["sync"]) limits["sync_items"] = this.syncItems;
+    doc["limits"] = limits;
     return doc;
   }
 
@@ -702,11 +956,13 @@ export class LanternApp {
   }
 
   async hChanges(request: ServerRequest, account: Account): Promise<ServerResponse> {
-    const journal = this.library.journal();
-    if (journal === undefined) throw notFound("This server does not offer it.");
+    const wait = request.query.get("wait");
+    if (wait !== undefined) return this.#longPoll(request, account, wait);
+    this.allow(account, "changes");
+    const journal = this.library.journal() as NonNullable<ReturnType<Library["journal"]>>;
     const platform = platformOf(request);
     const current = await journal.position();
-    const token = this.since.give("s", journal.epoch, current);
+    const token = this.#token(this.hub?.seq ?? 0, current);
     const since = request.query.get("since");
     if (since === undefined) return jsonResponse(request, { schema: SCHEMA, added: [], removed: [], since: token });
     const after = this.since.position("s", since, journal.epoch, await journal.oldest(), current);
@@ -718,6 +974,213 @@ export class LanternApp {
       removed,
       since: token,
     });
+  }
+
+  /** A long poll (SPEC.md § 18.3): the events after `since` the caller may see, as soon as one comes or `wait` ran out. */
+  async #longPoll(request: ServerRequest, account: Account, wait: string): Promise<ServerResponse> {
+    this.allow(account, "events");
+    const hub = this.hub as EventHub;
+    const since = request.query.get("since");
+    if (since === undefined || !/^\d{1,9}$/.test(wait))
+      throw badRequest("wait is a whole number of seconds, from 0, with since (SPEC.md § 18.3).");
+    const platform = platformOf(request);
+    const start = this.#eventStart(since);
+    const deadline = Date.now() + Math.min(Number(wait), this.streams.wait) * 1000;
+    let found: [HubEvent, Record<string, unknown>][] = [];
+    let top = hub.seq;
+    for (;;) {
+      top = hub.seq;
+      found = (await this.#visible(account, platform, start)).filter(([e]) => e.seq <= top);
+      const left = deadline - Date.now();
+      if (found.length > 0 || left <= 0 || hub.stopping) break;
+      await hub.wait(left);
+    }
+    const doc: Record<string, unknown> = { schema: SCHEMA, added: [], removed: [] };
+    const journal = this.library.journal();
+    let position = await this.#position();
+    let changesAllowed = false;
+    try {
+      this.allow(account, "changes");
+      changesAllowed = journal !== undefined;
+    } catch (e) {
+      if (!(e instanceof HttpProblem)) throw e;
+    }
+    if (changesAllowed && journal !== undefined) {
+      const opened = this.since.sealer.open("s", since) as Record<string, unknown>;
+      const n = typeof opened["n"] === "number" ? opened["n"] : 0;
+      if (opened["e"] === journal.epoch && n >= (await journal.oldest()) && n <= position) {
+        const [added, removed] = await journal.appChanges(n, platform);
+        const hide = await this.hides(account);
+        doc["added"] = added.filter((a) => !hide(a.platform, a.title_id));
+        doc["removed"] = removed;
+      }
+    }
+    const lastFound = found.at(-1)?.[0];
+    if (lastFound !== undefined) position = lastFound.position;
+    doc["since"] = this.#token(lastFound?.seq ?? top, position);
+    doc["events"] = found.map(([e, data]) => ({ id: this.#token(e.seq, e.position), event: e.event, data }));
+    const response = jsonResponse(request, doc);
+    response.headers.set("Cache-Control", "no-store");
+    response.headers.delete("ETag");
+    return response;
+  }
+
+  // Grants (SPEC.md § 19.3).
+
+  async hGrant(request: ServerRequest, account: Account, args: string[]): Promise<ServerResponse> {
+    const sha = args[0] ?? "";
+    if (!SHA256_HEX.test(sha)) throw notFound("No such file on this server.");
+    const platform = platformOf(request);
+    const hide = await this.hides(account);
+    let size: number | undefined;
+    for (const a of await this.library.apps()) {
+      if (a.sha256 === sha && (platform === undefined || a.platform === platform) && !hide(a.platform, a.title_id)) {
+        size = a.size;
+        break;
+      }
+    }
+    if (size === undefined && this.library.families.has("homebrew")) {
+      for (const e of await this.library.homebrew(request.languages)) {
+        if ((platform !== undefined && e.platform !== platform) || ratings.hidden(e.ratings, account.ratingCap))
+          continue;
+        const p = [e.package, ...(e.packages ?? [])].find((x) => x.sha256 === sha);
+        if (p !== undefined) {
+          size = p.size;
+          break;
+        }
+      }
+    }
+    if (size === undefined) throw notFound("No such file on this server, or not for this caller.");
+    const key = await (this.#grantKey as Promise<ed25519.KeyPair>);
+    const exp = Math.trunc(Date.now() / 1000) + this.grantLifetime;
+    const grant = await signGrant(key.privateKey, this.uid, sha, size, exp);
+    const response = jsonResponse(request, {
+      schema: SCHEMA,
+      sha256: sha,
+      size,
+      grant,
+      expires: utc(new Date(exp * 1000)),
+    });
+    response.headers.set("Cache-Control", "no-store");
+    response.headers.delete("ETag");
+    return response;
+  }
+
+  // Sync (SPEC.md § 20).
+
+  #syncUser(account: Account, write: boolean): string {
+    if (write && !account.scopes.has("sync.write"))
+      throw new HttpProblem(403, "forbidden", "This account lacks the scope sync.write.");
+    if (account.name === undefined)
+      throw new HttpProblem(403, "forbidden", "Sync is kept per account: this caller has none.");
+    return account.name;
+  }
+
+  async hSync(request: ServerRequest, account: Account): Promise<ServerResponse> {
+    const store = this.syncStore as SyncStore;
+    if (request.method === "DELETE") {
+      const user = this.#syncUser(account, true);
+      await store.erase(user);
+      for (const c of COLLECTIONS) await this.emit("sync", { collection: c, rev: 0 }, { user });
+      return emptyResponse(request);
+    }
+    const user = this.#syncUser(account, false);
+    const { generation, collections } = await store.overview(user, COLLECTIONS);
+    const doc: Record<string, unknown> = { schema: SCHEMA, generation };
+    if (account.device !== undefined) doc["device"] = account.device;
+    doc["collections"] = collections;
+    const response = jsonResponse(request, doc);
+    response.headers.set("Cache-Control", "private, no-store");
+    return response;
+  }
+
+  /** An item sent, of its collection's form (SPEC.md § 20.2, § 20.4): 400 otherwise, 403 for another device's. */
+  #syncItem(collection: string, item: models.SyncItem, account: Account): SentItem {
+    if (syncTime(item.updated) === undefined)
+      throw badRequest("updated is a UTC time to the millisecond, such as 2026-10-30T09:12:03.250Z.");
+    const deleted = item.deleted === true;
+    if (deleted === "value" in item || (item.deleted !== undefined && item.deleted !== true))
+      throw badRequest("An item has a value, or deleted: true, not both.");
+    if (collection === "wishes") {
+      const slash = item.key.indexOf("/");
+      const platform = item.key.slice(0, slash);
+      const titleId = item.key.slice(slash + 1);
+      if (slash < 1 || !isPlatform(platform) || !CORE_ID.test(titleId))
+        throw badRequest("A wish's key is <platform>/<title_id>.");
+      if (!deleted) {
+        const v = item.value as Record<string, unknown>;
+        if (definition("wish", v).length > 0 || v["platform"] !== platform || v["title_id"] !== titleId)
+          throw badRequest("A wish is {platform, title_id, name?, note?}, of its key.");
+      }
+    } else {
+      if (!/^d_[A-Za-z0-9_-]{1,64}$/.test(item.key)) throw badRequest("An installed item's key is a device's id, d_….");
+      if (item.key !== account.device)
+        throw new HttpProblem(403, "forbidden", "A device writes its own item of installed only (SPEC.md § 20.4).");
+      if (!deleted && definition("installed", item.value).length > 0)
+        throw badRequest("An installed item is {device, platform, apps, homebrew}.");
+    }
+    const out: SentItem = { key: item.key, updated: item.updated };
+    if (deleted) out.deleted = true;
+    else out.value = item.value;
+    return out;
+  }
+
+  async hSyncCollection(request: ServerRequest, account: Account, args: string[]): Promise<ServerResponse> {
+    const store = this.syncStore as SyncStore;
+    const collection = args[0] ?? "";
+    if (!(COLLECTIONS as readonly string[]).includes(collection)) throw notFound("No such collection.");
+    if (request.method === "DELETE") {
+      const user = this.#syncUser(account, true);
+      await store.erase(user, collection);
+      await this.emit("sync", { collection, rev: 0 }, { user });
+      return emptyResponse(request);
+    }
+    if (request.method === "PATCH") {
+      const user = this.#syncUser(account, true);
+      const raw = readDocument(request);
+      if (Array.isArray(raw["items"]) && raw["items"].length > WRITE_LIMIT)
+        throw new HttpProblem(413, "too_large", `A write holds ${WRITE_LIMIT} items at most (SPEC.md § 13).`);
+      const doc = parse(models.readSyncWrite, raw, "A write is {schema, generation, items}");
+      if (doc.items.length === 0) throw badRequest("items lists the items written.");
+      if (new Set(doc.items.map((i) => i.key)).size !== doc.items.length) throw badRequest("Each key once in a write.");
+      const items = doc.items.map((i) => this.#syncItem(collection, i, account));
+      const options: { ifMatch?: string; now: number; skew: number; limit: number } = {
+        now: Date.now(),
+        skew: this.skew,
+        limit: this.syncItems,
+      };
+      const ifMatch = request.header("If-Match");
+      if (ifMatch !== undefined) options.ifMatch = ifMatch;
+      const before = (await store.overview(user, [collection])).collections[collection]?.rev ?? 0;
+      const kept = await store.merge(user, collection, doc.generation, items, options);
+      if (kept.rev !== before) await this.emit("sync", { collection, rev: kept.rev }, { user });
+      return jsonResponse(request, {
+        schema: SCHEMA,
+        collection,
+        generation: kept.generation,
+        rev: kept.rev,
+        items: kept.items.map(publicItem),
+      });
+    }
+    const user = this.#syncUser(account, false);
+    const sinceText = request.query.get("since");
+    if (sinceText !== undefined && !/^\d{1,15}$/.test(sinceText)) throw badRequest("since is a revision, an integer.");
+    const read = await store.read(user, collection, sinceText !== undefined ? Number(sinceText) : undefined);
+    const page = this.cursors.page(read.items, (i) => [i.rev, i.key], {
+      size: this.#size(request),
+      cursor: request.query.get("cursor"),
+      scope: this.cursors.scope("sync", user, collection, sinceText),
+    });
+    const response = jsonResponse(request, {
+      schema: SCHEMA,
+      collection,
+      generation: read.generation,
+      rev: read.rev,
+      items: page.items.map(publicItem),
+      next: page.next,
+    });
+    response.headers.set("Cache-Control", "private, no-store");
+    return response;
   }
 
   // Titles (SPEC.md § 7).
@@ -965,6 +1428,11 @@ export class LanternApp {
     if (invitation !== undefined) {
       // Approved at once, as the invitation says (SPEC.md § 5.5).
       await desk.approve(entry, invitation.user, invitation.scopes, invitation.ratingCap, invitation.id);
+    } else {
+      const data: Record<string, unknown> = { id: entry.id, code: entry.code, device: entry.device };
+      if (entry.key !== undefined) data["key"] = sig.shortFingerprint(entry.key);
+      data["expires"] = entry.expires;
+      await this.emit("pairing", data);
     }
     const verify = this.verifyUrl(request);
     const response = jsonResponse(request, {
@@ -1059,8 +1527,9 @@ export class LanternApp {
     return jsonResponse(request, { schema: SCHEMA, ...(await this.#userDoc(doc.name)) }, 201);
   }
 
-  async hAdminUser(request: ServerRequest, _account: Account, args: string[]): Promise<ServerResponse> {
+  async hAdminUser(request: ServerRequest, account: Account, args: string[]): Promise<ServerResponse> {
     const accounts = this.accounts as Accounts;
+    if (request.method === "DELETE") return this.#deleteUser(request, account, args[0] ?? "");
     const doc = parse(models.readAdminUserUpdate, readDocument(request), "A change is {schema, state?, scopes?}");
     if (doc.state === undefined && doc.scopes === undefined)
       throw badRequest("Give state (active or frozen), scopes, or both.");
@@ -1076,7 +1545,36 @@ export class LanternApp {
       if (e instanceof AccountError) throw new HttpProblem(e.status, e.code, e.detail);
       throw e;
     }
+    this.hub?.wake(); // a frozen account's streams end (SPEC.md § 18.1)
     return jsonResponse(request, { schema: SCHEMA, ...(await this.#userDoc(name)) });
+  }
+
+  /**
+   * Deletes an account (SPEC.md § 5.7): `confirm` repeats its name (400
+   * otherwise), never the caller's own (409); at once and whole, its devices,
+   * invitations and sync data with it.
+   */
+  async #deleteUser(request: ServerRequest, account: Account, name: string): Promise<ServerResponse> {
+    const accounts = this.accounts as Accounts;
+    if (request.query.get("confirm") !== name)
+      throw badRequest("confirm repeats the account's name: ?confirm=<name> (SPEC.md § 5.7).");
+    if (account.name === name) throw new HttpProblem(409, "conflict", "An account cannot delete itself.");
+    if ((await accounts.user(name)) === undefined) throw notFound("No such account.");
+    if (accounts.deleteUser === undefined)
+      throw new HttpProblem(
+        409,
+        "conflict",
+        "This server's accounts are not deleted here: remove it where it is defined.",
+      );
+    try {
+      if (!(await accounts.deleteUser(name))) throw notFound("No such account.");
+    } catch (e) {
+      if (e instanceof AccountError) throw new HttpProblem(e.status, e.code, e.detail);
+      throw e;
+    }
+    await this.syncStore?.forget(name);
+    this.hub?.wake(); // its streams end (SPEC.md § 18.1)
+    return emptyResponse(request);
   }
 
   /** A device as the administration API shows it: never its token, nor the token's hash. */
@@ -1109,6 +1607,7 @@ export class LanternApp {
 
   async hAdminDevice(request: ServerRequest, _account: Account, args: string[]): Promise<ServerResponse> {
     if (!(await (this.accounts as Accounts).revoke(args[0] ?? ""))) throw notFound("No such device.");
+    this.hub?.wake(); // its streams end (SPEC.md § 18.1)
     return emptyResponse(request);
   }
 

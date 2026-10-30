@@ -12,12 +12,19 @@ import { createReadStream } from "node:fs";
 import { chmod, type FileHandle, mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { isObject, type JSONObject, LanternError, SCHEMA } from "../base.ts";
-import { type ClientOptions, type DownloadOptions, LanternClient, type UploadOptions } from "../client/client.ts";
+import {
+  type ClientOptions,
+  type DownloadOptions,
+  LanternClient,
+  type SourceOptions,
+  type UploadOptions,
+} from "../client/client.ts";
 import type { DownloadSink, UploadSource } from "../client/download.ts";
-import { type Found, PORT, REQUEST, readReply } from "../discovery.ts";
+import { type Found, PEERS_REQUEST, PORT, REQUEST, readPeerReply, readReply } from "../discovery.ts";
 import type { App, Package, Save } from "../generated/models.ts";
 import type { FileHashes } from "../homebrew.ts";
 import { DATAGRAM, loadJson } from "../limits.ts";
+import type { Peer } from "../peers.ts";
 import { type KeyPins, readServerRecord, type ServerRecord, type ServerStore } from "../pinning.ts";
 import type { Hasher, HasherFactory } from "../sha256.ts";
 import { NodeTransport, type NodeTransportOptions } from "./transport.ts";
@@ -157,6 +164,8 @@ export class NodeLanternClient extends LanternClient {
         if (ca !== undefined) t.ca = ca;
         return new NodeTransport(t);
       },
+      // Mirrors and peers: never the server's pinned key; a peer's HTTPS is checked by the file's hash (§ 19.4).
+      elsewhere: (o) => new NodeTransport({ verify: o.verify, keepAlive: false }),
       ...rest,
     });
   }
@@ -172,12 +181,33 @@ export class NodeLanternClient extends LanternClient {
     return dest;
   }
 
-  downloadAppTo(app: App, dest: string, options: Omit<DownloadOptions, "sha256" | "size"> = {}): Promise<string> {
-    return this.downloadToFile(app.file, dest, { ...options, sha256: app.sha256, size: app.size });
+  /** An app's file to `dest`, from its peers or mirrors when asked (SPEC.md § 19), else the server; checked whole. */
+  async downloadAppTo(
+    app: App,
+    dest: string,
+    options: Omit<DownloadOptions, "sha256" | "size"> & SourceOptions = {},
+  ): Promise<string> {
+    const sink = new FileSink(dest);
+    try {
+      await this.downloadFile(app, sink, options);
+    } finally {
+      await sink.close();
+    }
+    return dest;
   }
 
-  downloadPackageTo(p: Package, dest: string, options: Omit<DownloadOptions, "sha256" | "size"> = {}): Promise<string> {
-    return this.downloadToFile(p.file, dest, { ...options, sha256: p.sha256, size: p.size });
+  async downloadPackageTo(
+    p: Package,
+    dest: string,
+    options: Omit<DownloadOptions, "sha256" | "size"> & SourceOptions = {},
+  ): Promise<string> {
+    const sink = new FileSink(dest);
+    try {
+      await this.downloadFile(p, sink, options);
+    } finally {
+      await sink.close();
+    }
+    return dest;
   }
 
   async downloadSaveTo(
@@ -355,16 +385,39 @@ export class FileKeyPins implements KeyPins {
  * a server's own address) and gathers the replies for `timeout` seconds; each
  * server once, by uid and address. A reply is a hint, never a proof.
  */
-export async function discover(
+export function discover(
   addresses: readonly string[] = ["255.255.255.255"],
   options: { port?: number; timeout?: number } = {},
 ): Promise<Found[]> {
+  return gather(addresses, REQUEST, readReply, options);
+}
+
+/**
+ * Asks the peers of the network (SPEC.md § 19.5): the datagram with
+ * `"peers": true`, and the replies of consoles that share files, each once.
+ * `server`, a server's uid, keeps those that take its grants. A client asks at
+ * most once a minute (L-19.5-2); a reply is a hint.
+ */
+export async function discoverPeers(
+  addresses: readonly string[] = ["255.255.255.255"],
+  options: { port?: number; timeout?: number; server?: string } = {},
+): Promise<Peer[]> {
+  const found = await gather(addresses, PEERS_REQUEST, readPeerReply, options);
+  return options.server === undefined ? found : found.filter((p) => p.servers.includes(options.server as string));
+}
+
+async function gather<T extends { uid: string; address: string }>(
+  addresses: readonly string[],
+  request: Uint8Array,
+  read: (data: Uint8Array, address: string) => T | undefined,
+  options: { port?: number; timeout?: number },
+): Promise<T[]> {
   const port = options.port ?? PORT;
   const socket = dgram.createSocket("udp4");
-  const found = new Map<string, Found>();
+  const found = new Map<string, T>();
   socket.on("message", (data, remote) => {
     if (data.length > DATAGRAM) return;
-    const reply = readReply(new Uint8Array(data), remote.address);
+    const reply = read(new Uint8Array(data), remote.address);
     if (reply !== undefined && !found.has(`${reply.uid} ${reply.address}`))
       found.set(`${reply.uid} ${reply.address}`, reply);
   });
@@ -379,7 +432,7 @@ export async function discover(
     socket.setBroadcast(true);
     for (const address of addresses) {
       await new Promise<void>((resolve, reject) =>
-        socket.send(REQUEST, port, address, (e) => (e ? reject(e) : resolve())),
+        socket.send(request, port, address, (e) => (e ? reject(e) : resolve())),
       );
     }
     await new Promise((r) => setTimeout(r, (options.timeout ?? 2) * 1000));
@@ -389,4 +442,6 @@ export async function discover(
   return [...found.values()];
 }
 
-export { directedBroadcast, type Found, readReply } from "../discovery.ts";
+export { directedBroadcast, type Found, readPeerReply, readReply } from "../discovery.ts";
+export { decryptSaveFile } from "./saves.ts";
+export { clientInput, FileStaticSource, libraryInput, type StaticInput, StaticWriter, writeStatic } from "./static.ts";

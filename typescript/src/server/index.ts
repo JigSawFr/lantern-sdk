@@ -3,11 +3,14 @@
  * needs to add Lantern to an existing app. LanternApp answers the routes over a
  * Library the app implements (MemoryLibrary is one) and, with an Accounts store
  * (MemoryAccounts is one), pairs devices, checks signed requests, redeems
- * invitations, applies rating caps and answers the administration API. The
+ * invitations, applies rating caps, answers the administration API (deleting
+ * accounts included), streams events, signs grants and keeps sync data;
+ * PeerServer is a console's sharing (§ 19.4). The
  * pieces it is made of (problem+json, cursors, files with ranges and digests,
  * the platform filter, the pairing desk, LAN discovery) are usable on their own.
  */
 
+export { missing } from "../missing.ts";
 export {
   ACCOUNT_NAME,
   AccountError,
@@ -27,8 +30,16 @@ export {
   utc,
 } from "./accounts.ts";
 export { type AdapterOptions, fetchHandler, listen, nodeHandler } from "./adapters.ts";
-export { checkContentDigest, LanternApp, type LanternAppOptions, missing } from "./app.ts";
+export { checkContentDigest, LanternApp, type LanternAppOptions } from "./app.ts";
 export { DiscoveryResponder, discoveryReply, isLocalAddress } from "./discovery.ts";
+export {
+  type Audience,
+  EVENT_SCOPES,
+  EventHub,
+  type HubEvent,
+  type LibraryChange,
+  sseEvent,
+} from "./events.ts";
 export { FileRef, fileResponse, parseRange } from "./files.ts";
 export {
   BODY_LIMIT,
@@ -39,6 +50,7 @@ export {
   type FileBody,
   HttpProblem,
   htmlResponse,
+  isStream,
   jsonResponse,
   notFound,
   platformOf,
@@ -46,6 +58,7 @@ export {
   readDocument,
   ServerRequest,
   type ServerResponse,
+  type StreamBody,
 } from "./http.ts";
 export {
   type Account,
@@ -61,4 +74,6 @@ export {
 } from "./library.ts";
 export { Cursors, compareKeys, type Page, pageSize, Sealer, SinceTokens, type SortKey } from "./paging.ts";
 export { approvalPage, Limiter, PairingDesk, type Pending, slowDown } from "./pairing.ts";
+export { type PeerOptions, PeerServer, peerFiles } from "./peer.ts";
+export { MemorySyncStore, publicItem, type SentItem, type StoredItem, type SyncStore } from "./sync.ts";
 export { readZip, writeZip, type ZipFile } from "./zip.ts";

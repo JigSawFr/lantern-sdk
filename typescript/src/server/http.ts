@@ -121,11 +121,28 @@ export interface FileBody {
   length: number;
 }
 
-/** A response for an adapter to send. Content-Length is always among the headers, HEAD included (whose body is empty). */
+/**
+ * A response's body written as it comes (an event stream, SPEC.md § 18.1):
+ * each chunk sent at once, never compressed; `cancel()` when the client went away.
+ */
+export interface StreamBody {
+  stream: AsyncIterable<Uint8Array>;
+  cancel(): void;
+}
+
+/**
+ * A response for an adapter to send. Content-Length is among the headers,
+ * HEAD included (whose body is empty), but for a StreamBody, which has none.
+ */
 export interface ServerResponse {
   status: number;
   headers: Headers;
-  body: Uint8Array | FileBody;
+  body: Uint8Array | FileBody | StreamBody;
+}
+
+/** Whether a body is written as it comes. */
+export function isStream(body: ServerResponse["body"]): body is StreamBody {
+  return !(body instanceof Uint8Array) && "stream" in body;
 }
 
 /** Throw it in a handler: answered as application/problem+json (SPEC.md § 12). */

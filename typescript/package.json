@@ -40,6 +40,9 @@
     },
     "./package.json": "./package.json"
   },
+  "bin": {
+    "lantern-static": "dist/node/lantern-static.js"
+  },
   "files": [
     "dist",
     "src",

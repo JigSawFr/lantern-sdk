@@ -109,6 +109,10 @@ export class Conflict extends ProblemError {
 export class Gone extends ProblemError {
   override name = "Gone";
 }
+/** 412 `precondition_failed`: a sync write whose If-Match is not the collection's (SPEC.md § 20.4): read it again. */
+export class PreconditionFailed extends ProblemError {
+  override name = "PreconditionFailed";
+}
 /** 413. */
 export class TooLarge extends ProblemError {
   override name = "TooLarge";
@@ -140,6 +144,7 @@ const BY_STATUS: Readonly<Record<number, ProblemClass>> = {
   405: BadRequest,
   409: Conflict,
   410: Gone,
+  412: PreconditionFailed,
   413: TooLarge,
   416: BadRequest,
   422: Unprocessable,
