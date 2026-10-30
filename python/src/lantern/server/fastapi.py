@@ -89,11 +89,14 @@ async def _stream(resp: ServerResponse) -> AsyncIterator[bytes]:
         resp.close()
 
 
-def include(app: FastAPI, lantern: LanternApp, *, body_limit: int = BODY_LIMIT) -> None:
-    """Serve `lantern`'s routes from `app` (left out of its OpenAPI schema)."""
+def include(app: FastAPI, lantern: LanternApp, *, body_limit: int | None = None) -> None:
+    """Serve `lantern`'s routes from `app` (left out of its OpenAPI schema). `body_limit`: the largest body
+    read, by default the app's own (`lantern.body_limit`: a request document, a cheat set, a save sent in one
+    request or a chunk)."""
+    limit = lantern.body_limit if body_limit is None else body_limit
 
     async def endpoint(request: Request) -> Response:
-        converted = await to_request(request, body_limit)
+        converted = await to_request(request, limit)
         if isinstance(converted, ServerResponse):
             return to_response(converted)
         return to_response(await run_in_threadpool(lantern.handle, converted))

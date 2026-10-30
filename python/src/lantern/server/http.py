@@ -16,7 +16,7 @@ from urllib.parse import quote, urlencode
 
 from lantern._base import SCHEMA, DocumentError, JSONObject
 from lantern.http import JSON, PLATFORM_HEADER, PROBLEM_JSON, Headers, accept_languages, media_type
-from lantern.limits import load_json
+from lantern.limits import STRING_CAPS, load_json
 from lantern.signatures import received_uri
 from lantern.vocabulary import is_platform
 
@@ -326,16 +326,19 @@ def platform_of(request: ServerRequest, *, required: bool = False) -> str | None
     return name
 
 
-def read_document(request: ServerRequest, *, limit: int = BODY_LIMIT) -> JSONObject:
+def read_document(
+    request: ServerRequest, *, limit: int = BODY_LIMIT, caps: Mapping[str, int] = STRING_CAPS
+) -> JSONObject:
     """A client's JSON document (SPEC.md § 3.2, § 12): 413 above `limit`,
-    400 when it is not JSON or has no integer `schema`, 422
-    `unsupported_schema` for a schema this server cannot read."""
+    400 when it is not JSON, beyond SPEC.md § 13 (its strings within `caps`,
+    by their key) or has no integer `schema`, 422 `unsupported_schema` for a
+    schema this server cannot read."""
     if len(request.body) > limit:
         raise ProblemError(413, "too_large", f"At most {limit} bytes here.")
     if media_type(request.header("Content-Type")) != JSON:
         raise bad_request("The body is application/json.")
     try:
-        doc = load_json(request.body, where="the body")
+        doc = load_json(request.body, caps=caps, where="the body")
     except DocumentError as e:
         raise bad_request(f"The body is not a document this server can read: {e.reason}") from None
     schema = doc.get("schema") if isinstance(doc, dict) else None

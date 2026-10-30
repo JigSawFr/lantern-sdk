@@ -61,11 +61,15 @@ def to_response(resp: ServerResponse) -> flask.Response:
     return out
 
 
-def init_app(app: flask.Flask, lantern: LanternApp, *, body_limit: int = BODY_LIMIT, endpoint: str = "lantern") -> None:
-    """Serve `lantern`'s routes from `app`."""
+def init_app(
+    app: flask.Flask, lantern: LanternApp, *, body_limit: int | None = None, endpoint: str = "lantern"
+) -> None:
+    """Serve `lantern`'s routes from `app`. `body_limit`: the largest body read, by default the app's own
+    (`lantern.body_limit`: a request document, a cheat set, a save sent in one request or a chunk)."""
+    limit = lantern.body_limit if body_limit is None else body_limit
 
     def view(rest: str = "") -> flask.Response:
-        request = to_request(flask.request, body_limit)
+        request = to_request(flask.request, limit)
         if isinstance(request, ServerResponse):
             return to_response(request)
         return to_response(lantern.handle(request))
