@@ -1,6 +1,6 @@
 {
   "name": "lantern-protocol",
-  "version": "0.1.0",
+  "version": "0.5.0",
   "description": "Client and server library for the Lantern protocol, between console homebrews and home game library servers.",
   "license": "MIT",
   "author": "JigSawFr",
@@ -20,6 +20,11 @@
     "protocol"
   ],
   "private": true,
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "registry": "https://registry.npmjs.org/"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.18"

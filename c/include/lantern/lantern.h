@@ -39,6 +39,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+/* x-release-please-start-version: release-please writes the SDK's version below (RELEASING.md) */
 
 /* Versions. LANTERN_C_API_VERSION goes up by one with each release that
  * adds to the API (functions, members appended to a struct, constants);
@@ -48,6 +49,8 @@
 #define LANTERN_C_ABI_VERSION 1
 #define LANTERN_VERSION_STRING "0.4.0"
 #define LANTERN_SPEC_DRAFT "0.4"
+
+/* x-release-please-end */
 
 /* LANTERN_API marks what the library exports, and nothing else is. A
  * program that links the static library on Windows defines

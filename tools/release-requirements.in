@@ -1,0 +1,9 @@
+# What a release builds and describes the Python package with (RELEASING.md):
+# the build frontend, the build backend python/pyproject.toml pins, and the
+# CycloneDX generator. tools/release-requirements.txt pins them and their
+# dependencies by hash; regenerate it after a change here:
+#   uv pip compile tools/release-requirements.in --universal --generate-hashes \
+#     --python-version 3.11 --exclude-newer <a date two weeks ago> -o tools/release-requirements.txt
+build==1.6.1
+hatchling==1.32.4
+cyclonedx-bom==7.5.0

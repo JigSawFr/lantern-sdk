@@ -26,6 +26,19 @@ Every server in it passes the specification's conformance suite, and every
 client passes a deliberately malicious test server, in CI, for every
 language.
 
+## Releases
+
+One version for the whole SDK, the same in every language, with notes by
+language: the C++ library and the C API as source and as CMake packages
+built for Linux x86_64, the Python package `lantern-protocol` on PyPI and
+the npm package `lantern-protocol`, all on
+[the releases page](https://github.com/JigSawFr/lantern-sdk/releases). Every
+file is built by this repository's CI from the tag, reproducibly, with its
+SBOM, and attested (SLSA build provenance, through Sigstore); the packages
+are published by trusted publishing, without any token.
+[SECURITY.md](SECURITY.md#verifying-a-release) says how to check a file,
+[RELEASING.md](RELEASING.md) how a release is made.
+
 ## Licence
 
 [MIT](LICENSES/MIT.txt). Every file says its licence
