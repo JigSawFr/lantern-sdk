@@ -83,13 +83,35 @@ def _same(a: Point, b: Point) -> bool:
     return (a[0] * b[2] - b[0] * a[2]) % P == 0 and (a[1] * b[2] - b[1] * a[2]) % P == 0
 
 
-def verify_pure(public: bytes, message: bytes, signature: bytes) -> bool:
-    """RFC 8032 § 5.1.7, in pure Python."""
+_IDENTITY: Point = (0, 1, 1, 0)
+
+
+def _small_order(point: Point) -> bool:
+    """Whether `point` is one of the eight points of small order, which a
+    forged signature can use: for them [8]P is the identity."""
+    return _same(_multiply(8, point), _IDENTITY)
+
+
+def _strict(public: bytes, signature: bytes) -> bool:
+    """The checks every verification makes first, whatever the backend: both
+    points decode, neither has a small order, and S is reduced. Without them
+    a key of small order with a crafted signature verifies on some messages
+    (and some libraries accept it outright)."""
     if len(public) != 32 or len(signature) != 64:
         return False
     a, r = _decode(public), _decode(signature[:32])
+    if a is None or r is None or _small_order(a) or _small_order(r):
+        return False
+    return int.from_bytes(signature[32:], "little") < L
+
+
+def verify_pure(public: bytes, message: bytes, signature: bytes) -> bool:
+    """RFC 8032 § 5.1.7, in pure Python, with the checks of `_strict`."""
+    if not _strict(public, signature):
+        return False
+    a, r = _decode(public), _decode(signature[:32])
     s = int.from_bytes(signature[32:], "little")
-    if a is None or r is None or s >= L:
+    if a is None or r is None:
         return False
     h = int.from_bytes(hashlib.sha512(signature[:32] + public + message).digest(), "little") % L
     return _same(_multiply(s, G), _add(r, _multiply(h, a)))
@@ -106,7 +128,7 @@ def backend() -> str:
 
 def verify(public: bytes, message: bytes, signature: bytes) -> bool:
     """Whether `signature` (64 bytes) is `public`'s (32 bytes) over `message`."""
-    if len(public) != 32 or len(signature) != 64:
+    if not _strict(public, signature):
         return False
     try:
         from cryptography.exceptions import InvalidSignature

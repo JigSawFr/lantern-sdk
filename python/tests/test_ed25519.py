@@ -68,3 +68,39 @@ def test_the_specification_example_verifies(example: Any) -> None:
     assert hb.verify_signature(entry) is True
     entry.build += 1
     assert hb.verify_signature(entry) is False
+
+
+# The eight encodings of points of small order (the identity, and the points
+# of order 2, 4 and 8, with both signs where they differ).
+SMALL_ORDER = [
+    bytes.fromhex(h)
+    for h in (
+        "0100000000000000000000000000000000000000000000000000000000000000",
+        "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000080",
+        "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+        "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85",
+        "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+        "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
+    )
+]
+
+
+@pytest.mark.parametrize("key", SMALL_ORDER)
+def test_small_order_keys_never_verify(key: bytes) -> None:
+    # A key of small order with R of small order and S = 0 satisfies the
+    # verification equation for a quarter of messages or more: whatever the
+    # backend, it must be refused for every message.
+    for r in SMALL_ORDER:
+        forged = r + bytes(32)
+        for n in range(16):
+            message = b"Frostline Tales %d" % n
+            assert not ed25519.verify(key, message, forged)
+            assert not ed25519.verify_pure(key, message, forged)
+
+
+def test_small_order_r_with_a_real_key_never_verifies() -> None:
+    key = ed25519.public_key(bytes(range(32)))
+    for r in SMALL_ORDER:
+        assert not ed25519.verify(key, b"Lea", r + bytes(32))
