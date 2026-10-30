@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 import * as zlib from "node:zlib";
 import { DocumentError, isObject, SCHEMA } from "../base.ts";
 import { acceptLanguages, JSON_TYPE, mediaType, PLATFORM_HEADER, PROBLEM_JSON } from "../http.ts";
-import { loadJson } from "../limits.ts";
+import { loadJson, STRING_CAPS } from "../limits.ts";
 import { receivedUri } from "../signatures.ts";
 import { isPlatform } from "../vocabulary.ts";
 
@@ -312,15 +312,20 @@ export function platformOf(request: ServerRequest, required = false): string | u
 
 /**
  * A client's JSON document (SPEC.md § 3.2, § 12): 413 above `limit`, 400 when it
- * is not JSON or has no integer `schema`, 422 `unsupported_schema` for a schema
+ * is not JSON, beyond § 13 (its strings by `caps`, which add to the section's
+ * own bounds) or has no integer `schema`, 422 `unsupported_schema` for a schema
  * this server cannot read.
  */
-export function readDocument(request: ServerRequest, limit: number = BODY_LIMIT): Record<string, unknown> {
+export function readDocument(
+  request: ServerRequest,
+  limit: number = BODY_LIMIT,
+  caps: Readonly<Record<string, number>> = {},
+): Record<string, unknown> {
   if (request.body.length > limit) throw new HttpProblem(413, "too_large", `At most ${limit} bytes here.`);
   if (mediaType(request.header("Content-Type")) !== JSON_TYPE) throw badRequest("The body is application/json.");
   let doc: unknown;
   try {
-    doc = loadJson(request.body, { where: "the body" });
+    doc = loadJson(request.body, { where: "the body", caps: { ...STRING_CAPS, ...caps } });
   } catch (e) {
     if (e instanceof DocumentError) throw badRequest(`The body is not a document this server can read: ${e.reason}`);
     throw e;

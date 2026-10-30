@@ -8,10 +8,13 @@
  *
  * It answers the handshake (at /.well-known/lantern and <base>/v1/), the
  * families library (apps, what is missing, files), changes (with a journal),
- * titles, homebrew and cheats (reading), events (a stream and long polls,
- * § 18), peers (grants signed by the server's own key, § 19.3) and sync
- * (§ 20, over a SyncStore), and refuses the others with 404 (their features
- * are 0). Who calls is decided one of two ways:
+ * sections, titles, homebrew, cheats (reading, and writing over a Library
+ * that writes), save backups (§ 9, over a SaveStore: in one request and
+ * resumable, encrypted ones kept as sent), requests (§ 11, over a
+ * RequestStore), events (a stream and long polls, § 18), peers (grants
+ * signed by the server's own key, § 19.3) and sync (§ 20, over a SyncStore).
+ * A family it is not given is refused with 404 (its feature is 0). Who calls
+ * is decided one of two ways:
  *
  * - with `accounts` (MemoryAccounts, or one over the server's database),
  *   LanternApp issues the tokens itself: pairing (§ 5.2) with or without a
@@ -21,21 +24,23 @@
  * - with an `authenticate` hook, the server resolves its own tokens to an
  *   Account; one with a `key` is still checked for its signature.
  *
- * The same scope as python/src/lantern/server/app.py's LanternApp.
+ * Its counterpart in Python is python/src/lantern/server/app.py's LanternApp.
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { DocumentError, SCHEMA } from "../base.ts";
 import { fromBase64, toBase64 } from "../bytes.ts";
 import { digestSha256 } from "../digest.ts";
+import * as e2e from "../e2e.ts";
 import * as ed25519 from "../ed25519.ts";
-import type { App, CheatSet, Homebrew, Rating, RatingCap, Title } from "../generated/models.ts";
+import type { App, CheatSet, Encryption, Homebrew, Rating, RatingCap, Save, Title } from "../generated/models.ts";
 import * as models from "../generated/models.ts";
 import { effectiveKind } from "../homebrew.ts";
-import { NAME, NOTE, printable, TITLES_AT_ONCE } from "../limits.ts";
+import { CHEAT_SET, NAME, NOTE, PROFILE, printable, TITLES_AT_ONCE } from "../limits.ts";
 import { missing } from "../missing.ts";
 import type { Check } from "../model.ts";
 import { signGrant } from "../peers.ts";
+import { profile, titleIdOk } from "../profiles.ts";
 import * as ratings from "../ratings.ts";
 import { definition } from "../schema.ts";
 import * as sig from "../signatures.ts";
@@ -56,6 +61,7 @@ import {
 import { type Audience, EVENT_SCOPES, EventHub, type HubEvent, type LibraryChange, sseEvent } from "./events.ts";
 import { fileResponse } from "./files.ts";
 import {
+  BODY_LIMIT,
   badRequest,
   emptyResponse,
   HttpProblem,
@@ -71,9 +77,17 @@ import {
   type StreamBody,
   unauthorized,
 } from "./http.ts";
-import type { Account, Authenticate, Library } from "./library.ts";
+import type { Account, Authenticate, CheatInit, Library } from "./library.ts";
 import { Cursors, pageSize, Sealer, SinceTokens, type SortKey } from "./paging.ts";
 import { approvalPage, Limiter, PairingDesk, slowDown } from "./pairing.ts";
+import {
+  MemoryRequestStore,
+  REQUEST_STATUSES,
+  type RequestStatus,
+  type RequestStore,
+  type StoredRequest,
+} from "./requests.ts";
+import { MemorySaveStore, type SaveFields, type SaveStore } from "./saves.ts";
 import { MemorySyncStore, publicItem, type SentItem, type SyncStore } from "./sync.ts";
 
 /** The scope each family needs (SPEC.md § 4.2); pairing needs none. */
@@ -81,8 +95,12 @@ const SCOPE_OF: Readonly<Record<string, string>> = {
   library: "library",
   titles: "library",
   changes: "library",
+  sections: "library",
   homebrew: "library",
   cheats: "cheats",
+  saves: "saves",
+  encrypted_saves: "saves",
+  requests: "requests",
   admin: "admin",
   peers: "library",
   sync: "sync.read",
@@ -91,6 +109,23 @@ const SCOPE_OF: Readonly<Record<string, string>> = {
 const INVITATION_DAYS = 30;
 const INVITATIONS_LIMIT = 1000;
 const APP_SORTS = ["name", "added", "release"];
+/** The families kept per account: never offered without a token. */
+const ACCOUNT_FAMILIES = new Set(["admin", "sync", "saves", "encrypted_saves", "requests"]);
+/** Save kinds (SPEC.md § 9.1), and a slot's form. */
+const SAVE_KINDS = ["account", "device", "bcat", "cache", "other"];
+const SLOT = /^[A-Za-z0-9._-]{1,64}$/;
+/** An upload's life, and how many an account may have open at once. */
+const UPLOAD_HOURS = 24;
+const UPLOADS_OPEN = 16;
+/** Open requests an account may have at once. */
+const REQUESTS_OPEN = 1000;
+/** A cheat set's document: its text (1 MiB at most, SPEC.md § 13), escaped in JSON. */
+export const CHEAT_BODY = 3 << 20;
+/** A cheat set's source: letters and digits, spaces and . ' ( ) -, a letter or a digit first, none last. */
+const CHEAT_SOURCE = /^[\p{L}\p{N}](?:[\p{L}\p{M}\p{N}]|[ .'()-]){0,63}(?<! )$/u;
+/** A line of Atmosphère's and Luma3DS's cheat formats (Annex A.1, A.2): a [name], a {master}, or words of 8 hex digits. */
+const CHEAT_LINE = /^\s*(?:\[[^\]]{0,255}\]|\{[^}]{0,255}\}|[0-9A-Fa-f]{8}(?:\s+[0-9A-Fa-f]{8})*)?\s*$/;
+const CHEAT_HEX = ["switch", "3ds"];
 
 type Handler = (request: ServerRequest, account: Account, args: string[]) => Promise<ServerResponse>;
 
@@ -116,8 +151,18 @@ const ROUTES: Route[] = [
   { pattern: ["homebrew"], methods: ["GET", "HEAD"], family: "homebrew", handler: "hHomebrewList" },
   { pattern: ["homebrew", "updates"], methods: ["POST"], family: "homebrew", handler: "hHomebrewUpdates" },
   { pattern: ["homebrew", "{}"], methods: ["GET", "HEAD"], family: "homebrew", handler: "hHomebrewEntry" },
+  { pattern: ["sections"], methods: ["GET", "HEAD"], family: "sections", handler: "hSections" },
   { pattern: ["cheats"], methods: ["GET", "HEAD"], family: "cheats", handler: "hCheats" },
+  { pattern: ["cheats"], methods: ["POST"], family: "cheats", handler: "hCheatPost" },
   { pattern: ["cheats", "{}"], methods: ["GET", "HEAD"], family: "cheats", handler: "hCheatText" },
+  { pattern: ["cheats", "{}"], methods: ["PUT", "DELETE"], family: "cheats", handler: "hCheatWrite" },
+  { pattern: ["saves"], methods: ["GET", "HEAD"], family: "saves", handler: "hSaves" },
+  { pattern: ["saves", "{}"], methods: ["POST"], family: "saves", handler: "hSavePost" },
+  { pattern: ["saves", "{}", "uploads"], methods: ["POST"], family: "saves", handler: "hUploadOpen" },
+  { pattern: ["saves", "{}", "{}"], methods: ["GET", "HEAD", "DELETE"], family: "saves", handler: "hSave" },
+  { pattern: ["uploads", "{}"], methods: ["HEAD", "PATCH", "DELETE"], family: "saves", handler: "hUpload" },
+  { pattern: ["requests"], methods: ["GET", "HEAD", "POST"], family: "requests", handler: "hRequests" },
+  { pattern: ["requests", "{}"], methods: ["DELETE"], family: "requests", handler: "hRequest" },
   { pattern: ["pairing"], methods: ["POST"], family: "pairing", handler: "hPairStart" },
   { pattern: ["pairing", "{}"], methods: ["GET"], family: "pairing", handler: "hPairPoll" },
   { pattern: ["admin", "users"], methods: ["GET", "HEAD", "POST"], family: "admin", handler: "hAdminUsers" },
@@ -180,6 +225,58 @@ function deviceKey(alg: string, publicKey: string): Uint8Array {
     throw badRequest("key is {alg: ed25519, public_key: the 32 bytes of an Ed25519 key, base64}.");
   }
   return raw;
+}
+
+/** Text of a header in UTF-8, percent-encoded (SPEC.md § 9.2), within `limit` bytes and without control characters. */
+function headerText(request: ServerRequest, name: string, limit: number): string | undefined {
+  const raw = request.header(name);
+  if (raw === undefined) return undefined;
+  let value: string;
+  try {
+    value = decodeURIComponent(raw.trim());
+  } catch {
+    throw badRequest(`${name} is UTF-8, percent-encoded.`);
+  }
+  if (!plain(value, limit)) throw badRequest(`${name}: ${limit} bytes at most, without control characters.`);
+  return value || undefined;
+}
+
+/** Whether `text` is within `limit` UTF-8 bytes, on one line, without control characters. */
+function plain(text: string, limit: number): boolean {
+  return printable(text, limit) === text && !text.includes("\n");
+}
+
+/** A backup's encryption (SPEC.md § 9.4): {scheme lantern-save-e2e-1, key_id}; 400 otherwise. */
+function encryptionOf(value: { scheme?: unknown; key_id?: unknown }): Encryption {
+  if (value.scheme !== e2e.SCHEME || typeof value.key_id !== "string" || !e2e.KEY_ID.test(value.key_id))
+    throw badRequest(`encryption is {scheme: ${e2e.SCHEME}, key_id: 16 lower-case hex digits} (SPEC.md § 9.4).`);
+  return { scheme: e2e.SCHEME, key_id: value.key_id };
+}
+
+/** Lantern-Save-Encryption: lantern-save-e2e-1; key_id=<16 hex> (SPEC.md § 9.4). */
+function encryptionHeader(header: string): Encryption {
+  const [scheme = "", ...params] = header.split(";");
+  let keyId: string | undefined;
+  for (const p of params) {
+    const eq = p.indexOf("=");
+    if (eq > 0 && p.slice(0, eq).trim() === "key_id") keyId = p.slice(eq + 1).trim();
+  }
+  return encryptionOf({ scheme: scheme.trim(), key_id: keyId });
+}
+
+/** The bytes a backup begins with: a zip's (in clear), or lantern-save-e2e-1's header and key id (SPEC.md § 9.4). */
+function archiveStarts(start: Uint8Array, encryption: Encryption | undefined, whole: boolean): boolean {
+  const same = (expected: Uint8Array): boolean => {
+    const n = whole ? expected.length : Math.min(expected.length, start.length);
+    return start.length >= n && expected.subarray(0, n).every((b, i) => start[i] === b);
+  };
+  if (encryption !== undefined) {
+    const expected = new Uint8Array(16);
+    expected.set(e2e.MAGIC);
+    expected.set(Buffer.from(encryption.key_id, "hex"), 8);
+    return same(expected);
+  }
+  return same(new Uint8Array([0x50, 0x4b, 3, 4])) || same(new Uint8Array([0x50, 0x4b, 5, 6]));
 }
 
 /** A body against its Content-Digest (RFC 9530): 400 when it is not one this server reads, 422 `digest_mismatch` when it does not match. */
@@ -251,6 +348,23 @@ export interface LanternAppOptions {
   /** Sync (SPEC.md § 20): where it is kept (true: MemorySyncStore), and limits.sync_items (10,000). */
   sync?: SyncStore | true;
   syncItems?: number;
+  /**
+   * Save backups (SPEC.md § 9): where they are kept (true: MemorySaveStore;
+   * FileSaveStore keeps them in a folder). Without it, the family `saves` is off.
+   */
+  saves?: SaveStore | true;
+  /** limits.save_body, the largest backup sent in one request (4 MiB). */
+  saveBody?: number;
+  /** limits.save_size, the largest backup (1 GiB). */
+  saveSize?: number;
+  /** An upload's chunk_size (1 MiB). */
+  saveChunk?: number;
+  /** limits.saves_kept_per_title (10): beyond it, the oldest backups of a title are dropped. */
+  savesKept?: number;
+  /** Encrypted backups (SPEC.md § 9.4), kept as sent: on with saves, unless false. */
+  encryptedSaves?: boolean;
+  /** Requests (SPEC.md § 11): where they are kept (true: MemoryRequestStore). Without it, the family is off. */
+  requests?: RequestStore | true;
 }
 
 /** What a stream counts, and a stream's account checked again at each wake. */
@@ -297,6 +411,13 @@ export class LanternApp {
   readonly syncStore: SyncStore | undefined;
   readonly syncItems: number;
   readonly grantLifetime: number;
+  readonly saveStore: SaveStore | undefined;
+  readonly saveBody: number;
+  readonly saveSize: number;
+  readonly saveChunk: number;
+  readonly savesKept: number;
+  readonly encryptedSaves: boolean;
+  readonly requestStore: RequestStore | undefined;
   readonly #grantKey: Promise<ed25519.KeyPair> | undefined;
   readonly #open = new Map<string, number>();
   onError: (error: unknown) => void;
@@ -368,7 +489,36 @@ export class LanternApp {
           : ed25519.generate()
         : undefined;
     this.#grantKey?.catch(() => undefined);
-    if (this.hub !== undefined) library.subscribe?.((changes) => void this.libraryChanged(changes));
+    this.saveStore = options.saves === true ? new MemorySaveStore() : options.saves;
+    this.saveSize = options.saveSize ?? 1 << 30;
+    this.saveBody = options.saveBody ?? Math.min(4 << 20, this.saveSize);
+    this.saveChunk = options.saveChunk ?? 1 << 20;
+    this.savesKept = options.savesKept ?? 10;
+    for (const [what, n] of [
+      ["saveBody", this.saveBody],
+      ["saveSize", this.saveSize],
+      ["saveChunk", this.saveChunk],
+      ["savesKept", this.savesKept],
+    ] as const) {
+      if (!Number.isSafeInteger(n) || n < 1) throw new RangeError(`${what} is a whole number from 1`);
+    }
+    if (this.saveBody > this.saveSize) throw new RangeError("saveBody is at most saveSize (SPEC.md § 9.2)");
+    this.encryptedSaves = options.encryptedSaves ?? true;
+    this.requestStore = options.requests === true ? new MemoryRequestStore() : options.requests;
+    if (this.hub !== undefined || this.requestStore !== undefined)
+      library.subscribe?.((changes) => void this.libraryChanged(changes).catch((e) => this.onError(e)));
+  }
+
+  /**
+   * The largest request body the adapters read (beyond it, 413): a request
+   * document's, a cheat set's when the library writes them, a backup's in one
+   * request and an upload's chunk when saves are on.
+   */
+  get bodyLimit(): number {
+    let limit = BODY_LIMIT;
+    if (this.library.writeCheat !== undefined) limit = Math.max(limit, CHEAT_BODY);
+    if (this.saveStore !== undefined) limit = Math.max(limit, this.saveBody, this.saveChunk);
+    return limit + 1024;
   }
 
   // Events (SPEC.md § 18).
@@ -388,10 +538,15 @@ export class LanternApp {
     this.hub.emit(event, data, audience, [], await this.#position());
   }
 
-  /** What changed in the library (the event `library`): a Library with subscribe() tells it by itself. */
+  /**
+   * What changed in the library (the event `library`): a Library with
+   * subscribe() tells it by itself. An open request whose title now has apps
+   * is done (SPEC.md § 11).
+   */
   async libraryChanged(changes: readonly LibraryChange[]): Promise<void> {
-    if (this.hub === undefined || changes.length === 0) return;
-    this.hub.emit("library", {}, {}, [...changes], await this.#position());
+    if (changes.length === 0) return;
+    if (this.hub !== undefined) this.hub.emit("library", {}, {}, [...changes], await this.#position());
+    if (this.requestStore !== undefined) await this.#settleRequests(changes);
   }
 
   /** The server stops: every stream gets `shutdown` and ends (§ 18.2, L-18.2-2). */
@@ -670,6 +825,7 @@ export class LanternApp {
     };
     if (device.key !== undefined) account.key = device.key;
     if (device.ratingCap !== undefined) account.ratingCap = device.ratingCap;
+    account.deviceName = device.device;
     return account;
   }
 
@@ -737,6 +893,10 @@ export class LanternApp {
     if (family === "events") return this.hub !== undefined;
     if (family === "peers") return this.#grantKey !== undefined && this.library.families.has("library");
     if (family === "sync") return this.syncStore !== undefined;
+    if (family === "saves") return this.saveStore !== undefined && this.saveStore.available !== false;
+    if (family === "encrypted_saves") return this.encryptedSaves && this.offered("saves");
+    if (family === "requests") return this.requestStore !== undefined;
+    if (family === "sections") return this.library.families.has("sections") && this.library.sections !== undefined;
     if (family === "pairing" || family === "signatures" || family === "admin") return this.accounts !== undefined;
     if (family === "changes") return this.library.families.has("library") && this.library.journal() !== undefined;
     return this.library.families.has(family);
@@ -754,7 +914,7 @@ export class LanternApp {
     }
     if (!this.offered(family)) throw notFound("This server does not offer it.");
     if (family === "pairing") return; // whoever reaches the server may ask to pair (SPEC.md § 4.2, § 5.2)
-    if (account.state === "anonymous" && (!this.public || family === "admin" || family === "sync"))
+    if (account.state === "anonymous" && (!this.public || ACCOUNT_FAMILIES.has(family)))
       throw unauthorized("This server asks for a token.");
     if (account.state === "frozen")
       throw new HttpProblem(403, "account_frozen", "This account may do nothing for now.", { title: "Account frozen" });
@@ -827,6 +987,11 @@ export class LanternApp {
       limits["wait"] = this.streams.wait;
     }
     if (features["sync"]) limits["sync_items"] = this.syncItems;
+    if (features["saves"]) {
+      limits["save_body"] = this.saveBody;
+      limits["save_size"] = this.saveSize;
+      limits["saves_kept_per_title"] = this.savesKept;
+    }
     doc["limits"] = limits;
     return doc;
   }
@@ -1372,6 +1537,525 @@ export class LanternApp {
     return fileResponse(request, file);
   }
 
+  /** A cheat set to write (SPEC.md § 10), checked: its place, source, note, size and format (Annex A). */
+  #cheatInit(request: ServerRequest): CheatInit {
+    const doc = parse(
+      models.readCheatWrite,
+      readDocument(request, CHEAT_BODY, { text: CHEAT_BODY }), // a set's text is 1 MiB at most (§ 13), not 4 KiB
+      "A cheat set is {schema, platform, title_id, build_id?, source?, note?, text}",
+    );
+    const platform = doc.platform;
+    if (!isPlatform(platform)) throw badRequest("platform is a platform's name (SPEC.md § 4.3).");
+    const prof = profile(platform);
+    if (prof !== undefined && prof.cheats === undefined) throw badRequest(`${platform} has no cheats (Annex A).`);
+    if (!titleIdOk(platform, doc.title_id)) throw badRequest(`title_id is not a title id of ${platform}.`);
+    const buildForm = prof?.cheats?.buildId;
+    if (buildForm !== undefined && (doc.build_id === undefined || !buildForm.test(doc.build_id)))
+      throw badRequest(`build_id is the game's build, in ${platform}'s form (Annex A).`);
+    if (doc.build_id !== undefined && !BUILD_ID.test(doc.build_id))
+      throw badRequest("build_id is 1 to 64 letters, digits, '.', '_' and '-'.");
+    const source = doc.source ?? "Lantern";
+    if (!CHEAT_SOURCE.test(source))
+      throw badRequest("source is 1 to 64 letters, digits, spaces and . ' ( ) -, a letter or a digit first.");
+    if (doc.note !== undefined && !plain(doc.note, NOTE))
+      throw badRequest("note: 120 bytes at most, without control characters.");
+    if (Buffer.byteLength(doc.text) > CHEAT_SET)
+      throw new HttpProblem(413, "too_large", `A cheat set is ${CHEAT_SET} bytes at most (SPEC.md § 13).`);
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it finds
+    if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(doc.text))
+      throw badRequest("text has a control character.");
+    if (CHEAT_HEX.includes(platform)) {
+      const lines = doc.text.split(/\r\n|\r|\n/);
+      const bad = lines.findIndex((line) => !CHEAT_LINE.test(line));
+      if (bad >= 0) throw badRequest(`line ${bad + 1} is neither a [name] nor words of 8 hex digits (Annex A).`);
+    }
+    const init: CheatInit = { platform, title_id: doc.title_id, source, text: doc.text, updated: utc() };
+    if (doc.build_id !== undefined) init.build_id = doc.build_id;
+    if (doc.note !== undefined) init.note = doc.note;
+    return init;
+  }
+
+  /** The library's writes (405 without them, SPEC.md § 10), for a caller with cheats.write (403 otherwise). */
+  #cheatWriter(account: Account): Required<Pick<Library, "writeCheat" | "deleteCheat">> {
+    const { writeCheat, deleteCheat } = this.library;
+    if (writeCheat === undefined || deleteCheat === undefined) throw methodNotAllowed(["GET", "HEAD"]);
+    if (!account.scopes.has("cheats.write"))
+      throw new HttpProblem(403, "forbidden", "This account lacks the scope cheats.write.");
+    return { writeCheat: writeCheat.bind(this.library), deleteCheat: deleteCheat.bind(this.library) };
+  }
+
+  static sameCheat(c: CheatSet, init: CheatInit): boolean {
+    return (
+      c.platform === init.platform &&
+      c.title_id === init.title_id &&
+      (c.build_id ?? "") === (init.build_id ?? "") &&
+      fold(c.source) === fold(init.source)
+    );
+  }
+
+  /** A library that does not tell its changes itself gets them told (the event `library`, SPEC.md § 18.2). */
+  async #cheatsChanged(...sets: CheatSet[]): Promise<void> {
+    if (this.library.subscribe !== undefined) return;
+    await this.libraryChanged(sets.map((c) => ({ family: "cheats", platform: c.platform, titleId: c.title_id })));
+  }
+
+  async hCheatPost(request: ServerRequest, account: Account): Promise<ServerResponse> {
+    const writer = this.#cheatWriter(account);
+    const init = this.#cheatInit(request);
+    const hide = await this.hides(account);
+    if (hide(init.platform, init.title_id))
+      throw new HttpProblem(403, "forbidden", "This device's rating cap does not let it write that title's cheats.");
+    if ((await this.library.cheats()).some((c) => LanternApp.sameCheat(c, init)))
+      throw new HttpProblem(
+        409,
+        "conflict",
+        "A set of that platform, title, build and source exists: PUT replaces it.",
+      );
+    const cheat = await writer.writeCheat(init);
+    await this.#cheatsChanged(cheat);
+    return jsonResponse(request, { schema: SCHEMA, ...cheat }, 201);
+  }
+
+  async hCheatWrite(request: ServerRequest, account: Account, args: string[]): Promise<ServerResponse> {
+    const writer = this.#cheatWriter(account);
+    const id = args[0] ?? "";
+    const platform = platformOf(request);
+    const hide = await this.hides(account);
+    const sets = await this.library.cheats();
+    const set = sets.find(
+      (c) => c.id === id && (platform === undefined || c.platform === platform) && !hide(c.platform, c.title_id),
+    );
+    if (set === undefined) throw notFound("No such cheat set.");
+    if (request.method === "DELETE") {
+      if (!(await writer.deleteCheat(id))) throw notFound("No such cheat set.");
+      await this.#cheatsChanged(set);
+      return emptyResponse(request);
+    }
+    const init = this.#cheatInit(request);
+    if (hide(init.platform, init.title_id))
+      throw new HttpProblem(403, "forbidden", "This device's rating cap does not let it write that title's cheats.");
+    if (sets.some((c) => c.id !== id && LanternApp.sameCheat(c, init)))
+      throw new HttpProblem(409, "conflict", "Another set has that platform, title, build and source.");
+    const cheat = await writer.writeCheat(init, id);
+    await this.#cheatsChanged(set, cheat);
+    return emptyResponse(request);
+  }
+
+  // Sections (SPEC.md § 6.5).
+
+  async hSections(request: ServerRequest, account: Account): Promise<ServerResponse> {
+    const platform = platformOf(request);
+    const hide = await this.hides(account);
+    const apps = new Map((await this.library.apps()).map((a) => [a.id, a]));
+    const sections: Record<string, unknown>[] = [];
+    for (const section of (await this.library.sections?.(request.languages)) ?? []) {
+      // Only the apps the caller sees, of its platform: a shelf left empty by that is left out.
+      const ids = section.apps.filter((id) => {
+        const a = apps.get(id);
+        return a !== undefined && (platform === undefined || a.platform === platform) && !hide(a.platform, a.title_id);
+      });
+      if (ids.length === 0 && section.apps.length > 0) continue;
+      sections.push({ id: section.id, title: section.title, apps: ids });
+    }
+    return jsonResponse(request, { schema: SCHEMA, sections });
+  }
+
+  // Save backups (SPEC.md § 9).
+
+  /** The account a backup or request is kept for: 403 for a caller without one. */
+  static owner(account: Account): string {
+    if (account.name === undefined)
+      throw new HttpProblem(403, "forbidden", "This is kept per account: this caller has none.");
+    return account.name;
+  }
+
+  get #saves(): SaveStore {
+    return this.saveStore as SaveStore;
+  }
+
+  /** A backup's platform (one is needed, SPEC.md § 9.1) and title id, of that platform's form. */
+  static saveTarget(request: ServerRequest, titleId: string): string {
+    const platform = platformOf(request, true) as string;
+    if (!titleIdOk(platform, titleId)) throw badRequest(`${titleId.slice(0, 128)} is not a title id of ${platform}.`);
+    return platform;
+  }
+
+  /** What a backup is sent with, checked (SPEC.md § 9.1, § 9.4, § 13). */
+  #saveFields(
+    account: Account,
+    platform: string,
+    titleId: string,
+    given: {
+      kind?: string | undefined;
+      slot?: string | undefined;
+      version?: number | undefined;
+      profile?: string | undefined;
+      note?: string | undefined;
+      encryption?: Encryption | undefined;
+    },
+  ): SaveFields {
+    const kinds = profile(platform)?.saveKinds ?? [];
+    if (
+      given.kind !== undefined &&
+      (!SAVE_KINDS.includes(given.kind) || (kinds.length > 0 && !kinds.includes(given.kind)))
+    )
+      throw badRequest(
+        `kind is one of ${(kinds.length > 0 ? kinds : SAVE_KINDS).join(", ")} (SPEC.md § 9.1, Annex A).`,
+      );
+    if (given.slot !== undefined && !SLOT.test(given.slot))
+      throw badRequest("slot is 1 to 64 letters, digits, '.', '_' and '-'.");
+    if (given.version !== undefined && (!Number.isSafeInteger(given.version) || given.version < 0))
+      throw badRequest("game_version_code is a whole number from 0.");
+    if (given.profile !== undefined && !plain(given.profile, PROFILE))
+      throw badRequest("profile: 64 bytes at most, without control characters.");
+    if (given.note !== undefined && !plain(given.note, NOTE))
+      throw badRequest("note: 120 bytes at most, without control characters.");
+    if (given.encryption !== undefined && !this.offered("encrypted_saves"))
+      throw badRequest("This server keeps no encrypted backup (SPEC.md § 9.4).");
+    const fields: SaveFields = { platform, title_id: titleId };
+    if (given.slot) fields.slot = given.slot;
+    if (given.kind !== undefined) fields.kind = given.kind;
+    if (given.version !== undefined) fields.game_version_code = given.version;
+    if (given.profile) fields.profile = given.profile;
+    if (given.note) fields.note = given.note;
+    if (account.deviceName !== undefined) fields.device = account.deviceName;
+    if (given.encryption !== undefined) fields.encryption = given.encryption;
+    return fields;
+  }
+
+  /** A new backup's entry (SPEC.md § 9.1), its fields in the order the specification gives them. */
+  static saveEntry(fields: SaveFields, size: number, sha256: string): Save {
+    const { platform, title_id, ...rest } = fields;
+    const save: Save = {
+      platform,
+      title_id,
+      save_id: `s_${randomBytes(12).toString("base64url")}`,
+      created: utc(),
+      size,
+      sha256,
+    };
+    for (const k of ["slot", "kind", "game_version_code", "profile", "note", "device", "encryption"] as const) {
+      if (rest[k] !== undefined) (save as unknown as Record<string, unknown>)[k] = rest[k];
+    }
+    return save;
+  }
+
+  /** A backup kept: the oldest of its title beyond limits.saves_kept_per_title dropped, and its event (§ 18.2). */
+  async #saved(user: string, save: Save): Promise<void> {
+    const same = (await this.#saves.saves(user)).filter(
+      (s) => s.platform === save.platform && s.title_id === save.title_id,
+    );
+    for (const old of same.slice(0, Math.max(0, same.length - this.savesKept)))
+      await this.#saves.delete(user, old.save_id);
+    const data: Record<string, unknown> = {
+      platform: save.platform,
+      title_id: save.title_id,
+      save_id: save.save_id,
+      created: save.created,
+    };
+    if (save.device !== undefined) data["device"] = save.device;
+    await this.emit("save", data, { user, platform: save.platform });
+  }
+
+  async hSaves(request: ServerRequest, account: Account): Promise<ServerResponse> {
+    const user = LanternApp.owner(account);
+    const platform = platformOf(request);
+    const titleId = request.query.get("title_id");
+    if (titleId !== undefined && !CORE_ID.test(titleId))
+      throw badRequest("title_id is 1 to 128 letters, digits, '.', '_' and '-'.");
+    const all = await this.#saves.saves(user);
+    const order = new Map(all.map((s, i) => [s, i]));
+    const saves = all
+      .filter(
+        (s) => (platform === undefined || s.platform === platform) && (titleId === undefined || s.title_id === titleId),
+      )
+      .sort((a, b) => {
+        const ka = `${a.platform}\u0000${a.title_id}`;
+        const kb = `${b.platform}\u0000${b.title_id}`;
+        if (ka !== kb) return ka < kb ? -1 : 1;
+        // Newest first per title (SPEC.md § 9.1, L-9.1-1).
+        if (a.created !== b.created) return a.created < b.created ? 1 : -1;
+        return (order.get(b) ?? 0) - (order.get(a) ?? 0);
+      });
+    const response = jsonResponse(request, { schema: SCHEMA, saves });
+    response.headers.set("Cache-Control", "private, no-cache");
+    return response;
+  }
+
+  async hSavePost(request: ServerRequest, account: Account, args: string[]): Promise<ServerResponse> {
+    const user = LanternApp.owner(account);
+    const titleId = args[0] ?? "";
+    const platform = LanternApp.saveTarget(request, titleId);
+    if (request.body.length > this.saveBody)
+      throw new HttpProblem(
+        413,
+        "too_large",
+        `A backup in one request is ${this.saveBody} bytes at most: upload it (§ 9.3).`,
+      );
+    if (request.header("Content-Digest") === undefined)
+      throw badRequest("Content-Digest: sha-256=:<base64>: is required (SPEC.md § 9.2).");
+    const version = request.header("Lantern-Game-Version")?.trim();
+    if (version !== undefined && !/^\d{1,15}$/.test(version)) throw badRequest("Lantern-Game-Version is an integer.");
+    const encryption = request.header("Lantern-Save-Encryption");
+    const fields = this.#saveFields(account, platform, titleId, {
+      kind: request.header("Lantern-Save-Kind")?.trim(),
+      slot: request.header("Lantern-Save-Slot")?.trim(),
+      version: version !== undefined ? Number(version) : undefined,
+      profile: headerText(request, "Lantern-Profile", PROFILE),
+      note: headerText(request, "Lantern-Note", NOTE),
+      encryption: encryption !== undefined ? encryptionHeader(encryption) : undefined,
+    });
+    checkContentDigest(request);
+    if (!archiveStarts(request.body, fields.encryption, true)) {
+      throw badRequest(
+        fields.encryption !== undefined
+          ? "An encrypted backup begins with LTNE2E01 and its key id (SPEC.md § 9.4)."
+          : "A backup is a zip archive (SPEC.md § 9.1).",
+      );
+    }
+    const save = LanternApp.saveEntry(
+      fields,
+      request.body.length,
+      createHash("sha256").update(request.body).digest("hex"),
+    );
+    await this.#saves.add(user, save, request.body);
+    await this.#saved(user, save);
+    return jsonResponse(request, { schema: SCHEMA, ...save }, 201);
+  }
+
+  async hUploadOpen(request: ServerRequest, account: Account, args: string[]): Promise<ServerResponse> {
+    const user = LanternApp.owner(account);
+    const doc = parse(models.readUploadRequest, readDocument(request), "An upload is {schema, size, sha256, …}");
+    const titleId = args[0] ?? "";
+    const platform = LanternApp.saveTarget(request, titleId);
+    if (!Number.isSafeInteger(doc.size) || doc.size < 1 || !SHA256_HEX.test(doc.sha256))
+      throw badRequest("size is a whole number from 1, and sha256 a lower-case hex SHA-256.");
+    if (doc.size > this.saveSize)
+      throw new HttpProblem(413, "too_large", `A backup is ${this.saveSize} bytes at most here (limits.save_size).`);
+    const fields = this.#saveFields(account, platform, titleId, {
+      kind: doc.kind,
+      slot: doc.slot,
+      version: doc.game_version_code,
+      profile: doc.profile,
+      note: doc.note,
+      encryption: doc.encryption !== undefined ? encryptionOf(doc.encryption) : undefined,
+    });
+    if ((await this.#saves.uploads(user)).length >= UPLOADS_OPEN)
+      throw slowDown(3600, `At most ${UPLOADS_OPEN} uploads open at once: finish or abandon one.`);
+    const id = `u_${randomBytes(18).toString("base64url")}`;
+    const expires = utc(new Date(Date.now() + UPLOAD_HOURS * 3600000));
+    await this.#saves.open({ id, user, fields, size: doc.size, sha256: doc.sha256, offset: 0, expires });
+    const upload = `${this.base}/v1/uploads/${id}`;
+    const response = jsonResponse(
+      request,
+      { schema: SCHEMA, upload, chunk_size: this.saveChunk, offset: 0, expires },
+      201,
+    );
+    response.headers.set("Location", upload);
+    response.headers.set("Cache-Control", "no-store");
+    return response;
+  }
+
+  async hUpload(request: ServerRequest, account: Account, args: string[]): Promise<ServerResponse> {
+    const user = LanternApp.owner(account);
+    const id = args[0] ?? "";
+    const store = this.#saves;
+    const upload = await store.upload(id);
+    // Only the account that opened an upload sees it (SPEC.md § 9.3).
+    if (upload === undefined || upload.user !== user)
+      throw notFound("No such upload: it finished, expired or was abandoned.");
+    if (!(Date.parse(upload.expires) > Date.now())) {
+      await store.abandon(id);
+      throw new HttpProblem(410, "gone", "This upload expired: open another.");
+    }
+    const answer = (status: number, offset: number): ServerResponse => {
+      const response = emptyResponse(request, status);
+      response.headers.set("Upload-Offset", String(offset));
+      response.headers.set("Cache-Control", "no-store");
+      return response;
+    };
+    if (request.method === "HEAD") {
+      const response = answer(204, upload.offset);
+      response.headers.set("Upload-Length", String(upload.size));
+      return response;
+    }
+    if (request.method === "DELETE") {
+      await store.abandon(id);
+      return emptyResponse(request);
+    }
+    if (
+      (request.header("Content-Type") ?? "").split(";")[0]?.trim().toLowerCase() !== "application/offset+octet-stream"
+    )
+      throw badRequest("A chunk is application/offset+octet-stream (SPEC.md § 9.3).");
+    const offsetText = request.header("Upload-Offset")?.trim() ?? "";
+    if (!/^\d{1,15}$/.test(offsetText)) throw badRequest("Upload-Offset is the chunk's offset, an integer.");
+    const chunk = request.body;
+    if (chunk.length > this.saveChunk)
+      throw new HttpProblem(413, "too_large", `A chunk is ${this.saveChunk} bytes at most (chunk_size).`);
+    if (Number(offsetText) !== upload.offset) {
+      throw new HttpProblem(409, "conflict", `This upload is at ${upload.offset}.`, {
+        headers: { "Upload-Offset": String(upload.offset) },
+      });
+    }
+    checkContentDigest(request); // a chunk that does not match its digest is not kept (422)
+    if (upload.offset + chunk.length > upload.size)
+      throw badRequest(`This chunk goes past the upload's size, ${upload.size} bytes.`);
+    if (upload.offset === 0 && !archiveStarts(chunk, upload.fields.encryption, false)) {
+      await store.abandon(id);
+      throw badRequest(
+        upload.fields.encryption !== undefined
+          ? "An encrypted backup begins with LTNE2E01 and its key id (SPEC.md § 9.4); the upload was abandoned."
+          : "A backup is a zip archive (SPEC.md § 9.1); the upload was abandoned.",
+      );
+    }
+    const at = chunk.length > 0 ? await store.append(id, chunk) : upload.offset;
+    if (at < upload.size) return answer(204, at);
+    // The chunk that reaches the size ends the upload: the whole archive's SHA-256, checked (L-9.3-4).
+    const save = LanternApp.saveEntry(upload.fields, upload.size, upload.sha256);
+    if (!(await store.finish(id, save))) {
+      throw new HttpProblem(
+        422,
+        "digest_mismatch",
+        "The backup's SHA-256 is not the one announced: it was discarded.",
+        {
+          title: "Digest mismatch",
+        },
+      );
+    }
+    await this.#saved(user, save);
+    const response = jsonResponse(request, { schema: SCHEMA, ...save }, 201);
+    response.headers.set("Upload-Offset", String(at));
+    return response;
+  }
+
+  async hSave(request: ServerRequest, account: Account, args: string[]): Promise<ServerResponse> {
+    const user = LanternApp.owner(account);
+    const [titleId = "", saveId = ""] = args;
+    const platform = platformOf(request);
+    const save = (await this.#saves.saves(user)).find(
+      (s) => s.save_id === saveId && s.title_id === titleId && (platform === undefined || s.platform === platform),
+    );
+    if (save === undefined) throw notFound("No such backup.");
+    if (request.method === "DELETE") {
+      await this.#saves.delete(user, saveId);
+      return emptyResponse(request);
+    }
+    const file = await this.#saves.file(user, saveId);
+    if (file === undefined) throw notFound("No such backup.");
+    return fileResponse(request, file);
+  }
+
+  // Requests (SPEC.md § 11).
+
+  get #requests(): RequestStore {
+    return this.requestStore as RequestStore;
+  }
+
+  /** A request as listed: its title's name when the library has it and the caller sees it (§ 5.6). */
+  async #requestDocs(account: Account, requests: readonly StoredRequest[]): Promise<Record<string, unknown>[]> {
+    const names = new Map<string, string>();
+    if (this.library.families.has("titles"))
+      for (const t of await this.library.titles([])) names.set(`${t.platform}/${t.title_id}`, t.name);
+    for (const a of await this.library.apps())
+      if (a.type === "base" && a.name !== undefined && !names.has(`${a.platform}/${a.title_id}`))
+        names.set(`${a.platform}/${a.title_id}`, a.name);
+    const hide = await this.hides(account);
+    return requests.map((r) => {
+      const doc: Record<string, unknown> = { id: r.id, platform: r.platform, title_id: r.title_id };
+      const name = names.get(`${r.platform}/${r.title_id}`);
+      if (name !== undefined && !hide(r.platform, r.title_id)) doc["name"] = name;
+      doc["status"] = r.status;
+      doc["created"] = r.created;
+      return doc;
+    });
+  }
+
+  /** The event `request` (SPEC.md § 18.2): to the account's devices, of the request's platform. */
+  async #requestEvent(r: StoredRequest, deleted = false): Promise<void> {
+    const data: Record<string, unknown> = { id: r.id, platform: r.platform, title_id: r.title_id };
+    if (deleted) data["deleted"] = true;
+    else data["status"] = r.status;
+    await this.emit("request", data, { user: r.user, platform: r.platform });
+  }
+
+  async hRequests(request: ServerRequest, account: Account): Promise<ServerResponse> {
+    const user = LanternApp.owner(account);
+    if (request.method !== "POST") {
+      const platform = platformOf(request);
+      const mine = (await this.#requests.requests(user))
+        .filter((r) => platform === undefined || r.platform === platform)
+        .reverse()
+        .sort((a, b) => (a.created === b.created ? 0 : a.created < b.created ? 1 : -1));
+      return jsonResponse(request, { schema: SCHEMA, requests: await this.#requestDocs(account, mine) });
+    }
+    const doc = parse(models.readRequestCreate, readDocument(request), "A request is {schema, platform?, title_id}");
+    const platform = doc.platform ?? (platformOf(request, true) as string);
+    if (!isPlatform(platform)) throw badRequest("platform is a platform's name (SPEC.md § 4.3).");
+    if (!titleIdOk(platform, doc.title_id)) throw badRequest(`title_id is not a title id of ${platform}.`);
+    const mine = await this.#requests.requests(user);
+    const open = mine.filter((r) => r.status === "open");
+    const same = open.find((r) => r.platform === platform && r.title_id === doc.title_id);
+    if (same !== undefined) {
+      const [existing] = await this.#requestDocs(account, [same]);
+      return jsonResponse(request, { schema: SCHEMA, ...existing });
+    }
+    if (open.length >= REQUESTS_OPEN) throw slowDown(3600, `At most ${REQUESTS_OPEN} open requests per account.`);
+    const made: StoredRequest = {
+      id: `r_${randomBytes(9).toString("base64url")}`,
+      user,
+      platform,
+      title_id: doc.title_id,
+      status: "open",
+      created: utc(),
+    };
+    await this.#requests.add(made);
+    await this.#requestEvent(made);
+    const [created] = await this.#requestDocs(account, [made]);
+    return jsonResponse(request, { schema: SCHEMA, ...created }, 201);
+  }
+
+  async hRequest(request: ServerRequest, account: Account, args: string[]): Promise<ServerResponse> {
+    const user = LanternApp.owner(account);
+    const id = args[0] ?? "";
+    // Another account's request answers as an unknown one (SPEC.md § 11, L-11-2).
+    const mine = (await this.#requests.requests(user)).find((r) => r.id === id);
+    if (mine === undefined || (await this.#requests.remove(id)) === undefined)
+      throw notFound("No such request of this account.");
+    await this.#requestEvent(mine, true);
+    return emptyResponse(request);
+  }
+
+  /**
+   * A request's status, as the server decides (SPEC.md § 11): `done` when the
+   * title came, `declined`, or `open` again. Its account's devices get the
+   * event `request`. False when there is no such request.
+   */
+  async setRequestStatus(id: string, status: RequestStatus): Promise<boolean> {
+    if (this.requestStore === undefined) throw new TypeError("this server keeps no requests");
+    if (!REQUEST_STATUSES.includes(status)) throw new RangeError(`status is ${REQUEST_STATUSES.join(", ")}`);
+    const before = (await this.requestStore.requests()).find((r) => r.id === id);
+    if (before === undefined) return false;
+    if (before.status === status) return true;
+    const after = await this.requestStore.setStatus(id, status);
+    if (after === undefined) return false;
+    await this.#requestEvent(after);
+    return true;
+  }
+
+  /** Open requests whose title now has apps in the library are done (SPEC.md § 11). */
+  async #settleRequests(changes: readonly LibraryChange[]): Promise<void> {
+    const touched = new Set(
+      changes.filter((c) => c.family === "apps" && c.titleId !== undefined).map((c) => `${c.platform}/${c.titleId}`),
+    );
+    if (touched.size === 0) return;
+    const open = (await this.#requests.requests()).filter(
+      (r) => r.status === "open" && touched.has(`${r.platform}/${r.title_id}`),
+    );
+    if (open.length === 0) return;
+    const present = new Set((await this.library.apps()).map((a) => `${a.platform}/${a.title_id}`));
+    for (const r of open) if (present.has(`${r.platform}/${r.title_id}`)) await this.setRequestStatus(r.id, "done");
+  }
+
   // Pairing (SPEC.md § 5.2, § 5.4, § 5.5).
 
   verifyUrl(request: ServerRequest): string {
@@ -1572,7 +2256,10 @@ export class LanternApp {
       if (e instanceof AccountError) throw new HttpProblem(e.status, e.code, e.detail);
       throw e;
     }
+    // Its save backups, uploads, requests and sync data with it (SPEC.md § 5.7, L-5.7-7).
     await this.syncStore?.forget(name);
+    await this.saveStore?.forget(name);
+    await this.requestStore?.forget(name);
     this.hub?.wake(); // its streams end (SPEC.md § 18.1)
     return emptyResponse(request);
   }

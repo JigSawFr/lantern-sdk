@@ -17,7 +17,7 @@ import type { AddressInfo } from "node:net";
 import { Readable } from "node:stream";
 import type { TLSSocket } from "node:tls";
 import type { LanternApp } from "./app.ts";
-import { BODY_LIMIT, HttpProblem, isStream, problemResponse, ServerRequest, type ServerResponse } from "./http.ts";
+import { HttpProblem, isStream, problemResponse, ServerRequest, type ServerResponse } from "./http.ts";
 
 export interface AdapterOptions {
   /** The largest body read; above it the request is answered 413 (its body read and dropped). */
@@ -31,7 +31,7 @@ export function nodeHandler(
   app: LanternApp,
   options: AdapterOptions & { fallback?: (req: http.IncomingMessage, res: http.ServerResponse) => void } = {},
 ): (req: http.IncomingMessage, res: http.ServerResponse) => void {
-  const limit = options.bodyLimit ?? BODY_LIMIT + 1024;
+  const limit = options.bodyLimit ?? app.bodyLimit;
   return (req, res) => {
     const target = req.url ?? "/";
     const path = target.split("?")[0] ?? "/";
@@ -149,7 +149,7 @@ export function fetchHandler(
   app: LanternApp,
   options: AdapterOptions & { remote?: (request: Request) => string | undefined } = {},
 ): (request: Request) => Promise<Response> {
-  const limit = options.bodyLimit ?? BODY_LIMIT + 1024;
+  const limit = options.bodyLimit ?? app.bodyLimit;
   return async (request) => {
     const url = new URL(request.url);
     const target = url.pathname + url.search;

@@ -28,7 +28,7 @@ export interface Audience {
 
 /** What changed in a library, for the event `library` (§ 18.2): a family, a platform, the title or ratings it reads by. */
 export interface LibraryChange {
-  family: "apps" | "titles" | "homebrew" | "cheats";
+  family: "apps" | "titles" | "sections" | "homebrew" | "cheats";
   platform: string;
   /** The title a rating cap reads it by (apps, titles, cheat sets). */
   titleId?: string;
