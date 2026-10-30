@@ -7,6 +7,11 @@ target_include_directories(lantern_doctest SYSTEM INTERFACE ${PROJECT_SOURCE_DIR
 # The real <ostream> rather than doctest's own declarations, which Microsoft's
 # standard library does not accept when a std::string_view is printed.
 target_compile_definitions(lantern_doctest INTERFACE DOCTEST_CONFIG_USE_STD_HEADERS)
+# doctest names its test cases with __COUNTER__, which recent clang reports as
+# a C2y extension; an older clang does not know the warning, hence the first
+# flag.
+target_compile_options(lantern_doctest INTERFACE
+    $<$<CXX_COMPILER_ID:Clang,AppleClang>:-Wno-unknown-warning-option;-Wno-c2y-extensions>)
 if (LANTERN_NO_EXCEPTIONS)
     # REQUIRE ends the run instead of throwing
     target_compile_definitions(lantern_doctest INTERFACE DOCTEST_CONFIG_NO_EXCEPTIONS_BUT_WITH_ALL_ASSERTS)
