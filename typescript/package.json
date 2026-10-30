@@ -1,0 +1,67 @@
+{
+  "name": "lantern-protocol",
+  "version": "0.1.0",
+  "description": "Client and server library for the Lantern protocol, between console homebrews and home game library servers.",
+  "license": "MIT",
+  "author": "JigSawFr",
+  "homepage": "https://github.com/JigSawFr/lantern-sdk/tree/main/typescript#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JigSawFr/lantern-sdk.git",
+    "directory": "typescript"
+  },
+  "bugs": {
+    "url": "https://github.com/JigSawFr/lantern-sdk/issues"
+  },
+  "keywords": [
+    "lantern",
+    "homebrew",
+    "game library",
+    "protocol"
+  ],
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./node": {
+      "types": "./dist/node/index.d.ts",
+      "default": "./dist/node/index.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "default": "./dist/server/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "generate": "node tools/generate.ts",
+    "generate:check": "node tools/generate.ts --check",
+    "lint": "biome ci .",
+    "format": "biome format --write .",
+    "typecheck": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "node --test --test-reporter=spec test/unit/*.test.ts",
+    "test:integration": "node --test --test-concurrency=1 --test-reporter=spec test/integration/*.test.ts",
+    "test:browser": "tsc -p tsconfig.build.json && node test/browser/smoke.ts",
+    "check": "node tools/generate.ts --check && biome ci . && tsc -p tsconfig.json && npm test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@types/node": "22.20.5",
+    "playwright-core": "1.64.1",
+    "typescript": "7.0.2"
+  }
+}

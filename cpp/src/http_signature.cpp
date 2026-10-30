@@ -243,13 +243,9 @@ Result<std::array<char, 22>> make_nonce(RandomSource& random)
     std::array<std::uint8_t, nonce_bytes> bytes {};
     if (auto filled = random.fill(bytes); !filled)
         return std::unexpected(filled.error());
-    std::array<char, 32> buffer {};
-    std::pmr::monotonic_buffer_resource arena(buffer.data(), buffer.size(), std::pmr::null_memory_resource());
-    String text(&arena);
-    text.reserve(24);
-    base64url_encode(bytes, text);
+    // 16 bytes are 22 characters: no allocation
     std::array<char, 22> out {};
-    std::copy_n(text.begin(), std::min(text.size(), out.size()), out.begin());
+    static_cast<void>(base64url_encode(bytes, out));
     return out;
 }
 
@@ -363,7 +359,9 @@ SignatureVerdict check_signature(const SignatureCheck& check) noexcept
         return verdict;
 
     std::array<std::byte, 4096> buffer {};
-    std::pmr::monotonic_buffer_resource arena(buffer.data(), buffer.size(), std::pmr::null_memory_resource());
+    // The default resource behind the buffer: a standard library that
+    // allocates more than the string (MSVC's debug proxies) never runs out
+    std::pmr::monotonic_buffer_resource arena(buffer.data(), buffer.size());
     String base(&arena);
     SignedComponents components;
     components.method         = check.method;

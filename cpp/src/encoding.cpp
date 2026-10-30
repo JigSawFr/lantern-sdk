@@ -84,6 +84,31 @@ void base64url_encode(std::span<const std::uint8_t> bytes, String& out)
     }
 }
 
+std::size_t base64url_encode(std::span<const std::uint8_t> bytes, std::span<char> out) noexcept
+{
+    static constexpr std::string_view url
+        = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const std::size_t size = (bytes.size() * 4 + 2) / 3;
+    if (out.size() < size)
+        return 0;
+    std::size_t at      = 0;
+    std::uint32_t group = 0;
+    unsigned bits       = 0;
+    for (const std::uint8_t byte : bytes)
+    {
+        group = (group << 8U) | byte;
+        bits += 8;
+        while (bits >= 6)
+        {
+            bits -= 6;
+            out[at++] = url[(group >> bits) & 63U];
+        }
+    }
+    if (bits > 0)
+        out[at++] = url[(group << (6 - bits)) & 63U];
+    return at;
+}
+
 bool is_base64url(std::string_view text, std::size_t min, std::size_t max) noexcept
 {
     return text.size() >= min && text.size() <= max
