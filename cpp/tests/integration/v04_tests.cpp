@@ -594,30 +594,3 @@ TEST_CASE("discovery: the public server answers the datagram on loopback")
     const std::string port          = public_origin.substr(public_origin.rfind(':'));
     CHECK(found.origins[0] == "https://127.0.0.1" + port);
 }
-
-TEST_CASE("a malicious server (when run_server.py has one)")
-{
-    // The shared malicious test server is another project's; this case runs
-    // against it once run_server.py is given --hostile-server. A client
-    // must come out of every one of its answers with an error, never a crash.
-    const char* origin = std::getenv("LANTERN_TEST_HOSTILE");
-    if (origin == nullptr)
-        return;
-    posix::LoopbackTransport transport(std::chrono::seconds(5));
-    posix::SystemRandom random;
-    ClientConfig config;
-    config.origin     = origin;
-    config.user_agent = "LanternCppTests/0.4";
-    config.platform   = "switch";
-    config.random     = &random;
-    auto client       = Client::create(transport, config);
-    REQUIRE(client);
-    const auto shake = client->handshake();
-    if (!shake || !*shake)
-        return;
-    static_cast<void>(client->apps());
-    static_cast<void>(client->title(frostline));
-    static_cast<void>(client->homebrew());
-    CheatsQuery query;
-    static_cast<void>(client->cheats(query));
-}

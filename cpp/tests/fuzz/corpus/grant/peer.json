@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "lantern": "peer",
+  "uid": "2b9e4d71-0c3a-4f6e-8a15-7d2c9e0b1f43",
+  "name": "Lea's Switch",
+  "port": 47116,
+  "base": "/lantern",
+  "tls": false,
+  "slots": 2,
+  "servers": [
+    "6f1c2a8e-4b7d-4e2a-9c31-8d5e2f0a7b14"
+  ]
+}

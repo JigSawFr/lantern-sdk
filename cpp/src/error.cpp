@@ -15,7 +15,7 @@ struct CodeName
     std::string_view name;
 };
 
-constexpr std::array<CodeName, 18> code_names { {
+constexpr std::array<CodeName, 19> code_names { {
     { Code::bad_request, "bad_request" },
     { Code::key_required, "key_required" },
     { Code::unauthorized, "unauthorized" },
@@ -28,6 +28,7 @@ constexpr std::array<CodeName, 18> code_names { {
     { Code::not_found, "not_found" },
     { Code::conflict, "conflict" },
     { Code::gone, "gone" },
+    { Code::precondition_failed, "precondition_failed" },
     { Code::too_large, "too_large" },
     { Code::unsupported_schema, "unsupported_schema" },
     { Code::digest_mismatch, "digest_mismatch" },
@@ -112,6 +113,8 @@ Code code_for_status(std::uint16_t status) noexcept
             return Code::conflict;
         case 410:
             return Code::gone;
+        case 412:
+            return Code::precondition_failed;
         case 413:
             return Code::too_large;
         case 429:

@@ -150,4 +150,24 @@ Result<void> Client::admin_revoke_invitation(std::string_view id)
     return {};
 }
 
+Result<void> Client::admin_delete_user(std::string_view name, std::string_view confirm)
+{
+    if (auto ok = ready(Family::admin); !ok)
+        return ok;
+    // § 5.7: the name typed again; a slip of the finger deletes nothing
+    if (confirm != name)
+        return fail(Category::usage, "the name typed again is not the account's (SPEC.md 5.7)");
+    auto url = api_url("/admin/users/");
+    if (auto added = append_segment(*url, name); !added)
+        return added;
+    bool first = true;
+    add_query(*url, first, "confirm", confirm);
+    Call call;
+    call.method = Method::delete_;
+    call.url    = *url;
+    if (auto done = expect(call); !done)
+        return std::unexpected(done.error());
+    return {};
+}
+
 } // namespace lantern

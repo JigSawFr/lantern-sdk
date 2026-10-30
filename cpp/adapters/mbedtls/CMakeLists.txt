@@ -5,7 +5,7 @@ add_library(lantern_mbedtls
     ../http1/http1.cpp
     ../http1/tcp.cpp)
 add_library(Lantern::mbedtls ALIAS lantern_mbedtls)
-set_target_properties(lantern_mbedtls PROPERTIES EXPORT_NAME mbedtls)
+set_target_properties(lantern_mbedtls PROPERTIES EXPORT_NAME mbedtls POSITION_INDEPENDENT_CODE ON)
 target_include_directories(lantern_mbedtls
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>

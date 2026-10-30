@@ -39,6 +39,13 @@ bool save_word(std::string_view word) noexcept
             });
 }
 
+// A save key's id: 16 lower-case hex digits (§ 9.4).
+bool key_id(std::string_view id) noexcept
+{
+    return id.size() == 16
+        && std::ranges::all_of(id, [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
+}
+
 } // namespace
 
 Read<Saves> Client::saves(std::string_view title_id, std::string_view platform)
@@ -104,6 +111,13 @@ Read<Save> Client::upload_save(
         return fail(Category::usage, "a save's kind or slot is 1 to 64 letters, digits, '.', '_' and '-'");
     if (!plain_text(info.profile, max_profile) || !plain_text(info.note, max_note))
         return fail(Category::usage, "a profile of 64 bytes, a note of 120, without control characters");
+    if (!info.encryption_key_id.empty())
+    {
+        if (!key_id(info.encryption_key_id))
+            return fail(Category::usage, "a save key's id is 16 lower-case hex digits (SPEC.md 9.4)");
+        if (auto ok = ready(Family::encrypted_saves); !ok)
+            return std::unexpected(ok.error());
+    }
 
     auto url = api_url("/saves/");
     if (auto added = append_segment(*url, title_id); !added)
@@ -117,7 +131,8 @@ Read<Save> Client::upload_save(
     percent_encode(info.profile, profile);
     percent_encode(info.note, note);
     std::array<char, 24> version {};
-    std::array<Header, 5> extra {};
+    String encryption(allocator_);
+    std::array<Header, 6> extra {};
     std::size_t extras = 0;
     if (!info.kind.empty())
         extra[extras++] = { "Lantern-Save-Kind", info.kind };
@@ -134,6 +149,13 @@ Read<Save> Client::upload_save(
         extra[extras++] = { "Lantern-Profile", profile };
     if (!note.empty())
         extra[extras++] = { "Lantern-Note", note };
+    if (!info.encryption_key_id.empty())
+    {
+        // § 9.4: the scheme and the key id, in clear
+        encryption.append("lantern-save-e2e-1; key_id=");
+        encryption.append(info.encryption_key_id);
+        extra[extras++] = { "Lantern-Save-Encryption", encryption };
+    }
 
     Call call;
     call.method       = Method::post;
@@ -160,6 +182,15 @@ Read<UploadSession> Client::open_upload(
         || (!request.slot.empty() && !save_word(request.slot)) || !plain_text(request.profile, max_profile)
         || !plain_text(request.note, max_note))
         return fail(Category::usage, "an upload's fields are not of SPEC.md 9.3's form");
+    if (request.encryption)
+    {
+        if (request.encryption->scheme != "lantern-save-e2e-1" || !key_id(request.encryption->key_id))
+            return fail(
+                Category::usage, "an encryption of scheme lantern-save-e2e-1, with its key id (SPEC.md 9.4)");
+        // L-9.4-5: a server without the family refuses it; the client asks first
+        if (auto ok = ready(Family::encrypted_saves); !ok)
+            return std::unexpected(ok.error());
+    }
     auto url = api_url("/saves/");
     if (auto added = append_segment(*url, title_id); !added)
         return std::unexpected(added.error());

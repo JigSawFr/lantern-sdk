@@ -1,13 +1,15 @@
-// The client of draft 0.4: the handshake, pairing (with a device key, an
+// The client of draft 0.5: the handshake, pairing (with a device key, an
 // invitation, a QR code), signed requests, the apps' listing with its
 // cursors, what the device is missing, changes, titles, homebrew (the
 // listing, an entry, the updates), save backups (listed, downloaded, sent
-// in one request or resumably, removed), cheat sets (read and written),
-// requests, the administration API, and verified downloads. Everything goes
-// through the app's Transport.
+// in one request or resumably, removed, encrypted on the device), cheat
+// sets (read and written), requests, the administration API, events (a
+// stream, or long polling), grants, mirrors and peers, sync, and verified
+// downloads. Everything goes through the app's Transport.
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -19,8 +21,11 @@
 #include <lantern/document.hpp>
 #include <lantern/download.hpp>
 #include <lantern/error.hpp>
+#include <lantern/events.hpp>
 #include <lantern/http_signature.hpp>
 #include <lantern/memory.hpp>
+#include <lantern/peers.hpp>
+#include <lantern/sync.hpp>
 #include <lantern/tls.hpp>
 #include <lantern/transport.hpp>
 #include <lantern/types.hpp>
@@ -130,6 +135,10 @@ struct SaveInfo
     std::optional<std::uint64_t> game_version_code;
     std::string_view profile; // UTF-8, 64 bytes at most
     std::string_view note; // UTF-8, 120 bytes at most
+    // An archive encrypted on the device (§ 9.4, encrypted_save.hpp): its
+    // save key's id, sent as Lantern-Save-Encryption. Leave `profile` and
+    // `note` out unless the user wants them shown (L-9.4-6).
+    std::string_view encryption_key_id;
 };
 
 // Where a resumable upload reads the archive from (§ 9.3).
@@ -220,6 +229,18 @@ enum class Family : std::uint8_t
     pairing,
     signatures,
     admin,
+    events,
+    peers,
+    sync,
+    encrypted_saves,
+};
+
+// What Client::events() and Client::wait_changes() take.
+struct EventsQuery
+{
+    // A platform for the `library` events (§ 18.2): the configuration's
+    // Lantern-Platform otherwise.
+    std::string_view platform;
 };
 
 class Client
@@ -345,6 +366,66 @@ class Client
     [[nodiscard]] Read<Invitations> admin_invitations(const PageQuery& page = {});
     [[nodiscard]] Read<Invitation> admin_create_invitation(const InvitationCreate& invitation);
     [[nodiscard]] Result<void> admin_revoke_invitation(std::string_view id);
+    // Deletes an account and everything it holds (L-5.7-7): `confirm` is the
+    // name as the user typed it again, which must be the account's; the
+    // server refuses the caller's own (409).
+    [[nodiscard]] Result<void> admin_delete_user(std::string_view name, std::string_view confirm);
+
+    // § 18.1: the stream of events, from `state.last_id` (Last-Event-ID) on,
+    // until the server ends it, the handler stops it, or the transport is
+    // cut. Each event read moves `state.last_id`; a 410 forgets it (read
+    // again what is shown); `state.failures` counts the connections that
+    // failed in a row, for EventStreamState::reconnect_delay().
+    [[nodiscard]] Result<void> events(
+        EventStreamState& state, EventHandler& handler, const EventsQuery& query = {});
+    // § 18.3: changes?since=&wait=, the events after `since` (its `events`),
+    // answered as soon as one comes or after `wait` seconds (lowered to the
+    // server's limits.wait). The transport's timeout must be longer.
+    [[nodiscard]] Read<Changes> wait_changes(
+        std::string_view since, std::uint32_t wait, const EventsQuery& query = {});
+    // Twice the server's heartbeat: a stream silent that long is dead (§ 18.1).
+    [[nodiscard]] std::chrono::seconds event_silence_limit() const noexcept;
+
+    // § 19.3: a grant for a file the caller may read, for a peer.
+    [[nodiscard]] Read<Grant> grant(const Digest& sha256);
+    // § 19.2: the file from a mirror, checked by `target`'s size and
+    // SHA-256 (the server's document's); nothing of the server's sent to it.
+    [[nodiscard]] Result<void> download_from_mirror(
+        std::string_view mirror, const DownloadTarget& target, DownloadState& state, DownloadSink& sink);
+    // Each mirror in turn, then the server: what a mirror served that fails
+    // its check is dropped, and the next source tried (L-19.1-3).
+    [[nodiscard]] Result<void> download_with_mirrors(std::span<const Mirror> mirrors,
+        const DownloadTarget& target, DownloadState& state, DownloadSink& sink);
+    // § 19.4: whether a peer holds the file (HEAD), and the file from it,
+    // with the grant alone; checked by `target`'s size and SHA-256.
+    [[nodiscard]] Result<bool> peer_holds(const PeerEndpoint& peer, const Grant& grant);
+    [[nodiscard]] Result<void> download_from_peer(const PeerEndpoint& peer, const Grant& grant,
+        const DownloadTarget& target, DownloadState& state, DownloadSink& sink);
+
+    // § 20: nothing of sync before the user's consent (L-20.1-1). The app
+    // gives what it kept for this profile and server: the consent and the
+    // generation the client reported last (empty the first time).
+    [[nodiscard]] Result<void> set_sync_consent(const SyncConsent& consent, std::string_view generation = {});
+    [[nodiscard]] const SyncConsent& sync_consent() const noexcept { return sync_consent_; }
+    // The account's sync generation, as the client last read it: kept by
+    // the app with the consent.
+    [[nodiscard]] std::string_view sync_generation() const noexcept { return sync_generation_; }
+    // GET /v1/sync. A generation other than the one kept means the data was
+    // deleted: the client turns sync off (Category::refused) and the app
+    // asks its user again (L-20.3-2).
+    [[nodiscard]] Read<SyncState> sync_state();
+    // GET /v1/sync/{collection}: with `since`, the items changed after that
+    // rev, deletions included (410: read the collection whole).
+    [[nodiscard]] Read<SyncCollection> sync_items(
+        std::string_view collection, std::optional<std::uint64_t> since = {}, const PageQuery& page = {});
+    // PATCH /v1/sync/{collection}: items merged by § 20.4's rule, each
+    // answered as the server keeps it. With `if_match`, the collection's
+    // rev as read: all or nothing, 412 (precondition_failed) when it
+    // changed. 409: the data was deleted since (sync turned off).
+    [[nodiscard]] Read<SyncCollection> sync_write(std::string_view collection,
+        std::span<const SyncItem> items, std::optional<std::uint64_t> if_match = {});
+    // DELETE /v1/sync/{collection}, or every collection with an empty name.
+    [[nodiscard]] Result<void> sync_delete(std::string_view collection = {});
 
     // § 6.6: downloads `target` into `sink`, from `state.received` on (a
     // Range request), hashing as it goes; success only when the whole file
@@ -364,6 +445,7 @@ class Client
     struct Call;
     class Collector;
     class Retry;
+    class EventReceiver;
 
     [[nodiscard]] Result<void> ready(Family family) const;
     [[nodiscard]] Result<String> api_url(std::string_view path) const;
@@ -385,6 +467,10 @@ class Client
     void update_accept_schema();
     [[nodiscard]] UrlParts origin() const noexcept;
     [[nodiscard]] Result<void> use_key(const DeviceKey& key);
+    [[nodiscard]] Result<void> sync_ready(std::string_view collection, bool writing) const;
+    [[nodiscard]] Result<void> sync_generation_seen(std::string_view generation);
+    [[nodiscard]] Result<void> transfer(
+        const Call& base, const DownloadTarget& target, DownloadState& state, DownloadSink& sink);
 
     Transport* transport_;
     Allocator allocator_;
@@ -407,6 +493,9 @@ class Client
     String base_;
     String accept_schema_;
     std::optional<Handshake> handshake_;
+    SyncConsent sync_consent_;
+    String sync_generation_;
+    String sync_device_;
 };
 
 } // namespace lantern

@@ -13,6 +13,7 @@ namespace
 {
 
 constexpr std::string_view request_text = R"({"schema":1,"lantern":"discover"})";
+constexpr std::string_view peers_text   = R"({"schema":1,"lantern":"discover","peers":true})";
 constexpr std::size_t max_servers       = 64;
 
 bool hex_digits(std::string_view text) noexcept
@@ -31,9 +32,9 @@ bool is_uuid(std::string_view text) noexcept
 
 } // namespace
 
-std::string_view discovery_request() noexcept
+std::string_view discovery_request(bool peers) noexcept
 {
-    return request_text;
+    return peers ? peers_text : request_text;
 }
 
 Read<DiscoveryReply> read_discovery_datagram(
@@ -93,9 +94,11 @@ Result<void> discover(UdpSocket& socket, const DiscoveryOptions& options, Discov
 {
     if (options.address.empty() || options.attempts == 0)
         return fail(Category::usage, "discovery needs an address and at least one attempt");
-    const auto request = std::as_bytes(std::span(request_text.data(), request_text.size()));
+    const std::string_view text = discovery_request(options.peers);
+    const auto request          = std::as_bytes(std::span(text.data(), text.size()));
     const Allocator allocator(options.decode.memory);
     Vector<String> seen(allocator);
+    Vector<String> peers_seen(allocator);
 
     using steady       = std::chrono::steady_clock;
     const auto start   = steady::now();
@@ -126,9 +129,32 @@ Result<void> discover(UdpSocket& socket, const DiscoveryOptions& options, Discov
             continue;
         const Datagram& datagram = **got;
         // Anything that is not a reply of § 4.1 is dropped: discovery is a hint
-        const auto reply = read_discovery_datagram(std::span(buffer).first(datagram.size), options.decode);
+        const auto bytes = std::span(buffer).first(datagram.size);
+        const auto reply = read_discovery_datagram(bytes, options.decode);
         if (!reply || !*reply)
+        {
+            if (options.peers)
+            {
+                const auto peer = read_peer_datagram(bytes, options.decode);
+                if (!peer || !*peer)
+                    continue;
+                const PeerReply& found = **peer;
+                if (std::ranges::any_of(peers_seen, [&](const String& uid) { return uid == found.uid; })
+                    || peers_seen.size() >= max_servers)
+                    continue;
+                peers_seen.emplace_back(found.uid);
+                DiscoveredPeer out;
+                out.address       = datagram.address_view();
+                out.reply         = &found;
+                out.endpoint.host = datagram.address_view();
+                out.endpoint.port = static_cast<std::uint16_t>(found.port);
+                out.endpoint.base = found.base;
+                out.endpoint.tls  = found.tls;
+                if (!handler.on_peer(out))
+                    return {};
+            }
             continue;
+        }
         const DiscoveryReply& found = **reply;
         if (std::ranges::any_of(seen, [&](const String& uid) { return uid == found.uid; })
             || seen.size() >= max_servers)
