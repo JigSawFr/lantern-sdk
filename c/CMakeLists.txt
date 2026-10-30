@@ -200,6 +200,8 @@ if (LANTERN_C_BUILD_EXAMPLES)
     set_target_properties(lantern_c_read_library PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
         LINKER_LANGUAGE CXX)
     target_link_libraries(lantern_c_read_library PRIVATE Lantern::c_static)
+    # Plain fopen, as README.md shows it; Microsoft's CRT calls it unsafe
+    target_compile_definitions(lantern_c_read_library PRIVATE $<$<BOOL:${WIN32}>:_CRT_SECURE_NO_WARNINGS>)
     lantern_c_warnings(lantern_c_read_library)
 endif ()
 
