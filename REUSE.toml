@@ -7,3 +7,18 @@ path = ["**"]
 precedence = "closest"
 SPDX-FileCopyrightText = "2026 JigSawFr"
 SPDX-License-Identifier = "MIT"
+
+# The C++ library's vendored code, under its own licences
+# (cpp/THIRD_PARTY_NOTICES.md): Monocypher, for ed25519, and doctest, for
+# the tests only.
+[[annotations]]
+path = ["cpp/third_party/monocypher/**"]
+precedence = "override"
+SPDX-FileCopyrightText = ["2017-2023 Loup Vaillant", "2017-2019 Michael Savage", "2017-2023 Fabio Scotoni"]
+SPDX-License-Identifier = "BSD-2-Clause OR CC0-1.0"
+
+[[annotations]]
+path = ["cpp/third_party/doctest/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "2016-2023 Viktor Kirilov"
+SPDX-License-Identifier = "MIT"
