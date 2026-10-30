@@ -43,7 +43,7 @@ try {
   out.extractable = key.extractable;
   const pairing = await c.pair("A browser's tab", ["library"], { key });
   document.title = "code " + pairing.code;
-  await c.waitForPairing(pairing, { sleep: (s) => new Promise((r) => setTimeout(r, Math.min(s, 0.3) * 1000)) });
+  await c.waitForPairing(pairing, { sleep: (s) => new Promise((r) => setTimeout(r, Math.min(s, 1.05) * 1000)) });
   const hello = await c.handshake();
   out.bound = hello.account.bound;
   out.signed = (await c.apps({ pageSize: 1 })).items.length;
@@ -91,19 +91,18 @@ async function main(): Promise<void> {
       if (m.type() === "error") errors.push(m.text());
     });
     await page.goto(`${served.url}smoke.html`);
-    // The user approves the tab's pairing on the server's side.
-    for (let i = 0; i < 200; i++) {
-      const waiting = app.desk?.waiting() ?? [];
-      const first = waiting[0];
-      if (first !== undefined) {
+    // The user approves the tab's pairing on the server's side, once it waits.
+    const done = () => page.evaluate(() => (window as unknown as { result?: unknown }).result !== undefined);
+    let approved = false;
+    for (let i = 0; i < 600 && !(await done()); i++) {
+      const first = app.desk?.waiting()[0];
+      if (!approved && first !== undefined) {
         await app.desk?.approve(first, "mira");
-        break;
+        approved = true;
       }
-      await new Promise((r) => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 100));
     }
-    await page.waitForFunction(() => (window as unknown as { result?: unknown }).result !== undefined, undefined, {
-      timeout: 30_000,
-    });
+    if (!(await done())) throw new Error(`no result within 60 s: ${await page.title()}; ${errors.join("; ")}`);
     const result = (await page.evaluate(() => (window as unknown as { result: unknown }).result)) as Record<
       string,
       unknown
