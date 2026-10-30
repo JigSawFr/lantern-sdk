@@ -11,9 +11,10 @@ target_include_directories(lantern_doctest SYSTEM INTERFACE ${PROJECT_SOURCE_DIR
 target_compile_definitions(lantern_doctest INTERFACE $<$<BOOL:${WIN32}>:DOCTEST_CONFIG_USE_STD_HEADERS>)
 # doctest names its test cases with __COUNTER__, which recent clang reports as
 # a C2y extension; an older clang does not know the warning, hence the first
-# flag.
+# flag. Under clang it also includes <ciso646>, whose #warning libstdc++ 15
+# raises in C++20.
 target_compile_options(lantern_doctest INTERFACE
-    $<$<CXX_COMPILER_ID:Clang,AppleClang>:-Wno-unknown-warning-option;-Wno-c2y-extensions>)
+    $<$<CXX_COMPILER_ID:Clang,AppleClang>:-Wno-unknown-warning-option;-Wno-c2y-extensions;-Wno-\#warnings>)
 if (LANTERN_NO_EXCEPTIONS)
     # REQUIRE ends the run instead of throwing
     target_compile_definitions(lantern_doctest INTERFACE DOCTEST_CONFIG_NO_EXCEPTIONS_BUT_WITH_ALL_ASSERTS)
