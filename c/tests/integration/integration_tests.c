@@ -1128,6 +1128,670 @@ static void discovery_on_loopback(void)
     lantern_udp_socket_free(socket);
 }
 
+/* ------------------------------------------------------------ Draft 0.5 */
+
+static void v05_families(void)
+{
+    device d;
+    OPEN(d, "LANTERN_TEST_PUBLIC", "switch", false);
+    CHECK(lantern_client_offers(d.client, LANTERN_FAMILY_EVENTS) == 1);
+    CHECK(lantern_client_offers(d.client, LANTERN_FAMILY_PEERS) == 1);
+    uint64_t heartbeat = 0;
+    CHECK(lantern_handshake_limits_get_heartbeat(
+              lantern_handshake_get_limits(lantern_client_server(d.client)), &heartbeat)
+        && heartbeat >= 5);
+    CHECK(lantern_client_event_silence_limit(d.client) == 2 * heartbeat);
+    uint8_t key[32];
+    lantern_error error = LANTERN_INIT(lantern_error);
+    CHECK_CALL(lantern_grant_key_of(lantern_client_server(d.client), key, &error), LANTERN_OK, &error);
+    device_close(&d);
+    device admin;
+    OPEN(admin, "LANTERN_TEST_PRIVATE", "switch", true);
+    CHECK(lantern_client_offers(admin.client, LANTERN_FAMILY_SYNC) == 1);
+    CHECK(lantern_client_offers(admin.client, LANTERN_FAMILY_ENCRYPTED_SAVES) == 1);
+    device_close(&admin);
+}
+
+/* The events a stream gives, until the kind waited for. */
+typedef struct waiter
+{
+    lantern_event_kind until;
+    int count;
+    lantern_event_kind last;
+    char data[512];
+} waiter;
+
+static bool wait_event(void* user, const lantern_stream_event* event)
+{
+    waiter* w = user;
+    ++w->count;
+    w->last = event->kind;
+    snprintf(w->data, sizeof(w->data), "%s", event->data.data);
+    return event->kind != w->until;
+}
+
+static void v05_events(void)
+{
+    device lea;
+    OPEN(lea, "LANTERN_TEST_PRIVATE", "switch", true);
+    lantern_error error               = LANTERN_INIT(lantern_error);
+    lantern_event_stream_state* state = NULL;
+    REQUIRE_STATUS(lantern_event_stream_state_create(NULL, &state, NULL), LANTERN_OK);
+    waiter ready                      = { LANTERN_EVENT_READY, 0, LANTERN_EVENT_SHUTDOWN, "" };
+    lantern_event_callbacks callbacks = LANTERN_INIT(lantern_event_callbacks);
+    callbacks.user                    = &ready;
+    callbacks.on_event                = wait_event;
+    REQUIRE_CALL(lantern_client_events(lea.client, state, &callbacks, NULL, &error), LANTERN_OK, &error);
+    CHECK(ready.count == 1 && ready.last == LANTERN_EVENT_READY);
+    char since[512];
+    snprintf(since, sizeof(since), "%s", lantern_event_stream_state_last_id(state).data);
+    REQUIRE(since[0] != '\0');
+
+    /* A request made: it comes after `ready` on the stream resumed */
+    lantern_request_create wish = LANTERN_INIT(lantern_request_create);
+    wish.platform               = "switch";
+    wish.title_id               = FROSTLINE;
+    lantern_title_request* made = NULL;
+    REQUIRE_CALL(lantern_client_request_title(lea.client, &wish, &made, &error), LANTERN_OK, &error);
+    waiter request = { LANTERN_EVENT_REQUEST, 0, LANTERN_EVENT_SHUTDOWN, "" };
+    callbacks.user = &request;
+    REQUIRE_CALL(lantern_client_events(lea.client, state, &callbacks, NULL, &error), LANTERN_OK, &error);
+    CHECK(request.last == LANTERN_EVENT_REQUEST);
+    lantern_request_event* read = NULL;
+    REQUIRE_CALL(lantern_read_request_event(request.data, strlen(request.data), NULL, &read, &error),
+        LANTERN_OK, &error);
+    CHECK(STR_EQ(lantern_request_event_get_id(read), lantern_title_request_get_id(made).data));
+    CHECK(STR_EQ(lantern_request_event_get_status(read), "open"));
+    lantern_request_event_free(read);
+
+    /* Long polling: the same event after the same token */
+    lantern_changes* polled = NULL;
+    REQUIRE_CALL(
+        lantern_client_wait_changes(lea.client, since, 5, NULL, &polled, &error), LANTERN_OK, &error);
+    bool seen = false;
+    for (size_t i = 0; i < lantern_changes_get_events_count(polled); ++i)
+        seen = seen || STR_EQ(lantern_event_get_event(lantern_changes_get_events_at(polled, i)), "request");
+    CHECK(seen);
+    CHECK(lantern_changes_get_since(polled).size > 0);
+    lantern_changes_free(polled);
+    REQUIRE_CALL(lantern_client_withdraw_request(lea.client, lantern_title_request_get_id(made).data, &error),
+        LANTERN_OK, &error);
+    lantern_title_request_free(made);
+
+    /* A token the server never gave: the position forgotten */
+    REQUIRE(lantern_event_stream_state_set_last_id(state, "s_00000000_1"));
+    waiter none    = { LANTERN_EVENT_READY, 0, LANTERN_EVENT_SHUTDOWN, "" };
+    callbacks.user = &none;
+    CHECK_STATUS(lantern_client_events(lea.client, state, &callbacks, NULL, &error), LANTERN_ERROR_PROTOCOL);
+    CHECK(error.http_status == 400 || error.http_status == 410);
+    CHECK(STR_EQ(lantern_event_stream_state_last_id(state), ""));
+    lantern_event_stream_state_free(state);
+    device_close(&lea);
+}
+
+/* The peer of run_server.py, from LANTERN_TEST_PEER ("http://127.0.0.1:<port>"). */
+static lantern_peer_endpoint test_peer(char* host, size_t size)
+{
+    const char* origin = env("LANTERN_TEST_PEER");
+    const char* start  = strstr(origin, "//") + 2;
+    const char* colon  = strrchr(origin, ':');
+    snprintf(host, size, "%.*s", (int)(colon - start), start);
+    lantern_peer_endpoint peer = LANTERN_INIT(lantern_peer_endpoint);
+    peer.host                  = host;
+    peer.port                  = (uint16_t)atoi(colon + 1);
+    peer.base                  = "/lantern";
+    return peer;
+}
+
+static void v05_grants_peers_mirrors(void)
+{
+    device d;
+    OPEN(d, "LANTERN_TEST_PUBLIC", "switch", false);
+    lantern_error error     = LANTERN_INIT(lantern_error);
+    lantern_apps_page* page = NULL;
+    REQUIRE_CALL(lantern_client_apps(d.client, NULL, &page, &error), LANTERN_OK, &error);
+    REQUIRE(lantern_apps_page_get_items_count(page) > 1);
+    const lantern_app* app = lantern_apps_page_get_items_at(page, 0);
+    lantern_download_target target;
+    target_of_app(app, &target);
+    lantern_grant* grant = NULL;
+    REQUIRE_CALL(lantern_client_grant(d.client, target.sha256, &grant, &error), LANTERN_OK, &error);
+    uint64_t size = 0;
+    CHECK(lantern_grant_get_size(grant, &size) && size == target.size);
+
+    char host[64];
+    const lantern_peer_endpoint peer = test_peer(host, sizeof(host));
+    bool holds                       = false;
+    REQUIRE_CALL(lantern_client_peer_holds(d.client, &peer, grant, &holds, &error), LANTERN_OK, &error);
+    CHECK(holds);
+    memory_sink sink;
+    lantern_download_sink* out    = memory_sink_make(&sink);
+    lantern_download_state* state = NULL;
+    REQUIRE_STATUS(lantern_download_state_create(NULL, &state, NULL), LANTERN_OK);
+    REQUIRE_CALL(lantern_client_download_from_peer(d.client, &peer, grant, &target, state, out, &error),
+        LANTERN_OK, &error);
+    CHECK(sink.size == target.size);
+
+    /* The grant of one file, for another: the peer says 403 */
+    const lantern_app* other = lantern_apps_page_get_items_at(page, 1);
+    uint8_t other_sha[32];
+    uint64_t other_size = 0;
+    char hex[65];
+    lantern_app_get_sha256(other, other_sha);
+    lantern_app_get_size(other, &other_size);
+    lantern_digest_to_hex(other_sha, hex);
+    char forged_text[2048];
+    snprintf(forged_text, sizeof(forged_text),
+        "{\"schema\":1,\"sha256\":\"%s\",\"size\":%llu,\"grant\":\"%s\",\"expires\":\"%s\"}", hex,
+        (unsigned long long)other_size, lantern_grant_get_grant(grant).data,
+        lantern_grant_get_expires(grant).data);
+    lantern_grant* forged = NULL;
+    REQUIRE_CALL(lantern_read_grant(forged_text, strlen(forged_text), NULL, NULL, &forged, &error),
+        LANTERN_OK, &error);
+    CHECK_STATUS(lantern_client_peer_holds(d.client, &peer, forged, &holds, &error), LANTERN_ERROR_PROTOCOL);
+    CHECK(error.http_status == 403);
+    lantern_grant_free(forged);
+
+    /* A mirror: the server's own file at another address, read untrusted */
+    char mirror[512];
+    snprintf(mirror, sizeof(mirror), "%s%s", env("LANTERN_TEST_PUBLIC"), target.url);
+    memory_sink mirrored;
+    lantern_download_sink* mirror_out    = memory_sink_make(&mirrored);
+    lantern_download_state* mirror_state = NULL;
+    REQUIRE_STATUS(lantern_download_state_create(NULL, &mirror_state, NULL), LANTERN_OK);
+    REQUIRE_CALL(
+        lantern_client_download_from_mirror(d.client, mirror, &target, mirror_state, mirror_out, &error),
+        LANTERN_OK, &error);
+    CHECK(mirrored.size == sink.size && memcmp(mirrored.bytes, sink.bytes, sink.size) == 0);
+    /* With mirrors and then the server: none here, the server serves */
+    memory_sink served;
+    lantern_download_sink* served_out = memory_sink_make(&served);
+    lantern_download_state_reset(mirror_state);
+    REQUIRE_CALL(
+        lantern_client_download_with_mirrors(d.client, NULL, 0, &target, mirror_state, served_out, &error),
+        LANTERN_OK, &error);
+    CHECK(served.size == sink.size);
+
+    lantern_download_sink_free(served_out);
+    memory_sink_clear(&served);
+    lantern_download_sink_free(mirror_out);
+    memory_sink_clear(&mirrored);
+    lantern_download_state_free(mirror_state);
+    lantern_download_sink_free(out);
+    memory_sink_clear(&sink);
+    lantern_download_state_free(state);
+    lantern_grant_free(grant);
+    lantern_apps_page_free(page);
+    device_close(&d);
+}
+
+typedef struct peers_found
+{
+    int count;
+    char name[64];
+    char server[64];
+    uint16_t port;
+} peers_found;
+
+static bool on_any_server(void* user, const lantern_discovered_server* server)
+{
+    (void)user;
+    (void)server;
+    return true;
+}
+
+static bool on_peer_found(void* user, const lantern_discovered_peer* peer)
+{
+    peers_found* found = user;
+    ++found->count;
+    snprintf(found->name, sizeof(found->name), "%s", lantern_peer_reply_get_name(peer->reply).data);
+    snprintf(
+        found->server, sizeof(found->server), "%s", lantern_peer_reply_get_servers_at(peer->reply, 0).data);
+    found->port = peer->endpoint.port;
+    CHECK(strcmp(peer->endpoint.base, "/lantern") == 0);
+    return true;
+}
+
+static void v05_peer_discovery(void)
+{
+    lantern_udp_socket* socket = test_udp_socket();
+    REQUIRE(socket != NULL);
+    peers_found found                 = { 0, "", "", 0 };
+    lantern_discovery_options options = LANTERN_INIT(lantern_discovery_options);
+    options.address                   = "127.0.0.1";
+    options.port                      = (uint16_t)atoi(env("LANTERN_TEST_PEER_DISCOVERY_PORT"));
+    options.wait_ms                   = 1200;
+    options.attempts                  = 2;
+    options.peers                     = true;
+    options.on_peer                   = on_peer_found;
+    lantern_error error               = LANTERN_INIT(lantern_error);
+    REQUIRE_CALL(lantern_discover(socket, &options, on_any_server, &found, &error), LANTERN_OK, &error);
+    REQUIRE(found.count == 1);
+    CHECK(strcmp(found.name, "Lea's Switch") == 0);
+    device d;
+    OPEN(d, "LANTERN_TEST_PUBLIC", "switch", false);
+    CHECK(STR_EQ(lantern_handshake_get_uid(lantern_client_server(d.client)), found.server));
+    char host[64];
+    CHECK(test_peer(host, sizeof(host)).port == found.port);
+    device_close(&d);
+    lantern_udp_socket_free(socket);
+}
+
+static void v05_sync(void)
+{
+    device lea;
+    OPEN(lea, "LANTERN_TEST_PRIVATE", "switch", true);
+    lantern_error error       = LANTERN_INIT(lantern_error);
+    lantern_sync_state* state = NULL;
+    CHECK_STATUS(lantern_client_sync_state(lea.client, &state, &error), LANTERN_ERROR_REFUSED);
+    lantern_sync_consent consent = LANTERN_INIT(lantern_sync_consent);
+    consent.sync                 = true;
+    REQUIRE_CALL(lantern_client_set_sync_consent(lea.client, &consent, NULL, &error), LANTERN_OK, &error);
+    REQUIRE_CALL(lantern_client_sync_state(lea.client, &state, &error), LANTERN_OK, &error);
+    char generation[64];
+    char device_id[64];
+    snprintf(generation, sizeof(generation), "%s", lantern_sync_state_get_generation(state).data);
+    snprintf(device_id, sizeof(device_id), "%s", lantern_sync_state_get_device(state).data);
+    CHECK(strncmp(device_id, "d_", 2) == 0);
+    lantern_sync_state_free(state);
+
+    lantern_wish_input wish = LANTERN_INIT(lantern_wish_input);
+    wish.platform           = "switch";
+    wish.title_id           = FROSTLINE;
+    wish.note               = "For the holidays";
+    lantern_string* value   = NULL;
+    lantern_string* key     = NULL;
+    REQUIRE_STATUS(lantern_write_wish(&wish, NULL, &value, NULL), LANTERN_OK);
+    REQUIRE_STATUS(lantern_wish_key("switch", FROSTLINE, NULL, &key, NULL), LANTERN_OK);
+    char now[32];
+    lantern_format_sync_time((int64_t)time(NULL) * 1000, now);
+    const lantern_sync_item_input item
+        = { lantern_string_view(key).data, lantern_string_view(value).data, false, now };
+    lantern_sync_collection* written = NULL;
+    REQUIRE_CALL(lantern_client_sync_write(lea.client, "wishes", &item, 1, false, 0, &written, &error),
+        LANTERN_OK, &error);
+    REQUIRE(lantern_sync_collection_get_items_count(written) == 1);
+    uint64_t rev = 0;
+    CHECK(lantern_sync_item_get_rev(lantern_sync_collection_get_items_at(written, 0), &rev) && rev > 0);
+    uint64_t collection_rev = 0;
+    lantern_sync_collection_get_rev(written, &collection_rev);
+    lantern_wish* back       = NULL;
+    const lantern_str stored = lantern_sync_item_get_value(lantern_sync_collection_get_items_at(written, 0));
+    REQUIRE_CALL(lantern_read_wish(stored.data, stored.size, NULL, &back, &error), LANTERN_OK, &error);
+    CHECK(STR_EQ(lantern_wish_get_note(back), "For the holidays"));
+    lantern_wish_free(back);
+    lantern_sync_collection_free(written);
+
+    lantern_sync_collection* changed = NULL;
+    REQUIRE_CALL(lantern_client_sync_items(lea.client, "wishes", true, rev - 1, NULL, &changed, &error),
+        LANTERN_OK, &error);
+    bool found = false;
+    for (size_t i = 0; i < lantern_sync_collection_get_items_count(changed); ++i)
+        found = found
+            || STR_EQ(lantern_sync_item_get_key(lantern_sync_collection_get_items_at(changed, i)),
+                lantern_string_view(key).data);
+    CHECK(found);
+    lantern_sync_collection_free(changed);
+
+    /* All or nothing: a stale If-Match changes nothing */
+    CHECK_STATUS(lantern_client_sync_write(lea.client, "wishes", &item, 1, true, rev - 1, &written, &error),
+        LANTERN_ERROR_PROTOCOL);
+    CHECK(error.effective_code == LANTERN_CODE_PRECONDITION_FAILED);
+    REQUIRE_CALL(
+        lantern_client_sync_write(lea.client, "wishes", &item, 1, true, collection_rev, &written, &error),
+        LANTERN_OK, &error);
+    lantern_sync_collection_free(written);
+
+    /* What is installed: only by name */
+    lantern_installed_input installed = LANTERN_INIT(lantern_installed_input);
+    installed.device                  = "Lea's Switch";
+    installed.platform                = "switch";
+    lantern_string* mine_value        = NULL;
+    REQUIRE_STATUS(lantern_write_installed(&installed, NULL, &mine_value, NULL), LANTERN_OK);
+    const lantern_sync_item_input mine = { device_id, lantern_string_view(mine_value).data, false, now };
+    CHECK(lantern_client_sync_write(lea.client, "installed", &mine, 1, false, 0, &written, &error) < 0);
+    consent.installed = true;
+    REQUIRE_CALL(lantern_client_set_sync_consent(
+                     lea.client, &consent, lantern_client_sync_generation(lea.client).data, &error),
+        LANTERN_OK, &error);
+    REQUIRE_CALL(lantern_client_sync_write(lea.client, "installed", &mine, 1, false, 0, &written, &error),
+        LANTERN_OK, &error);
+    lantern_sync_collection_free(written);
+
+    /* Another console keeps the generation it read; Lea deletes everything */
+    device other;
+    OPEN(other, "LANTERN_TEST_PRIVATE", "switch", true);
+    lantern_sync_consent only_sync = LANTERN_INIT(lantern_sync_consent);
+    only_sync.sync                 = true;
+    REQUIRE_CALL(
+        lantern_client_set_sync_consent(other.client, &only_sync, generation, &error), LANTERN_OK, &error);
+    REQUIRE_CALL(lantern_client_sync_delete(lea.client, NULL, &error), LANTERN_OK, &error);
+    CHECK_STATUS(lantern_client_sync_items(other.client, "wishes", false, 0, NULL, &changed, &error),
+        LANTERN_ERROR_REFUSED);
+    lantern_sync_consent after = LANTERN_INIT(lantern_sync_consent);
+    lantern_client_get_sync_consent(other.client, &after);
+    CHECK(!after.sync);
+    REQUIRE_CALL(lantern_client_sync_state(lea.client, &state, &error), LANTERN_OK, &error);
+    CHECK(!STR_EQ(lantern_sync_state_get_generation(state), generation));
+    lantern_sync_state_free(state);
+
+    lantern_string_free(mine_value);
+    lantern_string_free(value);
+    lantern_string_free(key);
+    device_close(&other);
+    device_close(&lea);
+}
+
+static void v05_encrypted_backups(void)
+{
+    device lea;
+    OPEN(lea, "LANTERN_TEST_PRIVATE", "switch", true);
+    lantern_error error   = LANTERN_INIT(lantern_error);
+    lantern_save_key* key = NULL;
+    REQUIRE_CALL(lantern_save_key_generate(lea.random, NULL, &key, &error), LANTERN_OK, &error);
+    const size_t archive_size = 2 * LANTERN_SAVE_CHUNK_SIZE + 1234;
+    uint8_t* archive_bytes    = malloc(archive_size);
+    REQUIRE(archive_bytes != NULL);
+    for (size_t i = 0; i < archive_size; ++i)
+        archive_bytes[i] = (uint8_t)((i * 31 + 7) % 253);
+    uint8_t header[LANTERN_SAVE_HEADER_SIZE];
+    REQUIRE_CALL(lantern_make_save_header(key, lea.random, header, &error), LANTERN_OK, &error);
+    archive plain                     = { archive_bytes, archive_size, 0 };
+    lantern_upload_source* clear      = source_of(&plain);
+    lantern_upload_source* encrypting = NULL;
+    REQUIRE_CALL(
+        lantern_encrypting_source_create(key, header, clear, archive_size, NULL, &encrypting, &error),
+        LANTERN_OK, &error);
+    lantern_upload_request request = LANTERN_INIT(lantern_upload_request);
+    request.kind                   = "account";
+    REQUIRE_CALL(lantern_encrypting_source_describe(encrypting, &request, &error), LANTERN_OK, &error);
+    lantern_upload_progress* progress = NULL;
+    REQUIRE_STATUS(lantern_upload_progress_create(NULL, &progress, NULL), LANTERN_OK);
+    lantern_save* save = NULL;
+    REQUIRE_CALL(lantern_client_upload_resumable(
+                     lea.client, FROSTLINE, &request, encrypting, progress, 50000, NULL, &save, &error),
+        LANTERN_OK, &error);
+    char id[17];
+    lantern_save_key_id_text(key, id);
+    const lantern_save_encryption* encryption = lantern_save_get_encryption(save);
+    REQUIRE(encryption != NULL);
+    CHECK(STR_EQ(lantern_save_encryption_get_key_id(encryption), id));
+    uint64_t size = 0;
+    CHECK(lantern_save_get_size(save, &size) && size == lantern_encrypted_save_size(archive_size));
+
+    /* Opened as it downloads: the archive, whole */
+    memory_sink restored;
+    lantern_download_sink* out     = memory_sink_make(&restored);
+    lantern_download_sink* opening = NULL;
+    REQUIRE_STATUS(lantern_decrypting_sink_create(key, out, NULL, &opening, NULL), LANTERN_OK);
+    lantern_download_state* state = NULL;
+    REQUIRE_STATUS(lantern_download_state_create(NULL, &state, NULL), LANTERN_OK);
+    REQUIRE_CALL(lantern_client_download_save(lea.client, save, state, opening, &error), LANTERN_OK, &error);
+    REQUIRE_CALL(lantern_decrypting_sink_finish(opening, &error), LANTERN_OK, &error);
+    CHECK(restored.size == archive_size && memcmp(restored.bytes, archive_bytes, archive_size) == 0);
+
+    /* Another key opens nothing */
+    lantern_save_key* other = NULL;
+    REQUIRE_STATUS(lantern_save_key_generate(lea.random, NULL, &other, NULL), LANTERN_OK);
+    memory_sink nothing;
+    lantern_download_sink* nothing_out = memory_sink_make(&nothing);
+    lantern_download_sink* wrong       = NULL;
+    REQUIRE_STATUS(lantern_decrypting_sink_create(other, nothing_out, NULL, &wrong, NULL), LANTERN_OK);
+    lantern_download_state* again = NULL;
+    REQUIRE_STATUS(lantern_download_state_create(NULL, &again, NULL), LANTERN_OK);
+    CHECK(lantern_client_download_save(lea.client, save, again, wrong, &error) < 0);
+    CHECK(nothing.size == 0);
+
+    /* A small one in one request, with Lantern-Save-Encryption */
+    const char* small = "Frostline Tales, chapter 3";
+    uint8_t small_header[LANTERN_SAVE_HEADER_SIZE];
+    REQUIRE_STATUS(lantern_make_save_header(key, lea.random, small_header, NULL), LANTERN_OK);
+    lantern_string* sealed = NULL;
+    REQUIRE_STATUS(
+        lantern_encrypt_save(key, small_header, (const uint8_t*)small, strlen(small), NULL, &sealed, NULL),
+        LANTERN_OK);
+    lantern_save_info info = LANTERN_INIT(lantern_save_info);
+    info.kind              = "account";
+    info.encryption_key_id = id;
+    lantern_save* one      = NULL;
+    REQUIRE_CALL(
+        lantern_client_upload_save(lea.client, FROSTLINE, (const uint8_t*)lantern_string_view(sealed).data,
+            lantern_string_view(sealed).size, &info, &one, &error),
+        LANTERN_OK, &error);
+    CHECK(lantern_save_get_encryption(one) != NULL);
+    REQUIRE_CALL(lantern_client_delete_save(lea.client, one, &error), LANTERN_OK, &error);
+    REQUIRE_CALL(lantern_client_delete_save(lea.client, save, &error), LANTERN_OK, &error);
+
+    lantern_save_free(one);
+    lantern_string_free(sealed);
+    lantern_download_state_free(again);
+    lantern_download_sink_free(wrong);
+    lantern_download_sink_free(nothing_out);
+    memory_sink_clear(&nothing);
+    lantern_save_key_free(other);
+    lantern_download_state_free(state);
+    lantern_download_sink_free(opening);
+    lantern_download_sink_free(out);
+    memory_sink_clear(&restored);
+    lantern_save_free(save);
+    lantern_upload_progress_free(progress);
+    lantern_upload_source_free(encrypting);
+    lantern_upload_source_free(clear);
+    free(archive_bytes);
+    lantern_save_key_free(key);
+    device_close(&lea);
+}
+
+static void v05_account_deletion(void)
+{
+    device lea;
+    OPEN(lea, "LANTERN_TEST_PRIVATE", "switch", true);
+    lantern_error error              = LANTERN_INIT(lantern_error);
+    const char* const scopes[]       = { "library" };
+    lantern_admin_user_create create = LANTERN_INIT(lantern_admin_user_create);
+    create.name                      = "ines";
+    create.scopes                    = scopes;
+    create.scope_count               = 1;
+    lantern_admin_user* user         = NULL;
+    REQUIRE_CALL(lantern_client_admin_create_user(lea.client, &create, &user, &error), LANTERN_OK, &error);
+    lantern_admin_user_free(user);
+    CHECK(lantern_client_admin_delete_user(lea.client, "ines", "ine", &error) < 0);
+    REQUIRE_CALL(lantern_client_admin_delete_user(lea.client, "ines", "ines", &error), LANTERN_OK, &error);
+    lantern_admin_users* users = NULL;
+    REQUIRE_CALL(lantern_client_admin_users(lea.client, NULL, &users, &error), LANTERN_OK, &error);
+    for (size_t i = 0; i < lantern_admin_users_get_items_count(users); ++i)
+        CHECK(!STR_EQ(lantern_admin_user_get_name(lantern_admin_users_get_items_at(users, i)), "ines"));
+    lantern_admin_users_free(users);
+    CHECK_STATUS(
+        lantern_client_admin_delete_user(lea.client, "ines", "ines", &error), LANTERN_ERROR_PROTOCOL);
+    CHECK(error.http_status == 404);
+    CHECK_STATUS(
+        lantern_client_admin_delete_user(lea.client, "mila", "mila", &error), LANTERN_ERROR_PROTOCOL);
+    CHECK(error.http_status == 409);
+    device_close(&lea);
+}
+
+/* A static library's folder, read through the device's own files. */
+static int folder_reads;
+static lantern_status folder_read(
+    void* user, lantern_str path, uint64_t offset, lantern_download_sink* sink, bool* found)
+{
+    const char* root = user;
+    ++folder_reads;
+    if (!lantern_is_static_path(path.data))
+        return LANTERN_ERROR_INVALID_RESPONSE;
+    char full[1024];
+    snprintf(full, sizeof(full), "%s/%s", root, path.data);
+    FILE* file = fopen(full, "rb");
+    if (file == NULL)
+    {
+        *found = false;
+        return LANTERN_OK;
+    }
+    if (offset != 0 && fseek(file, (long)offset, SEEK_SET) != 0)
+    {
+        fclose(file);
+        return LANTERN_ERROR_STORAGE;
+    }
+    uint8_t buffer[4096];
+    size_t got = 0;
+    while ((got = fread(buffer, 1, sizeof(buffer), file)) > 0)
+    {
+        if (lantern_download_sink_write(sink, buffer, got, NULL) != LANTERN_OK)
+        {
+            fclose(file);
+            return LANTERN_ERROR_STORAGE;
+        }
+    }
+    fclose(file);
+    return LANTERN_OK;
+}
+
+static int compare_ids(const void* a, const void* b)
+{
+    return strcmp((const char*)a, (const char*)b);
+}
+
+static void v05_static_library(void)
+{
+    lantern_transport* transport = test_loopback_transport(0);
+    REQUIRE(transport != NULL);
+    lantern_error error        = LANTERN_INIT(lantern_error);
+    lantern_static_files* http = NULL;
+    REQUIRE_CALL(lantern_static_files_create_http(
+                     transport, env("LANTERN_TEST_STATIC"), "LanternCTests/0.5", NULL, &http, &error),
+        LANTERN_OK, &error);
+    lantern_static_files_callbacks callbacks = LANTERN_INIT(lantern_static_files_callbacks);
+    char root[512];
+    snprintf(root, sizeof(root), "%s", env("LANTERN_TEST_STATIC_DIR"));
+    callbacks.user               = root;
+    callbacks.read               = folder_read;
+    lantern_static_files* folder = NULL;
+    REQUIRE_STATUS(lantern_static_files_create(&callbacks, NULL, &folder, NULL), LANTERN_OK);
+    device server;
+    OPEN(server, "LANTERN_TEST_PUBLIC", "switch", false);
+    lantern_static_files* sources[] = { http, folder };
+    folder_reads                    = 0;
+    for (size_t s = 0; s < 2; ++s)
+    {
+        lantern_static_library* library = NULL;
+        REQUIRE_CALL(
+            lantern_static_library_open(sources[s], NULL, NULL, &library, &error), LANTERN_OK, &error);
+        const lantern_handshake* shake = lantern_static_library_handshake(library);
+        CHECK(STR_EQ(lantern_handshake_get_base(shake), "."));
+        uint64_t page_size = 0;
+        CHECK(lantern_handshake_static_get_page_size(lantern_handshake_get_static(shake), &page_size)
+            && page_size == 2);
+
+        /* Every page of the Switch's apps, chained by their cursors */
+        char cursor[256]         = "";
+        lantern_apps_page* first = NULL;
+        size_t apps              = 0;
+        for (int pages = 0; pages < 1000; ++pages)
+        {
+            lantern_apps_page* page = NULL;
+            REQUIRE_CALL(
+                lantern_static_library_apps(library, "switch", cursor, &page, &error), LANTERN_OK, &error);
+            apps += lantern_apps_page_get_items_count(page);
+            snprintf(cursor, sizeof(cursor), "%s", lantern_apps_page_get_next(page).data);
+            if (first == NULL)
+                first = page;
+            else
+                lantern_apps_page_free(page);
+            if (cursor[0] == '\0')
+                break;
+        }
+        REQUIRE(apps > 0);
+
+        /* What a Switch with Frostline Tales 1.0 is missing: as the server says */
+        const lantern_installed_app installed[] = { { FROSTLINE, 0 } };
+        const char* const want[]                = { "update", "dlc", "base" };
+        lantern_missing_request request         = LANTERN_INIT(lantern_missing_request);
+        request.installed                       = installed;
+        request.installed_count                 = 1;
+        request.want                            = want;
+        request.want_count                      = 3;
+        lantern_app_list* computed              = NULL;
+        REQUIRE_CALL(lantern_static_library_missing(library, "switch", &request, &computed, &error),
+            LANTERN_OK, &error);
+        lantern_apps_page* answered = NULL;
+        REQUIRE_CALL(lantern_client_missing(server.client, &request, NULL, NULL, &answered, &error),
+            LANTERN_OK, &error);
+        REQUIRE(lantern_app_list_count(computed) == lantern_apps_page_get_items_count(answered));
+        char ours[16][64];
+        char theirs[16][64];
+        memset(ours, 0, sizeof(ours));
+        memset(theirs, 0, sizeof(theirs));
+        const size_t count = lantern_app_list_count(computed);
+        REQUIRE(count <= 16);
+        for (size_t i = 0; i < count; ++i)
+        {
+            snprintf(ours[i], 64, "%s", lantern_app_get_app_id(lantern_app_list_at(computed, i)).data);
+            snprintf(theirs[i], 64, "%s",
+                lantern_app_get_app_id(lantern_apps_page_get_items_at(answered, i)).data);
+        }
+        qsort(ours, count, 64, compare_ids);
+        qsort(theirs, count, 64, compare_ids);
+        CHECK(memcmp(ours, theirs, count * 64) == 0);
+        lantern_app_list_free(computed);
+        lantern_apps_page_free(answered);
+
+        /* A file, checked; a title and a homebrew entry where § 21.1 puts them */
+        const lantern_app* app = lantern_apps_page_get_items_at(first, 0);
+        lantern_download_target target;
+        target_of_app(app, &target);
+        memory_sink sink;
+        lantern_download_sink* out    = memory_sink_make(&sink);
+        lantern_download_state* state = NULL;
+        REQUIRE_STATUS(lantern_download_state_create(NULL, &state, NULL), LANTERN_OK);
+        REQUIRE_CALL(
+            lantern_static_library_download(library, &target, state, out, &error), LANTERN_OK, &error);
+        CHECK(sink.size == target.size);
+        lantern_title* title = NULL;
+        REQUIRE_CALL(lantern_static_library_title(
+                         library, "switch", lantern_app_get_title_id(app).data, &title, &error),
+            LANTERN_OK, &error);
+        lantern_title_free(title);
+        lantern_homebrew_page* homebrew = NULL;
+        REQUIRE_CALL(
+            lantern_static_library_homebrew(library, "switch", NULL, &homebrew, &error), LANTERN_OK, &error);
+        REQUIRE(lantern_homebrew_page_get_items_count(homebrew) > 0);
+        lantern_homebrew* entry = NULL;
+        REQUIRE_CALL(lantern_static_library_homebrew_entry(library, "switch",
+                         lantern_homebrew_get_id(lantern_homebrew_page_get_items_at(homebrew, 0)).data,
+                         &entry, &error),
+            LANTERN_OK, &error);
+        lantern_install_plan* plan = NULL;
+        CHECK_CALL(lantern_plan_install(entry, lantern_homebrew_get_package(entry), NULL, &plan, &error),
+            LANTERN_OK, &error);
+        lantern_install_plan_free(plan);
+        const lantern_installed_homebrew old[]   = { { lantern_homebrew_get_id(entry).data, 0 } };
+        lantern_homebrew_updates_request updates = LANTERN_INIT(lantern_homebrew_updates_request);
+        updates.installed                        = old;
+        updates.installed_count                  = 1;
+        lantern_homebrew_list* newer             = NULL;
+        REQUIRE_CALL(lantern_static_library_homebrew_updates(library, "switch", &updates, &newer, &error),
+            LANTERN_OK, &error);
+        CHECK(lantern_homebrew_list_count(newer) == 1);
+        lantern_homebrew_list_free(newer);
+        lantern_homebrew_free(entry);
+        lantern_homebrew_page_free(homebrew);
+        lantern_cheat_sets* cheats = NULL;
+        CHECK(lantern_static_library_cheats(library, "switch", FROSTLINE, &cheats, &error) >= 0);
+        lantern_cheat_sets_free(cheats);
+        lantern_download_state_free(state);
+        lantern_download_sink_free(out);
+        memory_sink_clear(&sink);
+        lantern_apps_page_free(first);
+        lantern_static_library_free(library);
+    }
+    CHECK(folder_reads > 0);
+    device_close(&server);
+    lantern_static_files_free(folder);
+    lantern_static_files_free(http);
+    lantern_transport_free(transport);
+}
+
 int main(int argc, char** argv)
 {
     static const test_case tests[] = {
@@ -1145,6 +1809,14 @@ int main(int argc, char** argv)
         { "integration: cheat sets written", cheats_written },
         { "integration: requests", requests },
         { "integration: discovery on loopback", discovery_on_loopback },
+        { "integration v05: the handshake's new families and limits", v05_families },
+        { "integration v05: the event stream, resumed, and long polling", v05_events },
+        { "integration v05: a grant, the peer's file with it, a mirror", v05_grants_peers_mirrors },
+        { "integration v05: the peer answers discovery", v05_peer_discovery },
+        { "integration v05: sync with consent, If-Match, deletion, the generation", v05_sync },
+        { "integration v05: an encrypted backup, resumable and whole, opened back", v05_encrypted_backups },
+        { "integration v05: an account deleted, its name typed again", v05_account_deletion },
+        { "integration v05: the static library, over HTTP and from its folder", v05_static_library },
     };
     const test_case* const lists[] = { tests };
     const size_t counts[]          = { sizeof(tests) / sizeof(tests[0]) };

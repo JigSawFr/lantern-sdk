@@ -46,6 +46,10 @@ READER(admin_devices)
 READER(admin_pairings)
 READER(invitations)
 READER(invitation)
+READER(peer_reply)
+READER(grant)
+READER(sync_state)
+READER(sync_collection)
 
 typedef lantern_status (*reader)(const char* text, size_t size, bool* present, lantern_error* error);
 
@@ -80,6 +84,10 @@ static const struct
     { "admin-pairings.json", try_admin_pairings },
     { "invitations.json", try_invitations },
     { "invitation.json", try_invitation },
+    { "discovery-peer.json", try_peer_reply },
+    { "grant.json", try_grant },
+    { "sync.json", try_sync_state },
+    { "sync-collection.json", try_sync_collection },
 };
 
 static char* example(const char* file, size_t* size)

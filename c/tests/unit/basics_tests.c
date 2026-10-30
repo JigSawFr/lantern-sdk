@@ -11,7 +11,7 @@ static void versions(void)
 {
     CHECK(lantern_version() == LANTERN_C_API_VERSION);
     CHECK(strcmp(lantern_version_string(), LANTERN_VERSION_STRING) == 0);
-    CHECK(strcmp(lantern_spec_draft(), "0.4") == 0);
+    CHECK(strcmp(lantern_spec_draft(), "0.5") == 0);
     CHECK(LANTERN_KNOWN_SCHEMA == 1);
 }
 

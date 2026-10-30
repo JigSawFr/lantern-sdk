@@ -18,5 +18,7 @@ extern const test_case homebrew_tests[];
 extern const size_t homebrew_test_count;
 extern const test_case discovery_tests[];
 extern const size_t discovery_test_count;
+extern const test_case v05_tests[];
+extern const size_t v05_test_count;
 
 #endif
