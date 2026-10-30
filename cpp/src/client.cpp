@@ -161,8 +161,7 @@ class SignedHeaders final : public HeaderSink
 
     Result<void> add(std::string_view name, std::string_view value) override
     {
-        if (name.empty() || !header_value(name) || !header_value(value)
-            || name.find(':') != std::string_view::npos)
+        if (name.empty() || !header_value(name) || !header_value(value) || name.contains(':'))
             return fail(Category::usage, "a signer's header that is not a header");
         headers_.emplace_back();
         headers_.back().first.assign(name);

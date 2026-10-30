@@ -41,6 +41,12 @@
 #   performance-noexcept-move-constructor: the documents' move assignment
 #   copies when the two sides use different memory resources (pmr), so it
 #   may allocate and cannot be noexcept
+# - cppcoreguidelines-pro-bounds-avoid-unchecked-container-access: as the
+#   constant-array-index check above, indices the code has bounded
+# - portability-avoid-pragma-once: every compiler of the CI's platforms
+#   knows it, and Aurore uses it
+# - readability-inconsistent-ifelse-braces: Aurore's style, as
+#   readability-braces-around-statements
 Checks: >
   -*,
   bugprone-*,
@@ -76,7 +82,10 @@ Checks: >
   -bugprone-exception-escape,
   -bugprone-suspicious-stringview-data-usage,
   -cppcoreguidelines-noexcept-move-operations,
-  -performance-noexcept-move-constructor
+  -performance-noexcept-move-constructor,
+  -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,
+  -portability-avoid-pragma-once,
+  -readability-inconsistent-ifelse-braces
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*/include/lantern/.*'
 CheckOptions:

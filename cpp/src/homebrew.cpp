@@ -65,7 +65,7 @@ bool single_file_in_place(std::string_view where, std::string_view id, std::stri
     }
     const std::string_view place(buffer.data(), size);
     if (!place.empty() && place.back() == '/')
-        return strictly_under(place, path) && path.substr(place.size()).find('/') == std::string_view::npos;
+        return strictly_under(place, path) && !path.substr(place.size()).contains('/');
     return path == place;
 }
 

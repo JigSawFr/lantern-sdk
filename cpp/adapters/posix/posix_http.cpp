@@ -181,7 +181,7 @@ Result<void> LoopbackTransport::send(const Request& request, ResponseHandler& ha
     head.append("\r\n");
     for (const Header& header : request.headers)
     {
-        if (!clean(header.name) || !clean(header.value) || header.name.find(':') != std::string_view::npos)
+        if (!clean(header.name) || !clean(header.value) || header.name.contains(':'))
             return fail(Category::usage, "a header that would break the request");
         head.append(header.name);
         head.append(": ");

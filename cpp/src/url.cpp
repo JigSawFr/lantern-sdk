@@ -42,13 +42,13 @@ Result<UrlParts> split_url(std::string_view url) noexcept
     const std::size_t slash     = std::min(rest.find_first_of("/?#"), rest.size());
     out.authority               = rest.substr(0, slash);
     out.target                  = rest.substr(slash);
-    if (out.target.find('#') != std::string_view::npos)
+    if (out.target.contains('#'))
         return fail(Category::usage, "a URL with a fragment");
     if (out.target.empty())
         out.target = "/";
     else if (out.target.front() != '/')
         return fail(Category::usage, "a URL whose path does not start with /");
-    if (out.authority.empty() || out.authority.find('@') != std::string_view::npos)
+    if (out.authority.empty() || out.authority.contains('@'))
         return fail(Category::usage, "a URL without a host, or with user information");
     std::string_view port_text;
     if (out.authority.front() == '[')
