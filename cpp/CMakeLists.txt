@@ -34,15 +34,34 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 include(cmake/LanternWarnings.cmake)
 
+# Monocypher (third_party/monocypher, THIRD_PARTY_NOTICES.md): ed25519 checks
+# only. Built as its own object library, with its own (lower) warnings: it is
+# vendored as published and never edited
+add_library(lantern_monocypher OBJECT
+    third_party/monocypher/monocypher.c
+    third_party/monocypher/monocypher-ed25519.c)
+target_include_directories(lantern_monocypher PRIVATE third_party/monocypher)
+set_target_properties(lantern_monocypher PROPERTIES
+    C_STANDARD 99
+    C_STANDARD_REQUIRED ON
+    POSITION_INDEPENDENT_CODE ON)
+
 add_library(lantern
     src/digest.cpp
     src/document.cpp
+    src/ed25519.cpp
     src/encoding.cpp
     src/error.cpp
     src/generated/types.cpp
+    src/homebrew.cpp
     src/json.cpp
     src/memory.cpp
-    src/sha256.cpp)
+    src/paths.cpp
+    src/pinning.cpp
+    src/profiles.cpp
+    src/requires.cpp
+    src/sha256.cpp
+    $<TARGET_OBJECTS:lantern_monocypher>)
 add_library(Lantern::lantern ALIAS lantern)
 
 target_compile_features(lantern PUBLIC cxx_std_23)
@@ -54,10 +73,13 @@ set_target_properties(lantern PROPERTIES
 target_include_directories(lantern
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    PRIVATE
+        third_party/monocypher)
 lantern_warnings(lantern)
 
 if (LANTERN_NO_EXCEPTIONS)
+    lantern_no_exceptions(lantern_monocypher)
     lantern_no_exceptions(lantern)
 endif ()
 
