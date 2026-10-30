@@ -94,6 +94,11 @@ if (LANTERN_BUILD_TESTS OR LANTERN_BUILD_EXAMPLES OR LANTERN_BUILD_FUZZERS)
     endif ()
 endif ()
 
+if (LANTERN_BUILD_TESTS OR LANTERN_BUILD_FUZZERS)
+    enable_testing()
+    add_subdirectory(tests)
+endif ()
+
 if (LANTERN_BUILD_EXAMPLES AND NOT WIN32)
     add_subdirectory(examples)
 endif ()
