@@ -72,7 +72,7 @@ def test_handshake(app: LanternApp) -> None:
         "library": 1,
         "titles": 1,
         "changes": 1,
-        "sections": 0,
+        "sections": 1,
         "homebrew": 1,
         "saves": 0,
         "cheats": 1,
@@ -431,14 +431,21 @@ def test_cheats(app: LanternApp) -> None:
     problem(call(app, "GET", BASE + f"/cheats/{first['id']}", Lantern_Platform="android"), 404, "not_found")
     problem(call(app, "GET", BASE + "/cheats/cs_nothing"), 404, "not_found")
     problem(call(app, "GET", BASE + "/cheats", query={"build_id": "not a build"}), 400, "bad_request")
-    r = call(app, "POST", BASE + "/cheats", body={"schema": 1})
+    # Writing a set needs cheats.write (SPEC.md § 10): refused without it; 405 where the server takes none.
+    problem(call(app, "POST", BASE + "/cheats", body={"schema": 1}), 403, "forbidden")
+    r = call(make_lantern(cheat_writes=False), "POST", BASE + "/cheats", body={"schema": 1})
     problem(r, 405, "bad_request")
     assert r.headers["Allow"] == "GET, HEAD"
 
 
 def test_families_at_zero_and_unknown_routes(app: LanternApp) -> None:
-    for path in ("/sections", "/saves", "/requests", "/pairing", "/nothing/here"):
+    for path in ("/pairing", "/nothing/here"):
         problem(call(app, "GET", BASE + path), 404, "not_found")
+    for path in ("/saves", "/requests"):  # an account's own: not without a token (SPEC.md § 4.2)
+        problem(call(app, "GET", BASE + path), 401, "unauthorized")
+    bare = LanternApp(MemoryLibrary(families=("library",)), uid="u", name="Bare shelf")
+    for path in ("/sections", "/saves", "/requests", "/cheats", "/titles/0100AB1200010000"):
+        problem(call(bare, "GET", BASE + path), 404, "not_found")
     problem(call(app, "GET", "/api/elsewhere"), 404, "not_found")
     head = call(app, "HEAD", BASE + "/nothing")
     assert head.status == 404 and head.body == b"" and int(head.headers["Content-Length"]) > 0

@@ -13,12 +13,15 @@ malicious test server for clients. It follows the specification's **draft
 route of the protocol: pairing with a device key, requests signed by it
 (RFC 9421), the writes, LAN discovery; event streams and long polls, files
 from mirrors and peers, sync with its user's consent, backups encrypted on
-the device, and static libraries. The server toolkit pairs devices, checks
-signed requests, serves the read routes, invitations, rating caps and the
-administration API, events, grants and sync; it reaches **Lantern Core
-+titles +homebrew +cheats +admin +events +peers +sync** in the
-specification's conformance suite, its peer passes the suite's `--peer`,
-and what its generator writes, **Lantern Static**. See
+the device, and static libraries. The server toolkit offers every family
+of the draft: it pairs devices, checks signed requests, serves the read
+routes and sections, takes cheat sets written, keeps save backups (by
+resumable upload too, and encrypted ones as sent) and requests, answers
+invitations, rating caps and the administration API, events, grants and
+sync; it reaches **Lantern Core +titles +homebrew +saves +cheats +requests
++admin +events +peers +sync +encrypted_saves**, every level of the draft,
+in the specification's conformance suite, its peer passes the suite's
+`--peer`, and what its generator writes, **Lantern Static**. See
 [What is not there yet](#what-is-not-there-yet). Nothing is published on
 PyPI before the first release.
 
@@ -400,8 +403,8 @@ the accounts that hold it:
   listing and answers `404`, as if the server had none;
 - the administration API (§ 5.7): accounts, devices (never their token or
   its hash), waiting pairings, invitations; deleting an account, confirmed
-  by its name, whose devices, invitations, pairings and sync data go at
-  once.
+  by its name, whose devices, invitations, pairings, save backups, requests
+  and sync data go at once.
 
 Draft 0.5's families, each an option of `LanternApp`:
 
@@ -423,6 +426,61 @@ Draft 0.5's families, each an option of `LanternApp`:
   deletions kept 30 days, `limits.sync_items`; a device writes its own item
   of `installed` only (`d_` and 16 hex digits, the ids MemoryAccounts
   gives).
+
+### Save backups, requests, cheat sets written, sections
+
+```python
+from lantern.server import FileSaveStore, LanternApp, MemoryRequests, SaveLimits
+
+app = LanternApp(
+    library,
+    uid=SERVER_UID,
+    name="Living room shelf",
+    accounts=accounts,
+    saves=FileSaveStore("/var/lib/shelf/saves"),  # or MemorySaveStore(), or a SaveStore of the server's own
+    save_limits=SaveLimits(body=8 << 20, size=1 << 30, kept=10, chunk=1 << 20),
+    requests=MemoryRequests(),  # or a RequestStore of the server's own
+)
+app.answer_request(request_id, "done")  # or "declined": the account's devices get the event
+```
+
+- save backups (§ 9), with `saves`, to the accounts with the scope `saves`:
+  the listing, newest first per title; a save in one request, with its
+  `Content-Digest` checked (`400` without, `422 digest_mismatch`), its
+  `kind`, `slot`, game version, `profile` and `note` from the headers;
+  resumable uploads (`POST …/uploads`, `PATCH` with `Upload-Offset`, `409`
+  with the server's offset, `HEAD`, `DELETE`, the whole archive's SHA-256
+  checked at the end, gone after `upload_hours`); downloads with ranges;
+  deletion; the oldest dropped beyond `saves_kept_per_title`; the
+  handshake's `save_body`, `save_size` and `saves_kept_per_title`. A save
+  needs a platform and a title id of its form, and is a zip; the event
+  `save` tells the account's devices of each one kept. `FileSaveStore`
+  keeps an `index.json` with its `schema` (one of a newer schema is read
+  as empty and never written over), the archives and the uploads' parts;
+- encrypted backups (§ 9.4), on by default with `saves`
+  (`encrypted_saves=False` refuses them with `400`): kept as sent, listed
+  with their `encryption`; the server checks only that they begin with
+  `LTNE2E01` and their key id, and never decrypts them;
+- requests (§ 11), with `requests`, to the accounts with the scope
+  `requests`: one open request per title (asked again, the same one,
+  `200`), withdrawn by its account, `done` when an app of its title
+  arrives in a MemoryLibrary, `done` or `declined` by `answer_request()`
+  (the draft 0.5 has no route for it: the server's own pages call it), and
+  the event `request` on each change; `all_requests()` lists everyone's;
+- cheat sets written (§ 10), on a library that writes them (a
+  `CheatWriter`, as MemoryLibrary is), to the accounts with `cheats.write`:
+  `POST` (`409` for a set of the same platform, title, build and source),
+  `PUT` of its text and note, `DELETE`; the platform's title id, build id
+  and format (Atmosphère's and Luma3DS's codes, JSON for GoldHEN), 1 MiB at
+  most. `cheat_writes=False` answers `405`;
+- sections (§ 6.5), on a library that curates them (a `SectionSource`;
+  `MemoryLibrary.add_section("new", "New this month", app_ids)`): each
+  caller sees the apps of its platform and within its rating cap, and no
+  shelf left empty.
+
+Deleting an account erases its backups, uploads and requests with the
+rest. The Flask and FastAPI adapters read bodies up to `app.body_limit`: a
+save sent in one request, a chunk, a cheat set's document.
 
 ### A peer
 
@@ -468,15 +526,18 @@ What `LanternApp` serves, besides what the previous section says:
   files with `ETag`, `Repr-Digest` and ranges; `changes` with a journal;
 - `titles`: one, many, and their changes;
 - `homebrew`: listing (without manifests), entries, updates;
-- `cheats`: sets and their text;
+- `cheats`: sets and their text, and writing them (above);
+- `sections`, `saves`, `encrypted_saves` and `requests` (above);
 - problem+json for every error, `400` for a platform name that is not one,
   `422` for a request document of a newer schema, `ETag` and `304`,
   `Cache-Control` and `Vary`.
 
-The families it does not offer (sections, saves, encrypted saves,
-requests; pairing, signatures and admin without `accounts`; peers without a
-grant key, sync without a store) are at 0 in the handshake, and their
-routes answer `404`. JSON is compressed as `Accept-Encoding` asks
+The families it does not offer (sections without a library that curates
+them; saves and encrypted saves, requests and sync without their store;
+pairing, signatures and admin without `accounts`; peers without a grant
+key) are at 0 in the handshake, and their routes answer `404`; those that
+keep an account's own data (saves, requests, sync, admin) answer `401`
+without a token. JSON is compressed as `Accept-Encoding` asks
 (zstd on Python 3.14, gzip before), problems say their `language`, and a
 body above the adapter's limit is read and answered `413`. Each piece is usable on
 its own: `json_response()`, `problem_response()`, `file_response()`,
@@ -535,11 +596,11 @@ that a harness checks what its client sent. The TLS scenarios need the
 
 ## What is not there yet
 
-- In the server toolkit: sections, saves (and so encrypted saves), cheat
-  writes and requests (their families are at 0, their routes answer `404`
-  or `405`), and the routes it could mark deprecated (`Deprecation`,
-  `Sunset`). Its event streams live in one process: a server of several
-  processes gives each its own, or shares a hub of its own making.
+- In the server toolkit: the routes it could mark deprecated
+  (`Deprecation`, `Sunset`), and a store of requests on disk (a server
+  gives its own `RequestStore`). Its event streams, and its locks of saves
+  and requests, live in one process: a server of several processes gives
+  each its own, or shares stores and a hub of its own making.
 - In `AsyncLanternClient`: `download_from()`, the mirrors' and peers', which
   `LanternClient` alone has.
 - Drawing the QR code of `verify_complete`: the client gives its text; an
@@ -572,7 +633,8 @@ a folder and over HTTP; and DNS-SD on loopback. `pytest -m conformance`
 runs the specification's conformance suite against the demo server
 (`tests/demo.py`), through Flask and FastAPI, anonymously and with a token
 bound to its key, with a peer of the toolkit and LAN discovery: it reaches
-Lantern Core +titles +homebrew +cheats +admin +events +peers +sync; and
+Lantern Core +titles +homebrew +saves +cheats +requests +admin +events
++peers +sync +encrypted_saves, every level of the draft 0.5; and
 against the static library the generator writes (`--static`): Lantern
 Static. `tests/test_hostile.py` runs the client against the malicious test
 server.

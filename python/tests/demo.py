@@ -15,10 +15,12 @@ a token. Two ways:
   device key DEMO_KEY: every request it carries is signed.
 
 `python tests/demo.py` serves the second, and `--key-file` writes DEMO_KEY's
-seed (base64) where the conformance suite's `--key` reads it. Both stream
-events (a heartbeat of 5 s), give grants (GRANT_SEED) and keep sync data in
-memory. `--static OUT` writes the demo's library as a static library
-(lantern.static), for the suite's `--static`, and exits.
+seed (base64) where the conformance suite's `--key` reads it. Both curate
+sections, take cheat sets written with cheats.write, stream events (a
+heartbeat of 5 s), give grants (GRANT_SEED), and keep save backups
+(encrypted ones among them), requests and sync data in memory. `--static
+OUT` writes the demo's library as a static library (lantern.static), for
+the suite's `--static`, and exits.
 """
 
 from __future__ import annotations
@@ -57,8 +59,10 @@ from lantern.models import (
     Title,
 )
 from lantern.server import Account, LanternApp, MemoryLibrary, ServerRequest, make_package
-from lantern.server.accounts import MemoryAccounts, User
+from lantern.server.accounts import SCOPES, MemoryAccounts, User
+from lantern.server.saves import MemorySaveStore
 from lantern.server.sync import MemorySync
+from lantern.server.title_requests import MemoryRequests
 from lantern.signatures import DeviceKey
 
 UID = "3d5c7e1a-0b2f-4c6d-9e8a-1f2b3c4d5e6f"
@@ -66,7 +70,7 @@ DEMO_TOKEN = "et_demo-0123456789abcdef0123456789abcdef"
 #: The demo device's key, made from a fixed phrase: for the demo only, never a real device's.
 DEMO_KEY = DeviceKey(hashlib.sha256(b"Mira's fictional console key").digest())
 #: Every scope the demo serves: its admin's.
-EVERY_SCOPE = ("library", "cheats", "admin", "sync.read", "sync.write")
+EVERY_SCOPE = SCOPES
 SEED = hashlib.sha256(b"Mira's fictional signing key").digest()  # for the demo only
 #: The demo server's grant key (SPEC.md § 19.3), made from a fixed phrase: for the demo only.
 GRANT_SEED = hashlib.sha256(b"Demo shelf's fictional grant key").digest()
@@ -190,6 +194,9 @@ def build_library() -> MemoryLibrary:
         )
     )
     add_homebrew(lib)
+    apps = sorted(lib.apps(), key=lambda a: a.added or "", reverse=True)
+    lib.add_section("new", "New this month", [a.id for a in apps[:4]])
+    lib.add_section("co-op", "Play together", [a.id for a in apps if a.title_id == "0100AB1200010000"])
     lib.add_cheat(
         platform="switch",
         title_id="0100AB1200010000",
@@ -412,12 +419,14 @@ def demo_accounts() -> MemoryAccounts:
 
 def make_lantern(library: MemoryLibrary | None = None, **options: Any) -> LanternApp:
     """The demo: its library, events (a heartbeat of 5 s, the shortest, for quick runs), grants with
-    GRANT_SEED, and sync held in memory."""
+    GRANT_SEED, and save backups, requests and sync held in memory."""
     if "accounts" not in options:
         options["authenticate"] = authenticate
     options.setdefault("heartbeat", 5)
     options.setdefault("grant_seed", GRANT_SEED)
     options.setdefault("sync", MemorySync())
+    options.setdefault("saves", MemorySaveStore())
+    options.setdefault("requests", MemoryRequests())
     return LanternApp(
         library or build_library(),
         uid=UID,

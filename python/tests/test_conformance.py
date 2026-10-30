@@ -1,14 +1,15 @@
 """The specification's conformance suite (spec/conformance/run.py) against
 the demo server built from the toolkit (tests/demo.py), served by Flask and
-by FastAPI, anonymously and with a token. Families the toolkit does not
-offer (sections, saves, requests) are declared 0: the suite checks that
-their routes are refused, and skips the rest of them. The demo pairs
-devices, checks signed requests, answers the administration API (an account
-of the suite's own made, then deleted: --admin-writes), streams events,
-gives grants and keeps sync data; a peer of the toolkit (lantern.peer)
-serves its files, and both answer LAN discovery: with its token, bound to
-its key, it reaches the levels LEVELS says. Last, the static library the
-generator writes (lantern.static) passes --static."""
+by FastAPI, anonymously and with a token. The demo offers every family of
+the draft 0.5: it curates sections, pairs devices, checks signed requests,
+takes cheat sets written, keeps save backups (encrypted ones among them)
+and requests, answers the administration API (an account of the suite's
+own made, then deleted: --admin-writes), streams events, gives grants and
+keeps sync data; a peer of the toolkit (lantern.peer) serves its files, and
+both answer LAN discovery: with its token, bound to its key, it reaches
+every level LEVELS says. A demo that keeps no encrypted backup refuses one
+(§ 9.4). Last, the static library the generator writes (lantern.static)
+passes --static."""
 
 from __future__ import annotations
 
@@ -88,7 +89,6 @@ REQUIRED = [
     "cheats.sets",
     "cheats.text",
     "cheats.unknown",
-    "cheats.write",
     "schema.refused.library",
     "schema.refused.homebrew",
     "errors.unknown-route",
@@ -104,6 +104,8 @@ REQUIRED = [
         for f in ("library", "titles", "changes", "sections", "homebrew", "saves", "cheats", "requests", "pairing")
     ],
 ]
+# Without a token: writing a cheat set is refused.
+ANONYMOUS = ["cheats.write"]
 # Pairing, offered to every caller.
 REQUIRED += [
     "handshake.auth",
@@ -140,6 +142,22 @@ WITH_TOKEN = [
     "admin.users-write",
     "admin.users-delete",
     "compression.etag",
+    "cheats.write-cycle",
+    "requests.list",
+    "requests.create",
+    "requests.delete",
+    "saves.limits",
+    "saves.list",
+    "saves.no-platform",
+    "saves.upload",
+    "saves.read",
+    "saves.upload-digest",
+    "saves.upload-too-large",
+    "saves.single",
+    "saves.cleanup",
+    "e2e.upload",
+    "schema.refused.saves",
+    "schema.refused.requests",
     # Draft 0.5.
     "features.events",
     "features.peers",
@@ -170,8 +188,8 @@ WITH_TOKEN = [
     "invitations.rate-limit",
     "pairing.rate-limit",
 ]
-#: The levels the demo reaches with its token (SPEC.md § 17).
-LEVELS = "Lantern Core +titles +homebrew +cheats +admin +events +peers +sync"
+#: The levels the demo reaches with its token (SPEC.md § 17): every one of the draft 0.5.
+LEVELS = "Lantern Core +titles +homebrew +saves +cheats +requests +admin +events +peers +sync +encrypted_saves"
 
 
 def suite() -> ModuleType:
@@ -249,7 +267,7 @@ def test_the_suite_passes(framework: str, token: bool, tmp_path: Path) -> None:
     status = {m.group(2): m.group(1) for m in re.finditer(r"^(PASS|FAIL|WARN|SKIP)\s+§ \S+\s+(\S+)", report, re.M)}
     failed = [line for line in report.splitlines() if line.startswith("FAIL")]
     assert code == 0 and not failed, report
-    for check in REQUIRED + (WITH_TOKEN if token else []):
+    for check in REQUIRED + (WITH_TOKEN if token else ANONYMOUS):
         assert status.get(check) == "PASS", f"{check}: {status.get(check)}\n{report}"
     warnings = [cid for cid, s in status.items() if s == "WARN"]
     # Plain HTTP on loopback; and gzip without zstd, before Python 3.14 (the standard library has no zstd or br).
@@ -284,3 +302,40 @@ def test_the_generators_static_library(tmp_path: Path) -> None:
 
 def zstd_available() -> bool:
     return content_coding("zstd") == "zstd"
+
+
+def test_a_server_without_encrypted_saves(tmp_path: Path) -> None:
+    """A demo that keeps save backups but no encrypted one: it refuses one with 400 (SPEC.md § 9.4,
+    L-9.4-5), and reaches +saves without +encrypted_saves."""
+    pytest.importorskip("flask")
+    run = suite()
+    out = io.StringIO()
+    key = tmp_path / "demo.key"
+    key.write_text(DEMO_KEY.seed_b64(), encoding="ascii")
+    with serve("flask", make_lantern(accounts=demo_accounts(), encrypted_saves=False)) as url:
+        server_port = free_udp()
+        responder = DiscoveryResponder(
+            make_lantern(), int(url.rstrip("/").rsplit(":", 1)[1]), port=server_port, host="127.0.0.1"
+        ).start()
+        try:
+            code = run.main(
+                [
+                    url,
+                    "--token",
+                    DEMO_TOKEN,
+                    "--key",
+                    str(key),
+                    "--discover",
+                    "127.0.0.1",
+                    "--discover-port",
+                    str(server_port),
+                ],
+                out=out,
+            )
+        finally:
+            responder.stop()
+    report = out.getvalue()
+    assert code == 0 and "\nFAIL" not in report, report
+    assert re.search(r"^PASS\s+§ 9\.4\s+e2e\.not-offered\s", report, re.M), report
+    levels = next(line for line in report.splitlines() if line.startswith("Levels reached"))
+    assert "+saves" in levels and "+encrypted_saves" not in levels, levels

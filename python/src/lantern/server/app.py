@@ -7,9 +7,13 @@ serve Lantern.
 
 It answers the handshake (at /.well-known/lantern and <base>/v1/), the
 families library (apps, what is missing, files), changes (with a journal),
-titles, homebrew and cheats (reading); events (a stream and long polling,
-§ 18), grants for peers (with a grant key, § 19.3) and sync (with a sync
-store, § 20); and refuses the others with 404 (their features are 0).
+sections (with a library that curates them), titles, homebrew and cheats
+(reading them, and writing them with the scope cheats.write); save backups
+(with a save store, § 9: in one request and by resumable upload), and
+encrypted ones kept as sent (§ 9.4); requests (with a request store, § 11);
+events (a stream and long polling, § 18), grants for peers (with a grant
+key, § 19.3) and sync (with a sync store, § 20); and refuses the others with
+404 (their features are 0).
 
 Who calls is decided one of two ways:
 
@@ -27,16 +31,21 @@ from __future__ import annotations
 
 import base64
 import binascii
+import dataclasses
 import hashlib
+import json
+import re
 import secrets
+import threading
 import time
 import traceback
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from typing import TypeVar
+from typing import TypeVar, cast
+from urllib.parse import unquote
 
-from lantern import ed25519, ratings, schema
+from lantern import e2e, ed25519, ratings, schema
 from lantern import signatures as sig
 from lantern import sync as syncing
 from lantern._base import SCHEMA, DocumentError, JSONObject, JSONValue
@@ -46,6 +55,8 @@ from lantern._generated.models import (
     AdminUserUpdate,
     App,
     CheatSet,
+    CheatWrite,
+    Encryption,
     Homebrew,
     HomebrewUpdatesRequest,
     InvitationCreate,
@@ -53,14 +64,18 @@ from lantern._generated.models import (
     PairingRequest,
     Rating,
     RatingCap,
+    RequestCreate,
+    Save,
     SyncWrite,
     Title,
+    UploadRequest,
 )
 from lantern.digest import digest_sha256, sha256_hex
 from lantern.grants import LIFETIME_LIMIT, make_grant
-from lantern.http import Headers
-from lantern.limits import NAME, NOTE, TITLES_AT_ONCE, printable
+from lantern.http import Headers, media_type
+from lantern.limits import CHEAT_SET, NAME, NOTE, PROFILE, STRING_CAPS, TITLES_AT_ONCE, printable
 from lantern.missing import missing
+from lantern.profiles import profile, title_id_ok
 from lantern.server.accounts import (
     ACCOUNT_NAME,
     SCOPES,
@@ -75,6 +90,7 @@ from lantern.server.accounts import (
 from lantern.server.events import EVENT_SCOPES, EventHub, EventStreamBody, LibraryChange, Recorded
 from lantern.server.files import file_response
 from lantern.server.http import (
+    BODY_LIMIT,
     ProblemError,
     ServerRequest,
     ServerResponse,
@@ -89,10 +105,21 @@ from lantern.server.http import (
     read_document,
     unauthorized,
 )
-from lantern.server.library import Account, Authenticate, Library
+from lantern.server.library import Account, Authenticate, CheatWriter, Library, SectionSource
 from lantern.server.paging import Cursors, Sealer, SinceTokens, SortKey, page_size
 from lantern.server.pairing import Limiter, PairingDesk, Pending, approval_page, slow_down
+from lantern.server.saves import (
+    SAVE_KINDS,
+    SLOT,
+    ZIP_STARTS,
+    SaveLimits,
+    SaveStore,
+    UploadSession,
+    new_save_id,
+    new_upload_id,
+)
 from lantern.server.sync import SyncStore
+from lantern.server.title_requests import OPEN_LIMIT, STATUSES, RequestStore, StoredRequest, new_request_id
 from lantern.spki import short as spki_short
 from lantern.vocabulary import BUILD_ID, CORE_ID, FAMILIES, HOMEBREW_ID, PLATFORM, SHA256, WORD
 
@@ -102,7 +129,12 @@ SCOPE_OF = {
     "titles": "library",
     "changes": "library",
     "homebrew": "library",
+    "sections": "library",
     "cheats": "cheats",
+    "cheats.write": "cheats.write",
+    "saves": "saves",
+    "encrypted_saves": "saves",
+    "requests": "requests",
     "admin": "admin",
     "peers": "library",
     "sync": "sync.read",
@@ -112,7 +144,18 @@ SCOPE_OF = {
 INVITATION_DAYS = 30
 INVITATIONS_LIMIT = 1000
 APP_SORTS = ("name", "added", "release")
+#: A cheat set's document: its text (1 MiB at most), escaped in JSON.
+CHEAT_BODY = 3 << 20
+#: A cheat set's source (SPEC.md § 10): a name of 1 to 64 letters, digits, spaces and . ' ( ) -.
+CHEAT_SOURCE = re.compile(r"^[^\W_](?:[^\W_]|[ .'()-]){0,63}(?<! )$")
+#: A line of a cheat set in Atmosphère's or Luma3DS's format: a [name], a {master}, or hex words (Annex A).
+CHEAT_LINE = re.compile(r"^\s*(?:\[[^\]]{0,255}\]|\{[^}]{0,255}\}|[0-9A-Fa-f]{8}(?:\s+[0-9A-Fa-f]{8})*)?\s*$")
+CHEAT_HEX_FORMATS = ("atmosphere", "gateshark")
+#: A key id of lantern-save-e2e-1 (SPEC.md § 9.4).
+KEY_ID = re.compile(r"^[0-9a-f]{16}$")
 T = TypeVar("T")
+#: The families that keep an account's own data: never offered without a token.
+ACCOUNT_FAMILIES = ("admin", "sync", "sync.write", "saves", "encrypted_saves", "requests")
 Handler = Callable[[ServerRequest, Account, Sequence[str]], ServerResponse]
 
 
@@ -141,8 +184,18 @@ ROUTES = (
     Route(("homebrew",), ("GET", "HEAD"), "homebrew", "homebrew_list"),
     Route(("homebrew", "updates"), ("POST",), "homebrew", "homebrew_updates"),
     Route(("homebrew", "{}"), ("GET", "HEAD"), "homebrew", "homebrew_entry"),
+    Route(("sections",), ("GET", "HEAD"), "sections", "sections"),
     Route(("cheats",), ("GET", "HEAD"), "cheats", "cheats"),
+    Route(("cheats",), ("POST",), "cheats.write", "cheat_post"),
     Route(("cheats", "{}"), ("GET", "HEAD"), "cheats", "cheat_text"),
+    Route(("cheats", "{}"), ("PUT", "DELETE"), "cheats.write", "cheat_write"),
+    Route(("saves",), ("GET", "HEAD"), "saves", "saves"),
+    Route(("saves", "{}"), ("POST",), "saves", "save_post"),
+    Route(("saves", "{}", "uploads"), ("POST",), "saves", "upload_open"),
+    Route(("saves", "{}", "{}"), ("GET", "HEAD", "DELETE"), "saves", "save_one"),
+    Route(("uploads", "{}"), ("HEAD", "PATCH", "DELETE"), "saves", "upload"),
+    Route(("requests",), ("GET", "HEAD", "POST"), "requests", "requests"),
+    Route(("requests", "{}"), ("DELETE",), "requests", "request_delete"),
     Route(("pairing",), ("POST",), "pairing", "pair_start"),
     Route(("pairing", "{}"), ("GET",), "pairing", "pair_poll"),
     Route(("admin", "users"), ("GET", "HEAD", "POST"), "admin", "admin_users"),
@@ -212,6 +265,16 @@ class LanternApp:
       grants alone: peers know its public key from the handshake.
     - `sync`: a SyncStore (MemorySync is one), which offers the family sync
       (SPEC.md § 20) to the accounts with sync.read and sync.write.
+    - `saves`: a SaveStore (MemorySaveStore, FileSaveStore), which offers
+      save backups (SPEC.md § 9) to the accounts with the scope saves, within
+      `save_limits`; `encrypted_saves`: keep backups encrypted on the device
+      as they come (§ 9.4), which the server never decrypts.
+    - `requests`: a RequestStore (MemoryRequests), which offers requests
+      (SPEC.md § 11) to the accounts with the scope requests;
+      `answer_request()` marks one done or declined.
+    - `cheat_writes`: with a library that writes cheat sets (a CheatWriter,
+      as MemoryLibrary is), take them from the accounts with cheats.write
+      (SPEC.md § 10); without, writing answers 405.
     """
 
     def __init__(
@@ -248,6 +311,11 @@ class LanternApp:
         grant_seed: bytes | None = None,
         grant_lifetime: int = 600,
         sync: SyncStore | None = None,
+        saves: SaveStore | None = None,
+        save_limits: SaveLimits | None = None,
+        encrypted_saves: bool = True,
+        requests: RequestStore | None = None,
+        cheat_writes: bool = True,
     ) -> None:
         if not sig.SKEW_RANGE[0] <= skew <= sig.SKEW_RANGE[1]:
             raise ValueError("skew is 60 to 900 seconds (SPEC.md § 5.4)")
@@ -288,9 +356,15 @@ class LanternApp:
         self.grant_seed, self.grant_lifetime = grant_seed, grant_lifetime
         self.grant_public = ed25519.public_key(grant_seed) if grant_seed is not None else None
         self.sync = sync
+        self.saves, self.save_limits = saves, save_limits or SaveLimits()
+        self.encrypted_saves = encrypted_saves
+        self.requests, self.cheat_writes = requests, cheat_writes
+        self._saves_lock = threading.RLock()
+        self._requests_lock = threading.RLock()
+        self._cheats_lock = threading.RLock()
         subscribe = getattr(library, "subscribe", None)
-        if self.hub is not None and callable(subscribe):
-            subscribe(lambda change: self.library_changed([change]))
+        if callable(subscribe) and (self.hub is not None or requests is not None):
+            subscribe(self._library_change)
         self.pair_limiter = Limiter(30, 60.0)  # pairing requests per address, as the reference server
         self.attempts = Limiter(10, 600.0)  # wrong invitation codes per address
 
@@ -362,9 +436,11 @@ class LanternApp:
             raise not_found("This server does not offer it.")
         account = self.account(request)
         self.check_signature(request, account)
-        chosen = next(((r, a) for r, a in matched if request.method in r.methods), None)
+        # A method of a family the server does not offer (writing cheat sets) is one the route does not take.
+        offered = [(r, a) for r, a in matched if self.offered(self._family(r, request))]
+        chosen = next(((r, a) for r, a in offered if request.method in r.methods), None)
         if chosen is None:
-            raise method_not_allowed(list(dict.fromkeys(m for r, _ in matched for m in r.methods)))
+            raise method_not_allowed(list(dict.fromkeys(m for r, _ in offered for m in r.methods)))
         route, args = chosen
         self.allow(account, self._family(route, request))
         handler: Handler = getattr(self, "h_" + route.handler)
@@ -408,6 +484,7 @@ class LanternApp:
             key=device.key,
             rating_cap=device.rating_cap,
             device=device.id,
+            device_name=device.device,
         )
 
     # Signed requests (SPEC.md § 5.4).
@@ -476,8 +553,16 @@ class LanternApp:
             return self.grant_seed is not None and "library" in self.library.families
         if family in ("sync", "sync.write"):
             return self.sync is not None
+        if family == "saves":
+            return self.saves is not None
         if family == "encrypted_saves":
-            return False
+            return self.saves is not None and self.encrypted_saves
+        if family == "requests":
+            return self.requests is not None
+        if family == "sections":
+            return "sections" in self.library.families and isinstance(self.library, SectionSource)
+        if family == "cheats.write":
+            return "cheats" in self.library.families and self.cheat_writes and isinstance(self.library, CheatWriter)
         return family in self.library.families
 
     def allow(self, account: Account, family: str) -> None:
@@ -485,7 +570,7 @@ class LanternApp:
             raise not_found("This server does not offer it.")
         if family == "pairing":  # whoever reaches the server may ask to pair (SPEC.md § 4.2, § 5.2)
             return
-        if account.state == "anonymous" and (not self.public or family in ("admin", "sync", "sync.write")):
+        if account.state == "anonymous" and (not self.public or family in ACCOUNT_FAMILIES):
             raise unauthorized("This server asks for a token.")
         if account.state == "frozen":
             raise ProblemError(403, "account_frozen", "This account may do nothing for now.", title="Account frozen")
@@ -556,6 +641,12 @@ class LanternApp:
             limits.update(heartbeat=self.heartbeat, event_streams=self.event_streams, wait=self.wait_limit)
         if self.sync is not None:
             limits["sync_items"] = self.sync.limit
+        if self.saves is not None:
+            limits.update(
+                save_body=self.save_limits.body,
+                save_size=self.save_limits.size,
+                saves_kept_per_title=self.save_limits.kept,
+            )
         doc["limits"] = limits
         return doc
 
@@ -794,7 +885,7 @@ class LanternApp:
             fams: list[JSONValue] = [*sorted(families)]
             plats: list[JSONValue] = [*sorted(platforms)]
             return {"schema": SCHEMA, "families": fams, "platforms": plats}
-        if rec.user is not None and rec.user != account.name:
+        if rec.user is not None and rec.user != self.owner(account):
             return None
         if platform is not None and rec.platform not in (None, platform):
             return None
@@ -936,7 +1027,7 @@ class LanternApp:
         return name
 
     def _sync_event(self, account: Account, collection: str, rev: int) -> None:
-        self.emit("sync", {"schema": SCHEMA, "collection": collection, "rev": rev}, user=account.name)
+        self.emit("sync", {"schema": SCHEMA, "collection": collection, "rev": rev}, user=self.owner(account))
 
     def h_sync_overview(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
         assert self.sync is not None
@@ -1256,6 +1347,586 @@ class LanternApp:
             raise not_found("No such cheat set.")
         return file_response(request, file)
 
+    # Sections (SPEC.md § 6.5).
+
+    def h_sections(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        platform = platform_of(request)
+        source = cast("SectionSource", self.library)
+        hide = self.hides(account)
+        apps = {a.id: a for a in self.library.apps()}
+        shelves: list[JSONValue] = []
+        for section in source.sections(request.languages):
+            ids: list[JSONValue] = [
+                i
+                for i in dict.fromkeys(section.apps)
+                if i in apps
+                and (platform is None or apps[i].platform == platform)
+                and not hide(apps[i].platform, apps[i].title_id)
+            ]
+            if ids:  # a shelf of nothing this caller sees is left out
+                shelves.append({"id": section.id, "title": section.title, "apps": ids})
+        return json_response(request, {"schema": SCHEMA, "sections": shelves})
+
+    # Cheats, written (SPEC.md § 10).
+
+    def _cheat_fields(self, request: ServerRequest) -> CheatWrite:
+        """A cheat set to write, checked (SPEC.md § 10, § 13, Annex A): its platform, title and build in the
+        profile's forms, its source and note, its text within 1 MiB and in the platform's format."""
+        try:
+            # A set's text is bounded by § 13's cheat set, 1 MiB, not a string field's 4 KiB: checked below (413).
+            raw = read_document(request, limit=CHEAT_BODY, caps={**STRING_CAPS, "text": CHEAT_BODY})
+            doc = CheatWrite.from_json(raw, "the body")
+        except DocumentError as e:
+            raise bad_request(f"A cheat set is {{schema, platform, title_id, build_id, text, …}}: {e}") from None
+        platform = doc.platform
+        if not PLATFORM.match(platform):
+            raise bad_request("platform is a platform's name (SPEC.md § 4.3).")
+        prof = profile(platform)
+        if prof is not None and prof.cheats is None:
+            raise bad_request(f"{platform} has no cheats (Annex A).")
+        if not title_id_ok(platform, doc.title_id):
+            raise bad_request(f"title_id is not a title id of {platform}.")
+        pattern = prof.cheats.build_id if prof is not None and prof.cheats is not None else None
+        if pattern is not None and (doc.build_id is None or not pattern.match(doc.build_id)):
+            raise bad_request(f"build_id is the game's build, in {platform}'s form (Annex A).")
+        if doc.build_id is not None and not BUILD_ID.match(doc.build_id):
+            raise bad_request("build_id is 1 to 64 letters, digits, '.', '_' and '-'.")
+        doc.source = doc.source if doc.source is not None else "Lantern"
+        if not CHEAT_SOURCE.match(doc.source):
+            raise bad_request("source is 1 to 64 letters, digits, spaces and . ' ( ) -, a letter or a digit first.")
+        if doc.note is not None and (printable(doc.note, NOTE) != doc.note or "\n" in doc.note):
+            raise bad_request("note: 120 bytes at most, without control characters.")
+        if len(doc.text.encode()) > CHEAT_SET:
+            raise ProblemError(413, "too_large", f"A cheat set is {CHEAT_SET} bytes at most (SPEC.md § 13).")
+        if any((ord(c) < 32 and c not in "\t\r\n") or ord(c) == 127 for c in doc.text):
+            raise bad_request("text has a control character.")
+        fmt = prof.cheats.format if prof is not None and prof.cheats is not None else None
+        if fmt in CHEAT_HEX_FORMATS:
+            bad = next((n for n, line in enumerate(doc.text.splitlines(), 1) if not CHEAT_LINE.match(line)), None)
+            if bad is not None:
+                raise bad_request(f"line {bad} is neither a [name] nor words of 8 hex digits ({fmt}, Annex A).")
+        elif fmt == "json":
+            try:
+                json.loads(doc.text)
+            except ValueError:
+                raise bad_request("text is a set in JSON (Annex A).") from None
+        return doc
+
+    def _writer(self) -> CheatWriter:
+        return cast("CheatWriter", self.library)
+
+    def h_cheat_post(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        doc = self._cheat_fields(request)
+        if self.hides(account)(doc.platform, doc.title_id):
+            raise not_found("No such title on this server.")
+        assert doc.source is not None
+        key = (doc.platform, doc.title_id, doc.build_id, doc.source)
+        with self._cheats_lock:
+            same = next((c for c in self.library.cheats() if _cheat_key(c) == key), None)
+            if same is not None:
+                raise ProblemError(409, "conflict", f"This set exists, {same.id}: PUT replaces it (SPEC.md § 10).")
+            made = self._writer().write_cheat(
+                platform=doc.platform,
+                title_id=doc.title_id,
+                build_id=doc.build_id,
+                source=doc.source,
+                note=doc.note,
+                text=doc.text,
+            )
+        return json_response(request, {"schema": SCHEMA, **made.to_json()}, 201)
+
+    def h_cheat_write(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        platform = platform_of(request)
+        hide = self.hides(account)
+        with self._cheats_lock:
+            found = next(
+                (
+                    c
+                    for c in self.library.cheats()
+                    if c.id == args[0]
+                    and (platform is None or c.platform == platform)
+                    and not hide(c.platform, c.title_id)
+                ),
+                None,
+            )
+            if found is None:
+                raise not_found("No such cheat set.")
+            if request.method == "DELETE":
+                self._writer().delete_cheat(found.id)
+                return _no_content(request)
+            doc = self._cheat_fields(request)
+            if (doc.platform, doc.title_id, doc.build_id, doc.source) != (
+                found.platform,
+                found.title_id,
+                found.build_id,
+                found.source,
+            ):
+                raise bad_request("PUT replaces a set's text and note; its platform, title, build and source stay.")
+            assert doc.source is not None
+            self._writer().write_cheat(
+                platform=doc.platform,
+                title_id=doc.title_id,
+                build_id=doc.build_id,
+                source=doc.source,
+                note=doc.note,
+                text=doc.text,
+                replacing=found.id,
+            )
+        return _no_content(request)
+
+    # Save backups (SPEC.md § 9, § 9.4).
+
+    @staticmethod
+    def owner(account: Account) -> str:
+        """Whose data a caller reads and writes: its account's name, else its device's id."""
+        return account.name if account.name is not None else "device:" + (account.device or "")
+
+    def _store(self) -> SaveStore:
+        assert self.saves is not None
+        return self.saves
+
+    @staticmethod
+    def _save_doc(save: Save) -> JSONObject:
+        return {"schema": SCHEMA, **save.to_json()}
+
+    def h_saves(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        platform = platform_of(request)
+        title_id = request.query.get("title_id")
+        if title_id is not None and not CORE_ID.match(title_id):
+            raise bad_request("title_id is 1 to 128 letters, digits, '.', '_' and '-'.")
+        with self._saves_lock:
+            kept = self._store().saves(self.owner(account))
+        found = [
+            (i, s)
+            for i, s in enumerate(kept)
+            if (platform is None or s.platform == platform) and (title_id is None or s.title_id == title_id)
+        ]
+        found.sort(key=lambda p: (p[1].created, p[0]), reverse=True)  # newest first,
+        found.sort(key=lambda p: (p[1].platform, p[1].title_id))  # per title (L-9.1-1)
+        saves: list[JSONValue] = [s.to_json() for _, s in found]
+        return json_response(request, {"schema": SCHEMA, "saves": saves})
+
+    def _save_target(self, request: ServerRequest, title_id: str) -> str:
+        """The platform a save is written for (400 without one, L-4.3-4), and its title id in its form."""
+        platform = platform_of(request, required=True)
+        assert platform is not None
+        if not title_id_ok(platform, title_id):
+            raise bad_request(f"Not a title id of {platform}.")
+        return platform
+
+    def _encryption(self, account: Account, value: Encryption | None) -> Encryption | None:
+        """A backup's encryption (SPEC.md § 9.4): of lantern-save-e2e-1, with a key id; 400 for another, and
+        for any when the server does not take encrypted backups from this caller (L-9.4-5)."""
+        if value is None:
+            return None
+        if not self._may(account, "encrypted_saves"):
+            raise bad_request("This server keeps no encrypted backup (SPEC.md § 9.4).")
+        if value.scheme != e2e.SCHEME or not KEY_ID.match(value.key_id):
+            raise bad_request(f"encryption is {{scheme: {e2e.SCHEME}, key_id: 16 hex digits}} (SPEC.md § 9.4).")
+        return Encryption(scheme=e2e.SCHEME, key_id=value.key_id)
+
+    @staticmethod
+    def _text_header(request: ServerRequest, name: str, limit: int) -> str | None:
+        raw = request.header(name)
+        if raw is None:
+            return None
+        try:
+            value = unquote(raw, errors="strict")
+        except UnicodeDecodeError:
+            raise bad_request(f"{name} is UTF-8, percent-encoded.") from None
+        if len(value.encode()) > limit or any(ord(c) < 32 or ord(c) == 127 for c in value):
+            raise bad_request(f"{name}: {limit} bytes at most, without control characters.")
+        return value or None
+
+    def _backup(
+        self,
+        account: Account,
+        platform: str,
+        title_id: str,
+        *,
+        size: int,
+        sha256: str,
+        kind: str | None,
+        slot: str | None,
+        game_version_code: int | None,
+        profile_name: str | None,
+        note: str | None,
+        encryption: Encryption | None,
+    ) -> Save:
+        """A backup's document, its fields checked (SPEC.md § 9.1, § 13); its save_id and created given."""
+        if kind is not None and kind not in SAVE_KINDS:
+            raise bad_request("kind is " + ", ".join(SAVE_KINDS) + ".")
+        if slot is not None and not SLOT.match(slot):
+            raise bad_request("slot is 1 to 64 letters, digits, '.', '_' and '-'.")
+        if game_version_code is not None and game_version_code < 0:
+            raise bad_request("game_version_code is an integer, 0 or more.")
+        for value, limit, what in ((profile_name, PROFILE, "profile"), (note, NOTE, "note")):
+            if value is not None and (len(value.encode()) > limit or any(ord(c) < 32 or ord(c) == 127 for c in value)):
+                raise bad_request(f"{what}: {limit} bytes at most, without control characters.")
+        return Save(
+            platform=platform,
+            title_id=title_id,
+            save_id=new_save_id(),
+            created=utc(),
+            size=size,
+            sha256=sha256,
+            slot=slot,
+            kind=kind,
+            game_version_code=game_version_code,
+            profile=profile_name or None,
+            note=note or None,
+            device=account.device_name,
+            encryption=encryption,
+        )
+
+    @staticmethod
+    def _check_archive(head: bytes, encryption: Encryption | None) -> None:
+        """A backup's first bytes (SPEC.md § 9.1, § 9.4): a zip in clear; encrypted, the header of
+        lantern-save-e2e-1 with its key id, nothing more being read of it. 400 otherwise."""
+        if encryption is not None:
+            if head[:8] != e2e.MAGIC or head[8:16].hex() != encryption.key_id:
+                raise bad_request("An encrypted backup begins with LTNE2E01 and its key id (SPEC.md § 9.4).")
+        elif not head.startswith(ZIP_STARTS):
+            raise bad_request("A save is a zip archive (SPEC.md § 9.1).")
+
+    def _kept(self, account: Account, save: Save) -> None:
+        """A backup was kept: the oldest beyond saves_kept_per_title dropped (SPEC.md § 9.1), then its event
+        (§ 18.2). Called under the lock of saves."""
+        owner = self.owner(account)
+        store = self._store()
+        same = [s for s in store.saves(owner) if (s.platform, s.title_id) == (save.platform, save.title_id)]
+        for old in same[: max(0, len(same) - self.save_limits.kept)]:
+            store.drop(owner, old.save_id)
+        data: JSONObject = {
+            "schema": SCHEMA,
+            "platform": save.platform,
+            "title_id": save.title_id,
+            "save_id": save.save_id,
+            "created": save.created,
+        }
+        if save.device is not None:
+            data["device"] = save.device
+        self.emit("save", data, user=owner, platform=save.platform, title_id=save.title_id)
+
+    def h_save_post(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        title_id = args[0]
+        platform = self._save_target(request, title_id)
+        header = request.header("Content-Digest")
+        if header is None:
+            raise bad_request("Content-Digest: sha-256=:<base64>: is required (SPEC.md § 9.2).")
+        announced = digest_sha256(header)
+        if announced is None:
+            raise bad_request("Content-Digest gives no sha-256 this server reads.")
+        version = request.header("Lantern-Game-Version")
+        if version is not None and not version.strip().isdigit():
+            raise bad_request("Lantern-Game-Version is an integer.")
+        text = request.header("Lantern-Save-Encryption")
+        encryption = None
+        if text is not None:
+            scheme, _, params = text.partition(";")
+            fields = dict(p.strip().partition("=")[::2] for p in params.split(";") if p.strip())
+            encryption = self._encryption(
+                account, Encryption(scheme=scheme.strip(), key_id=fields.get("key_id", "").strip())
+            )
+        save = self._backup(
+            account,
+            platform,
+            title_id,
+            size=len(request.body),
+            sha256=announced,
+            kind=request.header("Lantern-Save-Kind"),
+            slot=request.header("Lantern-Save-Slot"),
+            game_version_code=int(version) if version is not None else None,
+            profile_name=self._text_header(request, "Lantern-Profile", PROFILE),
+            note=self._text_header(request, "Lantern-Note", NOTE),
+            encryption=encryption,
+        )
+        if len(request.body) > self.save_limits.body:
+            raise ProblemError(
+                413, "too_large", f"At most {self.save_limits.body} bytes in one request: upload it (SPEC.md § 9.3)."
+            )
+        if sha256_hex(request.body) != announced:
+            raise ProblemError(
+                422, "digest_mismatch", "The body does not match its Content-Digest.", title="Digest mismatch"
+            )
+        self._check_archive(request.body[:16], encryption)
+        with self._saves_lock:
+            self._store().keep(self.owner(account), save, request.body)
+            self._kept(account, save)
+        return json_response(request, self._save_doc(save), 201)
+
+    def _purge_uploads(self) -> None:
+        """Drops the uploads not finished in time (SPEC.md § 9.3). Called under the lock of saves."""
+        now = datetime.now(UTC)
+        for s in self._store().uploads():
+            expires = parse_time(s.expires)
+            if expires is None or expires <= now:
+                self._store().abandon(s.id)
+
+    def h_upload_open(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        raw = read_document(request)
+        title_id = args[0]
+        platform = self._save_target(request, title_id)
+        try:
+            doc = UploadRequest.from_json(raw, "the body")
+        except DocumentError as e:
+            raise bad_request(f"An upload is {{schema, size, sha256, kind?, slot?, …}}: {e}") from None
+        if doc.size < 0 or not SHA256.match(doc.sha256):
+            raise bad_request("size is an integer, 0 or more, and sha256 a lower-case hex SHA-256.")
+        if doc.size > self.save_limits.size:
+            raise ProblemError(413, "too_large", f"A save is {self.save_limits.size} bytes at most here.")
+        save = self._backup(
+            account,
+            platform,
+            title_id,
+            size=doc.size,
+            sha256=doc.sha256,
+            kind=doc.kind,
+            slot=doc.slot,
+            game_version_code=doc.game_version_code,
+            profile_name=doc.profile,
+            note=doc.note,
+            encryption=self._encryption(account, doc.encryption),
+        )
+        expires = utc(datetime.now(UTC) + timedelta(hours=self.save_limits.upload_hours))
+        session = UploadSession(new_upload_id(), self.owner(account), save, expires)
+        with self._saves_lock:
+            self._purge_uploads()
+            self._store().open_upload(session)
+        address = f"{self.base}/v1/uploads/{session.id}"
+        body: JSONObject = {
+            "schema": SCHEMA,
+            "upload": address,
+            "chunk_size": self.save_limits.chunk,
+            "offset": 0,
+            "expires": expires,
+        }
+        response = json_response(request, body, 201)
+        response.headers["Location"] = address
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    def h_upload(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        """An upload under way (SPEC.md § 9.3): HEAD where it stands, PATCH a chunk, DELETE it."""
+        store = self._store()
+        with self._saves_lock:
+            session = store.upload(args[0])
+            expires = parse_time(session.expires) if session is not None else None
+            if session is not None and (expires is None or expires <= datetime.now(UTC)):
+                store.abandon(session.id)
+                session = None
+            if session is None or session.user != self.owner(account):
+                raise not_found("No such upload: it finished, expired or was abandoned.")
+            if request.method == "DELETE":
+                store.abandon(session.id)
+                return _no_content(request)
+            if request.method == "HEAD":
+                state = _no_content(request)
+                state.headers.update(
+                    {
+                        "Upload-Offset": str(session.offset),
+                        "Upload-Length": str(session.save.size),
+                        "Cache-Control": "no-store",
+                    }
+                )
+                return state
+            return self._chunk(request, account, session)
+
+    def _chunk(self, request: ServerRequest, account: Account, session: UploadSession) -> ServerResponse:
+        store = self._store()
+        if media_type(request.header("Content-Type")) != "application/offset+octet-stream":
+            raise bad_request("A chunk is application/offset+octet-stream (SPEC.md § 9.3).")
+        offset = (request.header("Upload-Offset") or "").strip()
+        if not offset.isdigit():
+            raise bad_request("Upload-Offset is the chunk's offset, an integer.")
+        if len(request.body) > self.save_limits.chunk:
+            raise ProblemError(413, "too_large", f"A chunk is {self.save_limits.chunk} bytes at most here.")
+        check_content_digest(request)
+        if int(offset) != session.offset:
+            raise ProblemError(
+                409,
+                "conflict",
+                f"This upload is at {session.offset}: resume from there.",
+                headers={"Upload-Offset": str(session.offset)},
+            )
+        if session.offset + len(request.body) > session.save.size:
+            raise bad_request(f"This chunk goes past the upload's size, {session.save.size} bytes.")
+        at = store.append(session.id, request.body)
+        if at < session.save.size:
+            response = _no_content(request)
+            response.headers.update({"Upload-Offset": str(at), "Cache-Control": "no-store"})
+            return response
+        digest, head = store.upload_digest(session.id)
+        try:
+            if digest != session.save.sha256:
+                raise ProblemError(
+                    422,
+                    "digest_mismatch",
+                    "The archive's SHA-256 is not the one announced; the upload was discarded.",
+                    title="Digest mismatch",
+                )
+            self._check_archive(head, session.save.encryption)
+        except ProblemError:
+            store.abandon(session.id)
+            raise
+        save = dataclasses.replace(session.save, save_id=new_save_id(), created=utc())
+        store.keep_upload(session.id, save)
+        self._kept(account, save)
+        response = json_response(request, self._save_doc(save), 201)
+        response.headers["Upload-Offset"] = str(at)
+        return response
+
+    def h_save_one(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        title_id, save_id = args
+        platform = platform_of(request)
+        owner = self.owner(account)
+        store = self._store()
+        with self._saves_lock:
+            found = next(
+                (
+                    s
+                    for s in store.saves(owner)
+                    if s.save_id == save_id and s.title_id == title_id and (platform is None or s.platform == platform)
+                ),
+                None,
+            )
+            if found is None:
+                raise not_found("No such save backup.")
+            if request.method == "DELETE":
+                store.drop(owner, save_id)
+                return _no_content(request)
+            file = store.archive(owner, save_id)
+        if file is None:
+            raise not_found("No such save backup.")
+        return file_response(request, file)
+
+    # Requests (SPEC.md § 11).
+
+    def _request_store(self) -> RequestStore:
+        assert self.requests is not None
+        return self.requests
+
+    def _request_event(self, r: StoredRequest, *, deleted: bool = False) -> None:
+        """The event `request` (SPEC.md § 18.2): the account's devices of its platform learn of it."""
+        data: JSONObject = {"schema": SCHEMA, "id": r.id, "platform": r.platform, "title_id": r.title_id}
+        if deleted:
+            data["deleted"] = True
+        else:
+            data["status"] = r.status
+        self.emit("request", data, user=r.user, platform=r.platform, title_id=r.title_id)
+
+    def _title_name(self, platform: str, title_id: str) -> str | None:
+        """A title's name, from the library's titles, else its apps."""
+        if "titles" in self.library.families:
+            for t in self.library.titles(()):
+                if (t.platform, t.title_id) == (platform, title_id):
+                    return t.name
+        if "library" in self.library.families:
+            for a in self.library.apps():
+                if (a.platform, a.title_id) == (platform, title_id) and a.name:
+                    return a.name
+        return None
+
+    def h_requests(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        owner = self.owner(account)
+        if request.method != "POST":
+            platform = platform_of(request)
+            with self._requests_lock:
+                mine = [r for r in self._request_store().requests(owner) if platform is None or r.platform == platform]
+            mine.sort(key=lambda r: (r.created, r.id), reverse=True)
+            listed: list[JSONValue] = [r.to_json() for r in mine]
+            return json_response(request, {"schema": SCHEMA, "requests": listed})
+        try:
+            doc = RequestCreate.from_json(read_document(request), "the body")
+        except DocumentError as e:
+            raise bad_request(f"A request is {{schema, platform?, title_id}}: {e}") from None
+        platform = doc.platform if doc.platform is not None else platform_of(request, required=True)
+        assert platform is not None
+        if not PLATFORM.match(platform):
+            raise bad_request("platform is a platform's name (SPEC.md § 4.3).")
+        if not title_id_ok(platform, doc.title_id):
+            raise bad_request(f"title_id is not a title id of {platform}.")
+        store = self._request_store()
+        with self._requests_lock:
+            mine = store.requests(owner)
+            same = next(
+                (r for r in mine if r.status == "open" and (r.platform, r.title_id) == (platform, doc.title_id)), None
+            )
+            if same is not None:
+                return json_response(request, {"schema": SCHEMA, **same.to_json()}, 200)
+            if sum(r.status == "open" for r in mine) >= OPEN_LIMIT:
+                raise slow_down(3600, f"At most {OPEN_LIMIT} open requests per account.")
+            made = StoredRequest(
+                id=new_request_id(),
+                user=owner,
+                platform=platform,
+                title_id=doc.title_id,
+                status="open",
+                created=utc(),
+                name=self._title_name(platform, doc.title_id),
+            )
+            store.add(made)
+        self._request_event(made)
+        return json_response(request, {"schema": SCHEMA, **made.to_json()}, 201)
+
+    def h_request_delete(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        with self._requests_lock:
+            gone = self._request_store().remove(self.owner(account), args[0])
+        if gone is None:
+            raise not_found("No such request of this account.")
+        self._request_event(gone, deleted=True)
+        return _no_content(request)
+
+    def answer_request(self, request_id: str, status: str) -> StoredRequest | None:
+        """Marks a request `done` or `declined` (or `open` again), as the server's own administration
+        decides (SPEC.md § 11): the account's devices get its event (§ 18.2). None when there is none."""
+        if status not in STATUSES:
+            raise ValueError("status is " + ", ".join(STATUSES))
+        store = self._request_store()
+        with self._requests_lock:
+            before = next((r for r in store.requests() if r.id == request_id), None)
+            if before is None:
+                return None
+            if before.status == status:
+                return before
+            after = store.set_status(request_id, status)
+        if after is not None:
+            self._request_event(after)
+        return after
+
+    def all_requests(self) -> list[StoredRequest]:
+        """Every account's requests, newest first: what a server's own administration pages show."""
+        with self._requests_lock:
+            found = self._request_store().requests()
+        return sorted(found, key=lambda r: (r.created, r.id), reverse=True)
+
+    def _library_change(self, change: LibraryChange) -> None:
+        """The library changed: the event `library` (SPEC.md § 18.2), and the open requests of a title whose
+        app just arrived are done (§ 11)."""
+        self.library_changed([change])
+        if self.requests is None or change.family != "apps" or change.title_id is None:
+            return
+        with self._requests_lock:
+            waiting = [
+                r
+                for r in self.requests.requests()
+                if r.status == "open" and (r.platform, r.title_id) == (change.platform, change.title_id)
+            ]
+        if waiting and any((a.platform, a.title_id) == (change.platform, change.title_id) for a in self.library.apps()):
+            for r in waiting:
+                self.answer_request(r.id, "done")
+
+    @property
+    def body_limit(self) -> int:
+        """The largest body an adapter reads for this app: a request document's, a cheat set's, a save sent in
+        one request or an upload's chunk."""
+        limit = BODY_LIMIT
+        if self.saves is not None:
+            limit = max(limit, self.save_limits.body, self.save_limits.chunk)
+        if self.offered("cheats.write"):
+            limit = max(limit, CHEAT_BODY)
+        return limit
+
     # Pairing (SPEC.md § 5.2, § 5.4, § 5.5).
 
     def verify_url(self, request: ServerRequest) -> str:
@@ -1410,8 +2081,8 @@ class LanternApp:
 
     def delete_user(self, request: ServerRequest, account: Account, name: str) -> ServerResponse:
         """DELETE an account (SPEC.md § 5.7): confirmed by its name (400 otherwise), never the caller's own
-        (409); its devices, invitations, pairings not yet collected and sync data go at once, and its
-        streams end at their next wake (L-5.7-6, L-5.7-7, L-18.1-8)."""
+        (409); its devices, invitations, pairings not yet collected, save backups, requests and sync data
+        go at once, and its streams end at their next wake (L-5.7-6, L-5.7-7, L-18.1-8)."""
         assert self.accounts is not None
         if self.accounts.user(name) is None:
             raise not_found("No such account.")
@@ -1427,6 +2098,12 @@ class LanternApp:
             self.desk.forget_user(name)
         if self.sync is not None:
             self.sync.forget(name)
+        if self.saves is not None:
+            with self._saves_lock:
+                self.saves.forget(name)
+        if self.requests is not None:
+            with self._requests_lock:
+                self.requests.forget(name)
         if self.hub is not None:
             self.hub.wake()
         return _no_content(request)
@@ -1566,6 +2243,11 @@ class LanternApp:
         if not self.accounts.revoke_invitation(args[0]):
             raise not_found("No such invitation.")
         return _no_content(request)
+
+
+def _cheat_key(c: CheatSet) -> tuple[str, str, str | None, str | None]:
+    """What makes a cheat set the same as another (SPEC.md § 10): its platform, title, build and source."""
+    return (c.platform, c.title_id, c.build_id, c.source)
 
 
 def _no_content(request: ServerRequest) -> ServerResponse:
