@@ -1,0 +1,219 @@
+# The TypeScript library (typescript/): the generated types against the
+# specification's schemas, Biome, tsc in strict mode, the build and its
+# package (and its lantern-static command); the unit tests and the
+# specification's vectors on Node 22 and 24; the client against the malicious
+# test server (every scenario its --list gives) and against the
+# specification's reference server (over TLS, with a token bound to its key;
+# draft 0.5's events, sync, encrypted saves, grants and its peer, static
+# libraries); the conformance suite against the toolkit's demo server
+# (node:http and fetchHandler, with the levels it reaches, a peer of the
+# toolkit's, and lantern-static's output checked by --static); and the library
+# in Chromium (events and decryption included).
+# Nothing is published: that comes with the first release and its signing.
+name: typescript
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ "typescript/**", "spec", "python/tools/hostile_server.py", "python/src/lantern/**", ".github/workflows/typescript.yml" ]
+  pull_request:
+    paths: [ "typescript/**", "spec", "python/tools/hostile_server.py", "python/src/lantern/**", ".github/workflows/typescript.yml" ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: typescript-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: typescript
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUTF8: "1"
+  NPM_CONFIG_FUND: "false"
+  NPM_CONFIG_AUDIT: "false"
+
+jobs:
+  lint:
+    name: generated types, Biome, tsc, build
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: typescript/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: The generated types are those of the pinned specification
+        run: node tools/generate.ts --check
+      - name: Biome (lint and format)
+        run: npx biome ci --reporter=github .
+      - name: tsc, strict
+        run: npx tsc -p tsconfig.json
+      - name: Build, and the package's contents
+        run: |
+          npx tsc -p tsconfig.build.json
+          npm pack --dry-run
+          node dist/node/lantern-static.js --help
+      - name: The browser entry imports nothing of Node's
+        run: |
+          set -o pipefail
+          files=$(find dist -name '*.js' -not -path 'dist/node/*' -not -path 'dist/server/*')
+          if grep -l '"node:' $files; then
+            echo "::error::a module of the browser entry imports node:"
+            exit 1
+          fi
+
+  test:
+    name: unit tests and vectors (Node ${{ matrix.node }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [ "22", "24" ]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: typescript/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: node --test
+        run: npm test
+
+  hostile:
+    name: the malicious test server (Node ${{ matrix.node }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [ "22", "24" ]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: typescript/package-lock.json
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: |
+          npm ci
+          python -m pip install "cryptography>=42"
+      - name: Every scenario, listed
+        run: python ../python/tools/hostile_server.py --list
+      - name: The client against every scenario, from the server's command line
+        env:
+          PYTHON: python
+        run: node --test --test-concurrency=1 --test-reporter=spec test/integration/hostile.test.ts
+
+  integration:
+    name: the client against the reference server
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: typescript/package-lock.json
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: |
+          npm ci
+          python -m pip install "cryptography>=42" -r ../spec/tools/requirements.txt
+      - name: Reading, pairing over a pinned TLS key, signed requests, writes, administration
+        env:
+          PYTHON: python
+        run: node --test --test-concurrency=1 --test-reporter=spec test/integration/reference.test.ts
+      - name: Draft 0.5, events, sync, encrypted saves, the reference peer, static libraries, deleting an account
+        env:
+          PYTHON: python
+        run: node --test --test-concurrency=1 --test-reporter=spec test/integration/reference-v05.test.ts
+
+  conformance:
+    name: the conformance suite against the demo server
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: typescript/package-lock.json
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"  # zstd in the standard library: the suite reads the JSON the demo compresses
+      - name: Install
+        run: |
+          npm ci
+          python -m pip install -r ../spec/tools/requirements.txt
+      - name: node:http and fetchHandler, anonymously and with a token bound to its key; lantern-static and --static
+        env:
+          PYTHON: python
+        run: node --test --test-concurrency=1 --test-reporter=spec test/integration/conformance.test.ts
+      - name: The suite's own report, and the levels reached
+        run: |
+          set -o pipefail
+          node test/demo.ts --port 8090 --key-file "$RUNNER_TEMP/demo.key" > "$RUNNER_TEMP/demo.json" &
+          pid=$!
+          for _ in $(seq 50); do
+            curl -fsS http://127.0.0.1:8090/.well-known/lantern >/dev/null && break
+            sleep 0.2
+          done
+          python ../spec/conformance/run.py http://127.0.0.1:8090/ --admin-writes \
+            --token et_demo-0123456789abcdef0123456789abcdef --key "$RUNNER_TEMP/demo.key" | tee "$RUNNER_TEMP/report.txt"
+          grep -A12 '^Levels reached' "$RUNNER_TEMP/report.txt" >> "$GITHUB_STEP_SUMMARY"
+          kill "$pid"
+
+  browser:
+    name: the library in Chromium
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: typescript/package-lock.json
+      - name: Install, and Playwright's Chromium
+        run: |
+          npm ci
+          npx playwright-core install --with-deps chromium-headless-shell
+      - name: Build, then read, download, verify, pair, sign, hold an event stream and decrypt in Chromium
+        run: npm run test:browser
