@@ -21,7 +21,8 @@ if (LANTERN_BUILD_TESTS)
         unit/profiles_tests.cpp
         unit/requires_tests.cpp)
     target_link_libraries(lantern_unit_tests PRIVATE Lantern::lantern lantern_doctest)
-    target_compile_definitions(lantern_unit_tests PRIVATE LANTERN_SPEC_DIR="${LANTERN_SPEC_DIR}")
+    target_compile_definitions(lantern_unit_tests PRIVATE LANTERN_SPEC_DIR="${LANTERN_SPEC_DIR}"
+        $<$<CXX_COMPILER_ID:MSVC>:_CRT_SECURE_NO_WARNINGS>)
     lantern_warnings(lantern_unit_tests)
     if (LANTERN_NO_EXCEPTIONS)
         lantern_no_exceptions(lantern_unit_tests)

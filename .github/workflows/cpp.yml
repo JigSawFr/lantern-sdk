@@ -1,0 +1,471 @@
+# The C++ library (cpp/, cpp/README.md): its format, its generated types,
+# its build with warnings as errors on every compiler and standard library
+# of the desktop, its tests (unit, and against the specification's
+# reference server), the sanitizers, clang-tidy, a short fuzz run, the
+# install, and a cross build of the library for every platform Aurore runs
+# on, each with the toolchain Aurore's CI uses.
+name: cpp
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "cpp/**"
+      - "spec"
+      - ".github/workflows/cpp.yml"
+  pull_request:
+    paths:
+      - "cpp/**"
+      - "spec"
+      - ".github/workflows/cpp.yml"
+
+# A new push to a pull request stops the run of the previous one
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  # The newest clang Ubuntu 26.04 ships, for clang, libc++, clang-tidy and libFuzzer
+  CLANG: 22
+  # The newest GCC it ships
+  GCC: 15
+
+jobs:
+  format:
+    name: format
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    env:
+      # The version .clang-format is written for, from PyPI, as Aurore's CI
+      CLANG_FORMAT_VERSION: 18.1.8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: clang-format
+        run: |
+          python3 -m venv "$RUNNER_TEMP/clang-format"
+          "$RUNNER_TEMP/clang-format/bin/pip" install -q "clang-format==$CLANG_FORMAT_VERSION"
+          # Vendored and generated code as they are
+          git ls-files 'cpp/*.cpp' 'cpp/*.hpp' ':!:cpp/third_party/**' ':!:cpp/src/generated/**' \
+              ':!:cpp/include/lantern/types.hpp' \
+            | xargs "$RUNNER_TEMP/clang-format/bin/clang-format" --dry-run --Werror
+
+  generated:
+    name: generated types
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      # The committed types are those the pinned specification's schemas give
+      - name: gen_types.py --check
+        run: python3 cpp/tools/gen_types.py --check
+
+  linux:
+    name: linux (${{ matrix.name }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: "gcc, libstdc++", cc: gcc, packages: "" }
+          - { name: "clang, libstdc++", cc: clang, packages: "" }
+          - { name: "clang, libc++", cc: clang, packages: "libcxx", cxxflags: "-stdlib=libc++" }
+          # The 32-bit consoles (3DS, Vita) and armeabi-v7a, on a desktop
+          - { name: "gcc, 32-bit", cc: gcc, packages: "multilib", cxxflags: "-m32", cflags: "-m32" }
+          # The library, its tests and the example with -fno-exceptions -fno-rtti
+          - { name: "gcc, no exceptions", cc: gcc, packages: "", preset: noexcept }
+          - { name: "clang, no exceptions", cc: clang, packages: "libcxx", cxxflags: "-stdlib=libc++", preset: noexcept }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Install the compilers
+        run: |
+          sudo apt-get update -q
+          packages="ninja-build g++-$GCC clang-$CLANG"
+          case "${{ matrix.packages }}" in
+            libcxx) packages="$packages libc++-$CLANG-dev libc++abi-$CLANG-dev" ;;
+            multilib) packages="$packages g++-$GCC-multilib" ;;
+          esac
+          sudo apt-get install -y -q --no-install-recommends $packages
+      - name: Build
+        working-directory: cpp
+        run: |
+          if [ "${{ matrix.cc }}" = gcc ]; then export CC=gcc-$GCC CXX=g++-$GCC; else export CC=clang-$CLANG CXX=clang++-$CLANG; fi
+          cmake --preset "$PRESET" -DLANTERN_WERROR=ON \
+            -DCMAKE_C_FLAGS="${{ matrix.cflags }}" \
+            -DCMAKE_CXX_FLAGS="${{ matrix.cxxflags }}" \
+            -DCMAKE_EXE_LINKER_FLAGS="${{ matrix.cxxflags }}"
+          cmake --build --preset "$PRESET"
+        env:
+          PRESET: ${{ matrix.preset || 'dev' }}
+      # Unit tests, then the integration tests against spec/server
+      - name: Test
+        working-directory: cpp
+        run: ctest --preset "$PRESET"
+        env:
+          PRESET: ${{ matrix.preset || 'dev' }}
+
+  sanitizers:
+    name: linux (${{ matrix.preset }}, ${{ matrix.cc }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { preset: asan, cc: clang }
+          - { preset: asan, cc: gcc }
+          - { preset: ubsan, cc: gcc }
+          - { preset: tsan, cc: clang }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Install the compilers
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends ninja-build g++-$GCC clang-$CLANG libclang-rt-$CLANG-dev
+      - name: Build
+        working-directory: cpp
+        run: |
+          if [ "${{ matrix.cc }}" = gcc ]; then export CC=gcc-$GCC CXX=g++-$GCC; else export CC=clang-$CLANG CXX=clang++-$CLANG; fi
+          cmake --preset ${{ matrix.preset }} -DLANTERN_WERROR=ON
+          cmake --build --preset ${{ matrix.preset }}
+      - name: Test
+        working-directory: cpp
+        run: ctest --preset ${{ matrix.preset }}
+
+  tidy:
+    name: clang-tidy
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Install clang and clang-tidy
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends ninja-build clang-$CLANG clang-tidy-$CLANG \
+            libc++-$CLANG-dev libc++abi-$CLANG-dev
+      # The library and the adapter, against libc++ and against libstdc++;
+      # .clang-tidy says which checks and why some are off
+      - name: clang-tidy
+        run: |
+          export CC=clang-$CLANG CXX=clang++-$CLANG
+          cmake -S cpp --preset dev -B build/libcxx -DCMAKE_CXX_FLAGS=-stdlib=libc++ -DCMAKE_EXE_LINKER_FLAGS=-stdlib=libc++
+          cmake -S cpp --preset dev -B build/libstdcxx
+          for build in build/libcxx build/libstdcxx; do
+            run-clang-tidy-$CLANG -clang-tidy-binary clang-tidy-$CLANG -p $build -quiet \
+              'cpp/src/[^g].*\.cpp$' 'cpp/adapters/.*\.cpp$'
+          done
+
+  # The libFuzzer targets of cpp/tests/fuzz, a minute each, under ASan and
+  # UBSan, as Aurore's fuzz job: seeded with the repository's corpus and the
+  # specification's examples, the corpus each grows kept from one run to the
+  # next; an input that crashes goes up as an artifact.
+  fuzz:
+    name: linux (fuzz)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Install clang
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends ninja-build clang-$CLANG libclang-rt-$CLANG-dev
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: fuzz-corpus
+          key: cpp-fuzz-corpus-${{ github.run_id }}
+          restore-keys: cpp-fuzz-corpus-
+      - name: Build
+        run: |
+          export CC=clang-$CLANG CXX=clang++-$CLANG
+          cmake -S cpp --preset fuzz -B build/fuzz -DLANTERN_WERROR=ON
+          cmake --build build/fuzz
+      - name: Fuzz
+        run: |
+          mkdir -p fuzz-crashes
+          for target in json paths problem homebrew signature; do
+            mkdir -p fuzz-corpus/$target
+            seeds=cpp/tests/fuzz/corpus/$target
+            case $target in json|problem|homebrew) seeds="$seeds spec/examples/v1 spec/examples/v1/invalid" ;; esac
+            build/fuzz/tests/fuzz/lantern_fuzz_$target -max_total_time=60 -max_len=16384 -timeout=10 \
+              -artifact_prefix=fuzz-crashes/$target- fuzz-corpus/$target $seeds
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: cpp-fuzz-crashes
+          path: fuzz-crashes
+          retention-days: 30
+
+  install:
+    name: linux (install, ${{ matrix.consumer }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        consumer: [ package, subdirectory ]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Ninja
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends ninja-build
+      # An app's two ways in (cpp/README.md): find_package after an install,
+      # or add_subdirectory of the source
+      - name: Build an app with Lantern
+        run: |
+          if [ "${{ matrix.consumer }}" = package ]; then
+            cmake -S cpp -B build/lantern -G Ninja -DCMAKE_BUILD_TYPE=Release -DLANTERN_BUILD_TESTS=OFF -DLANTERN_BUILD_EXAMPLES=OFF
+            cmake --build build/lantern
+            cmake --install build/lantern --prefix "$RUNNER_TEMP/prefix"
+          fi
+          cmake -S cpp/tests/consumer -B build/consumer -G Ninja -DLANTERN_CONSUMER=${{ matrix.consumer }} \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/prefix"
+          cmake --build build/consumer
+          build/consumer/lantern_consumer
+
+  windows:
+    name: windows (${{ matrix.compiler }})
+    runs-on: windows-2025
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { compiler: msvc, toolset: "" }
+          - { compiler: clang-cl, toolset: "-T ClangCL" }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      # Visual Studio's generator, the runner's newest; unit tests only (the
+      # loopback adapter is POSIX)
+      - name: Build
+        shell: bash
+        run: |
+          cmake -S cpp -B build ${{ matrix.toolset }} -DLANTERN_WERROR=ON -DLANTERN_BUILD_TESTS=ON -DLANTERN_BUILD_EXAMPLES=OFF
+          cmake --build build --config Debug
+      - name: Test
+        run: ctest --test-dir build -C Debug --output-on-failure -R unit
+
+  macos:
+    # macOS 27 and Xcode 27, a preview image, as Aurore's
+    runs-on: xcode-27
+    # Not required, as in Aurore: GitHub's macOS runners sometimes leave the
+    # job without a machine until it is cancelled. A failure is still shown,
+    # and looked at.
+    continue-on-error: true
+    timeout-minutes: 30
+    name: macos (Xcode clang)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Build
+        run: |
+          cmake -S cpp -B build -DCMAKE_BUILD_TYPE=Debug -DLANTERN_WERROR=ON
+          cmake --build build -j "$(sysctl -n hw.ncpu)"
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -R unit
+
+  # The consoles and the other platforms: the library alone, cross-built
+  # with -Werror, each with the toolchain Aurore's CI uses (no tests: they
+  # run on the desktop).
+
+  switch:
+    name: switch (devkitA64)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    container:
+      image: devkitpro/devkita64:20260219@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build
+        run: |
+          cmake -S cpp -B build -DCMAKE_TOOLCHAIN_FILE="$DEVKITPRO/cmake/Switch.cmake" \
+            -DCMAKE_BUILD_TYPE=Release -DLANTERN_WERROR=ON
+          cmake --build build -j "$(nproc)"
+
+  ctr:
+    name: 3ds (devkitARM)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    container:
+      image: devkitpro/devkitarm:20260610@sha256:15b79ce75822c289538d8153da5fa7aafe5e6adc32ad8a575a197beca0f0761b
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build
+        run: |
+          cmake -S cpp -B build -DCMAKE_TOOLCHAIN_FILE="$DEVKITPRO/cmake/3DS.cmake" \
+            -DCMAKE_BUILD_TYPE=Release -DLANTERN_WERROR=ON
+          cmake --build build -j "$(nproc)"
+
+  psv:
+    name: vita (VitaSDK)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # VitaSDK's image (GCC 15.2), the one Aurore's GXM job runs
+      - name: Build
+        run: |
+          printf '%s\n' 'set -e' 'cd /src' \
+            'cmake -S cpp -B build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" -DCMAKE_BUILD_TYPE=Release -DLANTERN_WERROR=ON' \
+            'cmake --build build -j "$(nproc)"' > build_vita.sh
+          docker run --rm -v "$(pwd)":/src/ vitasdk/vitasdk@sha256:61c173463b3d10d71464b6fc591f1fe1018736bf2e321e6852db06612eb05b07 \
+            sh /src/build_vita.sh
+
+  ps4:
+    name: ps4 (OpenOrbis, LLVM 23)
+    runs-on: ubuntu-26.04
+    # Not required yet: the first build of this library on Aurore's PS4
+    # image (PacBrew's OpenOrbis with LLVM 23's libc++, built from Aurore's
+    # recipe). To make required once it has passed.
+    continue-on-error: true
+    timeout-minutes: 30
+    env:
+      # The commit of Aurore whose ps4/scripts build the image
+      AURORE_COMMIT: e72417dc9e269d31b9bc9f8cfbaaba78b8bef22e
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Aurore's PS4 recipe
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: JigSawFr/Aurore
+          ref: ${{ env.AURORE_COMMIT }}
+          path: aurore
+          sparse-checkout: ps4/scripts
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # The image, cached by GitHub while the recipe stays the same, as Aurore's
+      - name: Toolchain image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: aurore/ps4/scripts
+          tags: aurore-ps4
+          load: true
+          cache-from: type=gha,scope=ps4
+          cache-to: type=gha,scope=ps4,mode=max
+      - name: Build
+        run: |
+          docker run --rm -v "$(pwd)":/src/ aurore-ps4 \
+            'cmake -S cpp -B build -DCMAKE_TOOLCHAIN_FILE="$OPENORBIS/cmake/ps4.cmake" -DCMAKE_BUILD_TYPE=Release -DLANTERN_WERROR=ON && cmake --build build -j "$(nproc)"'
+
+  android:
+    name: android (NDK, ${{ matrix.abi }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [ arm64-v8a, armeabi-v7a, x86_64 ]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The runner's newest NDK, as Aurore's Gradle build takes it
+      - name: Build
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends ninja-build
+          cmake -S cpp -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=${{ matrix.abi }} -DANDROID_PLATFORM=android-26 -DCMAKE_BUILD_TYPE=Release -DLANTERN_WERROR=ON
+          cmake --build build
+
+  ios:
+    name: ios (Xcode)
+    # macOS 27 and Xcode 27, as Aurore's
+    runs-on: xcode-27
+    # Not required, as Aurore's ios and macos jobs (see macos above)
+    continue-on-error: true
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build
+        run: |
+          cmake -S cpp -B build -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0 -DLANTERN_WERROR=ON
+          cmake --build build --config Release --target lantern -- CODE_SIGNING_ALLOWED=NO
+
+  web:
+    name: web (Emscripten)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    env:
+      # Aurore's Emscripten, checked the same way
+      EMSDK_VERSION: 6.0.13
+      EMSDK_COMMIT: 35659964bc2762fffec0d257997fb61475f765b7
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.emscripten_cache
+          key: cpp-emscripten-${{ env.EMSDK_VERSION }}
+      - name: Emscripten ${{ env.EMSDK_VERSION }}
+        run: |
+          git clone --depth 1 --branch "$EMSDK_VERSION" https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
+          test "$(git -C "$RUNNER_TEMP/emsdk" rev-parse HEAD)" = "$EMSDK_COMMIT" \
+            || { echo "::error::emsdk's $EMSDK_VERSION tag is not $EMSDK_COMMIT any more"; exit 1; }
+          "$RUNNER_TEMP/emsdk/emsdk" install "$EMSDK_VERSION"
+          "$RUNNER_TEMP/emsdk/emsdk" activate "$EMSDK_VERSION"
+      - name: Build
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends ninja-build
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          export EM_CACHE="$HOME/.emscripten_cache"
+          emcmake cmake -S cpp -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLANTERN_WERROR=ON
+          cmake --build build
