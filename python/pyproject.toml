@@ -25,6 +25,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Framework :: Flask",
     "Framework :: FastAPI",
     "Topic :: Internet :: WWW/HTTP",
@@ -75,9 +76,8 @@ dev = [
 
 # uv (https://docs.astral.sh/uv/) installs the development environment from
 # uv.lock: `uv sync` (the dev group by default), then `uv run pytest`. Its
-# resolver takes no file uploaded in the last 14 days, as Dependabot's
-# cooldown (.github/dependabot.yml): a release has two weeks to be yanked
-# before the lock can pick it up.
+# resolver takes no file uploaded in the last 14 days: a release has two
+# weeks to be yanked before `uv lock` can pick it up.
 [tool.uv]
 exclude-newer = "14 days"
 

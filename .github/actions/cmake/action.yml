@@ -1,0 +1,75 @@
+# CMake, Ninja and ccache for a job's native builds, the same versions on
+# every runner and container (lukka/get-cmake downloads Kitware's and
+# Ninja's own releases, kept in the Actions cache).
+#
+# With a `ccache` key, ccache comes in through CMake's own environment
+# variables (CMAKE_C_COMPILER_LAUNCHER, CMAKE_CXX_COMPILER_LAUNCHER): every
+# configure of the job takes it, presets or not, and nothing in the project
+# names it. Its folder comes back from the newest cache of that key that
+# main saved, and only a push to main saves one (under the commit): the
+# caches of pull requests would push main's out of the repository's 10 GB,
+# and a pull request's second push still finds main's objects for all it
+# did not change. One build keeps well under the 150 MB allowed (about
+# 30 MB compressed for cpp/'s dev preset).
+name: cmake
+description: CMake, Ninja and, given a key, ccache
+inputs:
+  ccache:
+    description: The job's ccache, one per compiler and configuration (e.g. cpp-linux-gcc); empty for none
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - uses: lukka/get-cmake@f86dd60acae0d132056913e248bdabf0e0580b7a # v4.4.5
+      with:
+        cmakeVersion: 4.4.5
+        ninjaVersion: 1.13.2
+
+    - name: ccache's settings
+      id: ccache
+      if: inputs.ccache != ''
+      shell: bash
+      env:
+        KEY: ${{ inputs.ccache }}
+      run: |
+        {
+          echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache"
+          echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
+          echo "CCACHE_COMPRESS=1"
+          echo "CCACHE_MAXSIZE=150M"
+          # The compiler's own bytes, not its date: the runner's packages and
+          # the containers' images are installed anew in each job
+          echo "CCACHE_COMPILERCHECK=content"
+          echo "CMAKE_C_COMPILER_LAUNCHER=ccache"
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache"
+        } >> "$GITHUB_ENV"
+        # A cache key has no comma or space: anything but letters, digits
+        # and . _ + - becomes a dash
+        echo "key=ccache-$(printf '%s' "$KEY" | tr -c 'A-Za-z0-9._+-' '-')" >> "$GITHUB_OUTPUT"
+        # The jobs install it with their compilers; this is for the others
+        if ! command -v ccache > /dev/null; then
+          if [ "$RUNNER_OS" = macOS ]; then
+            HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install --quiet ccache
+          else
+            sudo=$(command -v sudo || true)
+            $sudo apt-get update -q
+            $sudo apt-get install -y -q --no-install-recommends ccache
+          fi
+        fi
+        ccache --zero-stats > /dev/null
+
+    # On main: restored now, saved when the job ends (actions/cache's post step)
+    - if: inputs.ccache != '' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: .ccache
+        key: ${{ steps.ccache.outputs.key }}-${{ github.sha }}
+        restore-keys: ${{ steps.ccache.outputs.key }}-
+    # Elsewhere: restored only
+    - if: inputs.ccache != '' && !(github.event_name == 'push' && github.ref == 'refs/heads/main')
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: .ccache
+        key: ${{ steps.ccache.outputs.key }}-${{ github.sha }}
+        restore-keys: ${{ steps.ccache.outputs.key }}-

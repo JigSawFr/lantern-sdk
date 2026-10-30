@@ -14,7 +14,7 @@ set -euo pipefail
 
 event=$1
 before=${2:-}
-parts=(cpp c python typescript workflows)
+parts=(cpp c python typescript release workflows)
 
 all() {
   for part in "${parts[@]}"; do echo "$part=true"; done
@@ -36,7 +36,7 @@ case "$event" in
 esac
 
 echo "Files changed:" >&2
-echo "$files" | sed 's/^/  /' >&2
+awk '{ print "  " $0 }' <<< "$files" >&2
 
 # What every part shares: the CI's own entry, scripts and actions
 if grep -qE '^\.github/(workflows/ci\.yml|scripts/|actions/)' <<< "$files"; then all; fi
@@ -44,13 +44,15 @@ if grep -qE '^\.github/(workflows/ci\.yml|scripts/|actions/)' <<< "$files"; then
 # What each part is made of, as its workflow's header says: its folder, the
 # specification (the submodule), the files every library shares (the
 # submodules' list, the licences), the malicious test server its tests run,
-# and its workflow
+# and its workflow. A release is made of the four libraries, tools/ and
+# release-please's files (release-check.yml).
 shared='^(spec|\.gitmodules|REUSE\.toml)$|^LICENSES/'
 declare -A pattern=(
   [cpp]="^cpp/|^python/tools/hostile_server\.py$|^\.github/workflows/cpp\.yml$|$shared"
   [c]="^c/|^cpp/|^\.github/workflows/c\.yml$|$shared"
   [python]="^python/|^\.github/workflows/python\.yml$|$shared"
   [typescript]="^typescript/|^python/tools/hostile_server\.py$|^python/src/lantern/|^\.github/workflows/typescript\.yml$|$shared"
+  [release]="^(cpp|c|python|typescript|tools)/|^(release-please-config|\.release-please-manifest)\.json$|^\.github/workflows/release[^/]*\.yml$"
   [workflows]='^\.github/'
 )
 for part in "${parts[@]}"; do

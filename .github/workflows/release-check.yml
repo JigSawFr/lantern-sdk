@@ -7,35 +7,14 @@
 # Nothing is published or attested here.
 name: release-check
 
+# Called by ci.yml when a part of a release changes: a library's folder,
+# tools/, release-please's files or the release workflows
+# (.github/scripts/changes.sh)
 on:
-  push:
-    branches: [ main ]
-    paths:
-      - "cpp/**"
-      - "c/**"
-      - "python/**"
-      - "typescript/**"
-      - "tools/**"
-      - "release-please-config.json"
-      - ".release-please-manifest.json"
-      - ".github/workflows/release*.yml"
-  pull_request:
-    paths:
-      - "cpp/**"
-      - "c/**"
-      - "python/**"
-      - "typescript/**"
-      - "tools/**"
-      - "release-please-config.json"
-      - ".release-please-manifest.json"
-      - ".github/workflows/release*.yml"
+  workflow_call:
 
 permissions:
   contents: read
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"

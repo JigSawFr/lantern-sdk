@@ -621,8 +621,13 @@ python -m pip install -e . --group dev
 python tools/generate.py --check     # the models are those of spec/schemas/v1
 ruff check . && ruff format --check .
 mypy                                 # strict
-python -m pytest --cov               # unit, integration and conformance tests
+python -m pytest --cov -n auto       # unit, integration and conformance tests, on every core
 ```
+
+The CI installs the same environment with [uv](https://docs.astral.sh/uv/),
+exactly as `uv.lock` pins it: `uv sync`, then `uv run pytest -n auto` and
+the others the same way. A new dependency goes in `pyproject.toml`, then
+`uv lock`.
 
 `pytest -m integration` runs the client against the specification's
 reference server (`spec/server`): over plain HTTP on loopback and over TLS

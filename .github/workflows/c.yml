@@ -1,6 +1,6 @@
 # The C API (c/, c/README.md): its generated accessors and ABI dump, its
-# format, its build with warnings as errors on GCC and clang (with the C++
-# library built without exceptions too), MSVC and Xcode, its tests (unit,
+# format, its build with warnings as errors on GCC 16 and clang 23 (with the
+# C++ library built without exceptions too), MSVC and Xcode, its tests (unit,
 # against the specification's reference server, the header as C11, C17 and
 # C++, the ABI and the shared library's exports), the sanitizers,
 # clang-tidy, the install, and its bindings' sketches: the Swift package on
@@ -18,9 +18,9 @@ permissions:
   contents: read
 
 env:
-  # As cpp.yml: the newest clang and GCC Ubuntu 26.04 ships
-  CLANG: 22
-  GCC: 15
+  # As cpp.yml: LLVM's newest stable release (.github/actions/llvm); GCC's
+  # newest is the gcc job's image
+  CLANG: 23
 
 jobs:
   generated:
@@ -60,44 +60,50 @@ jobs:
               ':!:c/include/lantern/lantern_documents.h' \
             | xargs "$RUNNER_TEMP/clang-format/bin/clang-format" --dry-run --Werror
 
-  linux:
-    name: linux (${{ matrix.name }})
+  # GCC 16, the newest release, from GCC's official image (as cpp.yml): the
+  # hardened dev build, the C++ inside without exceptions, ASan and UBSan.
+  # SYS_PTRACE for LeakSanitizer.
+  gcc:
+    name: linux (gcc 16, ${{ matrix.preset }})
     runs-on: ubuntu-26.04
     timeout-minutes: 25
+    container:
+      image: gcc:16.2.0@sha256:07280eb2e744f1b7a2d8d4a3894c089ea07266c109758afc388a634bd098e4eb
+      options: --cap-add=SYS_PTRACE
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { name: "gcc", cc: gcc }
-          - { name: "clang", cc: clang }
-          # The C++ inside with -fno-exceptions -fno-rtti, as the consoles build it
-          - { name: "gcc, no exceptions", cc: gcc, preset: noexcept }
+        preset: [ dev, noexcept, asan, ubsan ]
+    env:
+      # The image's GCC, in /usr/local (cc and c++ are Debian's)
+      CC: gcc
+      CXX: g++
     steps:
+      # Before the checkout, for the submodule: git is the image's. libcurl
+      # and mbedTLS for the library's transports, a JDK for the JNI glue,
+      # binutils for the exports' test
+      - name: The adapters' libraries
+        run: |
+          apt-get update -q
+          apt-get install -y -q --no-install-recommends ccache \
+            libcurl4-openssl-dev libmbedtls-dev openssl python3 default-jdk-headless binutils
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           submodules: true
-      # libcurl and mbedTLS for the library's transports, a JDK for the JNI
-      # glue; Ninja 1.13 and CMake 4.4 come with the runner
-      - name: Install the compilers
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends ccache g++-$GCC clang-$CLANG \
-            libcurl4-openssl-dev libmbedtls-dev openssl default-jdk-headless binutils
-      - uses: ./.github/actions/ccache
+      - uses: ./.github/actions/cmake
         with:
-          key: c-linux-${{ matrix.name }}
+          ccache: c-gcc16-${{ matrix.preset }}
       - name: Build
         working-directory: c
         run: |
-          if [ "$CC_NAME" = gcc ]; then export CC=gcc-$GCC CXX=g++-$GCC; else export CC=clang-$CLANG CXX=clang++-$CLANG; fi
+          gcc --version | head -n 1
           cmake --preset "$PRESET" -DLANTERN_WERROR=ON
           cmake --build --preset "$PRESET"
           ccache --show-stats
         env:
-          PRESET: ${{ matrix.preset || 'dev' }}
-          CC_NAME: ${{ matrix.cc }}
+          PRESET: ${{ matrix.preset }}
       # Unit tests (shared and static), the ABI and the exports, the
       # README's example, then the integration tests against spec/server,
       # side by side
@@ -105,80 +111,44 @@ jobs:
         working-directory: c
         run: ctest --preset "$PRESET" --parallel "$(nproc)"
         env:
-          PRESET: ${{ matrix.preset || 'dev' }}
+          PRESET: ${{ matrix.preset }}
 
-  # GCC 16, the newest release, from GCC's official image (as cpp.yml)
-  linux-gcc16:
-    name: linux (gcc 16)
-    runs-on: ubuntu-26.04
-    timeout-minutes: 25
-    container:
-      image: gcc:16.2.0@sha256:07280eb2e744f1b7a2d8d4a3894c089ea07266c109758afc388a634bd098e4eb
-    env:
-      # The image's GCC, in /usr/local (cc and c++ are Debian's)
-      CC: gcc
-      CXX: g++
-    steps:
-      # Before the checkout, for the submodule: git is the image's
-      - name: CMake, Ninja and the adapters' libraries
-        run: |
-          apt-get update -q
-          apt-get install -y -q --no-install-recommends cmake ninja-build ccache \
-            libcurl4-openssl-dev libmbedtls-dev openssl python3 binutils
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          submodules: true
-      - uses: ./.github/actions/ccache
-        with:
-          key: c-linux-gcc16
-      - name: Build
-        working-directory: c
-        run: |
-          gcc --version | head -n 1
-          cmake --preset dev -DLANTERN_WERROR=ON
-          cmake --build --preset dev
-          ccache --show-stats
-      - name: Test
-        working-directory: c
-        run: ctest --preset dev --parallel "$(nproc)"
-
-  sanitizers:
-    name: linux (${{ matrix.preset }}, ${{ matrix.cc }})
+  # clang, LLVM's newest: the hardened dev build, and under ASan
+  clang:
+    name: linux (clang, ${{ matrix.preset }})
     runs-on: ubuntu-26.04
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { preset: asan, cc: clang }
-          - { preset: asan, cc: gcc }
-          - { preset: ubsan, cc: gcc }
+        preset: [ dev, asan ]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           submodules: true
+      - uses: ./.github/actions/llvm
+        with:
+          version: ${{ env.CLANG }}
+      # As the gcc job's
       - name: Install the compilers
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends ccache g++-$GCC clang-$CLANG libclang-rt-$CLANG-dev \
-            libcurl4-openssl-dev libmbedtls-dev openssl binutils
-      - uses: ./.github/actions/ccache
+          sudo apt-get install -y -q --no-install-recommends ccache "clang-$CLANG" "libclang-rt-$CLANG-dev" \
+            libcurl4-openssl-dev libmbedtls-dev openssl default-jdk-headless binutils
+      - uses: ./.github/actions/cmake
         with:
-          key: c-${{ matrix.preset }}-${{ matrix.cc }}
+          ccache: c-clang-${{ matrix.preset }}
       - name: Build
         working-directory: c
         run: |
-          if [ "$CC_NAME" = gcc ]; then export CC=gcc-$GCC CXX=g++-$GCC; else export CC=clang-$CLANG CXX=clang++-$CLANG; fi
+          export CC="clang-$CLANG" CXX="clang++-$CLANG"
           cmake --preset "$PRESET" -DLANTERN_WERROR=ON
           cmake --build --preset "$PRESET"
           ccache --show-stats
         env:
           PRESET: ${{ matrix.preset }}
-          CC_NAME: ${{ matrix.cc }}
       - name: Test
         working-directory: c
         run: ctest --preset "$PRESET" --parallel "$(nproc)"
@@ -193,6 +163,11 @@ jobs:
       fail-fast: false
       matrix:
         stdlib: [ libc++, libstdc++ ]
+    env:
+      # Ubuntu's LLVM 22, whose checks the code is clean of: clang-tidy 23
+      # brings new ones (readability-trailing-comma, pointees in
+      # misc-const-correctness…) that the code is to meet first
+      TIDY: 22
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -202,21 +177,22 @@ jobs:
       - name: Install clang and clang-tidy
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends clang-$CLANG clang-tidy-$CLANG \
-            libc++-$CLANG-dev libc++abi-$CLANG-dev libcurl4-openssl-dev libmbedtls-dev
+          sudo apt-get install -y -q --no-install-recommends "clang-$TIDY" "clang-tidy-$TIDY" \
+            "libc++-$TIDY-dev" "libc++abi-$TIDY-dev" libcurl4-openssl-dev libmbedtls-dev
+      - uses: ./.github/actions/cmake
       # c/src against libc++ and against libstdc++ (one job each), with
       # c/.clang-tidy (cpp/'s checks; it says why one more is off); the
       # generated accessors left out
       - name: clang-tidy
         run: |
-          export CC=clang-$CLANG CXX=clang++-$CLANG
+          export CC="clang-$TIDY" CXX="clang++-$TIDY"
           if [ "$STDLIB" = libc++ ]; then
             cmake -S c --preset dev -B build/tidy -DCMAKE_CXX_FLAGS=-stdlib=libc++ \
               -DCMAKE_EXE_LINKER_FLAGS=-stdlib=libc++ -DCMAKE_SHARED_LINKER_FLAGS=-stdlib=libc++
           else
             cmake -S c --preset dev -B build/tidy
           fi
-          run-clang-tidy-$CLANG -clang-tidy-binary clang-tidy-$CLANG -config-file c/.clang-tidy -p build/tidy -quiet \
+          "run-clang-tidy-$TIDY" -clang-tidy-binary "clang-tidy-$TIDY" -config-file c/.clang-tidy -p build/tidy -quiet \
             'c/src/[^g].*\.cpp$'
         env:
           STDLIB: ${{ matrix.stdlib }}
@@ -234,9 +210,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: ./.github/actions/ccache
+      - uses: ./.github/actions/cmake
         with:
-          key: c-install-${{ matrix.consumer }}
+          ccache: c-install-${{ matrix.consumer }}
       # An app's two ways in (c/README.md): find_package(LanternC) after an
       # install, or add_subdirectory of the source; the shared library and
       # the static one, from C
@@ -272,7 +248,7 @@ jobs:
         with:
           persist-credentials: false
           submodules: true
-      # Visual Studio's generator; the DLL (dllexport) and the static
+      # Visual Studio's generator (Visual Studio 2026); the DLL (dllexport) and the static
       # library, unit tests and the ABI dump (the integration tests' adapter
       # is POSIX); no TLS adapter, as in cpp.yml. MSBuild compiles side by
       # side, as in cpp.yml
@@ -303,18 +279,23 @@ jobs:
         with:
           persist-credentials: false
           submodules: true
+      - uses: ./.github/actions/cmake
+        with:
+          ccache: c-macos
+      # Xcode's clang (AppleClang), with Ninja
       - name: Build
         run: |
-          cmake -S c -B build -DCMAKE_BUILD_TYPE=Debug -DLANTERN_WERROR=ON
-          cmake --build build -j "$(sysctl -n hw.ncpu)"
+          cmake -S c -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DLANTERN_WERROR=ON
+          cmake --build build
       - name: Test
         run: ctest --test-dir build --output-on-failure -R "c_unit|c_abi|c_readme"
       # The Swift package of c/bindings/swift, over the library installed
       - name: Swift
         run: |
-          cmake -S c -B build/swift -DCMAKE_BUILD_TYPE=Release -DLANTERN_C_BUILD_TESTS=OFF -DLANTERN_C_BUILD_EXAMPLES=OFF \
+          cmake -S c -B build/swift -G Ninja -DCMAKE_BUILD_TYPE=Release -DLANTERN_C_BUILD_TESTS=OFF -DLANTERN_C_BUILD_EXAMPLES=OFF \
             -DLANTERN_CURL=OFF -DLANTERN_MBEDTLS=OFF
-          cmake --build build/swift -j "$(sysctl -n hw.ncpu)"
+          cmake --build build/swift
+          ccache --show-stats
           cmake --install build/swift --prefix "$RUNNER_TEMP/prefix"
           swift test --package-path c/bindings/swift -Xcc -I"$RUNNER_TEMP/prefix/include" \
             -Xlinker -L"$RUNNER_TEMP/prefix/lib" -Xlinker -rpath -Xlinker "$RUNNER_TEMP/prefix/lib"
@@ -334,9 +315,9 @@ jobs:
           persist-credentials: false
       # The runner's newest NDK: liblantern_c.so and the JNI glue of
       # c/bindings/kotlin (the Kotlin side is an app's Gradle build)
-      - uses: ./.github/actions/ccache
+      - uses: ./.github/actions/cmake
         with:
-          key: c-android-${{ matrix.abi }}
+          ccache: c-android-${{ matrix.abi }}
       - name: Build
         env:
           ABI: ${{ matrix.abi }}

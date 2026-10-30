@@ -2,10 +2,9 @@
 # https://reuse.software/
 name: reuse
 
+# Called by ci.yml on every run: any file may lack its licence
 on:
-  push:
-    branches: [ main ]
-  pull_request:
+  workflow_call:
 
 permissions:
   contents: read

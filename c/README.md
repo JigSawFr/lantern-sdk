@@ -56,7 +56,7 @@ its reference server for the integration tests.
 
 ### Before pushing
 
-The CI (`.github/workflows/c.yml`) checks all of these; run what you can:
+The CI (`.github/workflows/c.yml`, through `ci.yml`) checks all of these; run what you can:
 
 ```sh
 cd c

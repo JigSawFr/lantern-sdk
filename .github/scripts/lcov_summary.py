@@ -4,8 +4,8 @@
     lcov_summary.py <title> <file.lcov> [--strip <prefix>] >> "$GITHUB_STEP_SUMMARY"
 
 One row per source file (lines, functions and branches covered, in per cent),
-the least covered first, then the total. llvm-cov export --format=lcov (cpp.yml)
-and node --test's lcov reporter (typescript.yml) both write it.
+the least covered first, then the total. cpp.yml's coverage job writes it with
+llvm-cov export --format=lcov.
 """
 
 from __future__ import annotations
