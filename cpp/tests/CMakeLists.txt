@@ -4,6 +4,9 @@ set(LANTERN_SPEC_DIR "${PROJECT_SOURCE_DIR}/../spec" CACHE PATH "The specificati
 
 add_library(lantern_doctest INTERFACE)
 target_include_directories(lantern_doctest SYSTEM INTERFACE ${PROJECT_SOURCE_DIR}/third_party/doctest)
+# The real <ostream> rather than doctest's own declarations, which Microsoft's
+# standard library does not accept when a std::string_view is printed.
+target_compile_definitions(lantern_doctest INTERFACE DOCTEST_CONFIG_USE_STD_HEADERS)
 if (LANTERN_NO_EXCEPTIONS)
     # REQUIRE ends the run instead of throwing
     target_compile_definitions(lantern_doctest INTERFACE DOCTEST_CONFIG_NO_EXCEPTIONS_BUT_WITH_ALL_ASSERTS)
@@ -22,7 +25,7 @@ if (LANTERN_BUILD_TESTS)
         unit/requires_tests.cpp)
     target_link_libraries(lantern_unit_tests PRIVATE Lantern::lantern lantern_doctest)
     target_compile_definitions(lantern_unit_tests PRIVATE LANTERN_SPEC_DIR="${LANTERN_SPEC_DIR}"
-        $<$<CXX_COMPILER_ID:MSVC>:_CRT_SECURE_NO_WARNINGS>)
+        $<$<BOOL:${WIN32}>:_CRT_SECURE_NO_WARNINGS>)
     lantern_warnings(lantern_unit_tests)
     if (LANTERN_NO_EXCEPTIONS)
         lantern_no_exceptions(lantern_unit_tests)
