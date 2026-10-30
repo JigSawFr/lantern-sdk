@@ -1,0 +1,59 @@
+{
+  "schema": 1,
+  "platform": "switch",
+  "title_id": "0100ABCD00010000",
+  "language": "en",
+  "name": "Frostline Tales",
+  "publisher": "Fjord Works",
+  "developer": "Fjord Works",
+  "release": "2025-03-14",
+  "updated": "2026-10-28T19:02:11Z",
+  "genres": [
+    "adventure",
+    "puzzle"
+  ],
+  "tags": [
+    "co-op",
+    "winter"
+  ],
+  "players": {
+    "min": 1,
+    "max": 4,
+    "online": true,
+    "online_max": 8
+  },
+  "ratings": [
+    {
+      "system": "PEGI",
+      "rating": "7"
+    },
+    {
+      "system": "ESRB",
+      "rating": "E10+"
+    }
+  ],
+  "languages": [
+    "en",
+    "fr",
+    "ja"
+  ],
+  "summary": "Guide a lantern-bearer across a frozen archipelago.",
+  "description": "Guide a lantern-bearer across a frozen archipelago, island by island, and light the beacons the winter put out. Up to four players on one console.",
+  "icon": {
+    "url": "/api/lantern/v1/media/9f2c41aa.jpg",
+    "width": 256,
+    "sha256": "3a7bd3e2b4c1f0a9e8d7c6b5a4938271605f4e3d2c1b0a9f8e7d6c5b4a392817"
+  },
+  "screenshots": [
+    {
+      "url": "https://media.example.org/frostline/1.jpg",
+      "width": 1280,
+      "height": 720,
+      "external": true
+    }
+  ],
+  "video": {
+    "url": "https://video.example.org/frostline/trailer",
+    "external": true
+  }
+}
