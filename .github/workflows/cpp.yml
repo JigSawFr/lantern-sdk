@@ -97,7 +97,8 @@ jobs:
           packages="ninja-build g++-$GCC clang-$CLANG"
           case "${{ matrix.packages }}" in
             libcxx) packages="$packages libc++-$CLANG-dev libc++abi-$CLANG-dev" ;;
-            multilib) packages="$packages g++-$GCC-multilib" ;;
+            # gcc-multilib brings the i386 asm/ headers the versioned one leaves out
+            multilib) packages="$packages g++-$GCC-multilib gcc-multilib" ;;
           esac
           sudo apt-get install -y -q --no-install-recommends $packages
       - name: Build
