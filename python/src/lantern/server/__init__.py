@@ -2,7 +2,9 @@
 existing app. LanternApp answers the routes over a Library the app
 implements (MemoryLibrary is one) and, with an Accounts store (MemoryAccounts
 is one), pairs devices, checks signed requests, redeems invitations, applies
-rating caps and answers the administration API. The pieces it is made of
+rating caps and answers the administration API; with a SaveStore
+(MemorySaveStore, FileSaveStore) it keeps save backups, encrypted ones
+among them, and with a RequestStore (MemoryRequests) requests for games. The pieces it is made of
 (problem+json, cursors, files with ranges and digests, the platform filter,
 the handshake, the pairing desk, LAN discovery) are usable on their own.
 Flask and FastAPI adapters are in lantern.server.flask and
@@ -25,25 +27,31 @@ from lantern.server.http import (
 from lantern.server.library import (
     Account,
     Authenticate,
+    CheatWriter,
     Journal,
     Library,
     MemoryLibrary,
+    SectionSource,
     check_homebrew,
     make_package,
     zip_manifest,
 )
 from lantern.server.paging import Cursors, Sealer, SinceTokens, page_size
 from lantern.server.pairing import Limiter, PairingDesk, Pending, approval_page
+from lantern.server.saves import FileSaveStore, MemorySaveStore, SaveLimits, SaveStore, UploadSession
+from lantern.server.title_requests import MemoryRequests, RequestStore, StoredRequest
 
 __all__ = [
     "Account",
     "AccountError",
     "Accounts",
     "Authenticate",
+    "CheatWriter",
     "Cursors",
     "Device",
     "DiscoveryResponder",
     "FileRef",
+    "FileSaveStore",
     "Invitation",
     "Journal",
     "LanternApp",
@@ -51,13 +59,21 @@ __all__ = [
     "Limiter",
     "MemoryAccounts",
     "MemoryLibrary",
+    "MemoryRequests",
+    "MemorySaveStore",
     "PairingDesk",
     "Pending",
     "ProblemError",
+    "RequestStore",
+    "SaveLimits",
+    "SaveStore",
     "Sealer",
+    "SectionSource",
     "ServerRequest",
     "ServerResponse",
     "SinceTokens",
+    "StoredRequest",
+    "UploadSession",
     "User",
     "advertise_dnssd",
     "approval_page",
