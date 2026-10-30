@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/changes.json",
+  "title": "Changes",
+  "description": "GET <base>/v1/changes (SPEC.md § 6.4).",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "$ref": "common.json#/$defs/schema1"
+    },
+    "added": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/app"
+      }
+    },
+    "removed": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/opaque"
+      }
+    },
+    "since": {
+      "$ref": "common.json#/$defs/opaque"
+    }
+  },
+  "required": [
+    "schema",
+    "added",
+    "removed",
+    "since"
+  ]
+}

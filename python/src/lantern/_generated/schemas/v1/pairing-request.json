@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/pairing-request.json",
+  "title": "Pairing request",
+  "description": "POST <base>/v1/pairing, without a token (SPEC.md § 5.2).",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "$ref": "common.json#/$defs/schema1"
+    },
+    "device": {
+      "$ref": "common.json#/$defs/name"
+    },
+    "scopes": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/scope"
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    }
+  },
+  "required": [
+    "schema",
+    "device",
+    "scopes"
+  ]
+}

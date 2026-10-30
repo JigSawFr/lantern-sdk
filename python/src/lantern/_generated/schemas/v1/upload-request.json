@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/upload-request.json",
+  "title": "A resumable upload",
+  "description": "POST <base>/v1/saves/{title_id}/uploads (SPEC.md § 9.3).",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "$ref": "common.json#/$defs/schema1"
+    },
+    "size": {
+      "$ref": "common.json#/$defs/uint64"
+    },
+    "sha256": {
+      "$ref": "common.json#/$defs/sha256"
+    },
+    "kind": {
+      "$ref": "common.json#/$defs/save_kind"
+    },
+    "slot": {
+      "$ref": "common.json#/$defs/slot"
+    },
+    "game_version_code": {
+      "$ref": "common.json#/$defs/uint64"
+    },
+    "profile": {
+      "$ref": "common.json#/$defs/profile"
+    },
+    "note": {
+      "$ref": "common.json#/$defs/note"
+    }
+  },
+  "required": [
+    "schema",
+    "size",
+    "sha256"
+  ]
+}

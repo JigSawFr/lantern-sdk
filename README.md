@@ -18,7 +18,7 @@ specification is pinned here as a submodule):
 | Folder | Language | Side |
 |---|---|---|
 | `cpp/` | C++23 | The client of the consoles and of apps built with [Aurore](https://github.com/JigSawFr/Aurore), and a server core; every platform Aurore runs on |
-| `python/` | Python | Client and server, with Flask and FastAPI integration |
+| [`python/`](python/README.md) | Python | Client and server, with Flask and FastAPI integration; begun: the client's read side and a server toolkit (`lantern-protocol`) |
 | `typescript/` | TypeScript | Client in the browser and Node, server for Node |
 | `c/` | C | A thin API over the C++ library, for Swift and Kotlin |
 

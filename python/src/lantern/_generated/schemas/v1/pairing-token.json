@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/pairing-token.json",
+  "title": "Pairing token",
+  "description": "GET poll once the user approved on the server's side (SPEC.md § 5.2). Sent as Authorization: Bearer <token> (§ 5.1).",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "$ref": "common.json#/$defs/schema1"
+    },
+    "token": {
+      "$ref": "common.json#/$defs/opaque",
+      "description": "Opaque, 128 bits of entropy at least."
+    },
+    "scopes": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/scope"
+      },
+      "uniqueItems": true
+    },
+    "expires": {
+      "description": "Seconds until the token expires; absent, it lasts until revoked.",
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "required": [
+    "schema",
+    "token",
+    "scopes"
+  ]
+}

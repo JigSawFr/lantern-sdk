@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/title-changes.json",
+  "title": "Title changes",
+  "description": "GET <base>/v1/titles/changes (SPEC.md § 7.3).",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "$ref": "common.json#/$defs/schema1"
+    },
+    "titles": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/title"
+      }
+    },
+    "removed": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "platform": {
+            "$ref": "common.json#/$defs/platform"
+          },
+          "title_id": {
+            "$ref": "common.json#/$defs/id"
+          }
+        },
+        "required": [
+          "platform",
+          "title_id"
+        ]
+      }
+    },
+    "since": {
+      "$ref": "common.json#/$defs/opaque"
+    },
+    "more": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schema",
+    "titles",
+    "removed",
+    "since",
+    "more"
+  ]
+}
