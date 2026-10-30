@@ -7,16 +7,19 @@ console homebrews and the game library servers people run at home.
         for app in client.iter_apps():
             print(app.name, app.version_code)
 
-- lantern.LanternClient, lantern.AsyncLanternClient: the client (read side);
+- lantern.LanternClient, lantern.AsyncLanternClient: the client: pairing with
+  a device key, signed requests, every route of the protocol;
 - lantern.models: the documents, generated from the specification's schemas;
 - lantern.homebrew, lantern.profiles, lantern.digest, lantern.pinning: what a
-  client checks before it installs anything;
+  client checks before it installs anything, and what it keeps of a server;
+- lantern.signatures, lantern.spki, lantern.ratings, lantern.discovery: signed
+  requests (RFC 9421), key fingerprints, rating caps, LAN discovery;
 - lantern.server: the toolkit a server is built with (Flask and FastAPI
   adapters in lantern.server.flask and lantern.server.fastapi);
 - lantern.schema, lantern.limits, lantern.store: validation, SPEC.md § 13's
   limits, and files kept by the `schema` rule.
 
-Follows the specification's draft 0.3 (SPEC_DRAFT).
+Follows the specification's draft 0.4 (SPEC_DRAFT).
 """
 
 from lantern._base import SCHEMA, DocumentError, JSONObject, JSONValue, LanternError
@@ -32,8 +35,14 @@ from lantern.errors import (
     IntegrityError,
     NewerSchema,
     NotFound,
+    PinMismatch,
     ProblemError,
     ServerError,
+    SignatureExpired,
+    SignatureInvalid,
+    SignatureRefused,
+    SignatureReplayed,
+    SignatureRequired,
     SlowDown,
     TooLarge,
     TransportError,
@@ -62,8 +71,14 @@ __all__ = [
     "LanternError",
     "NewerSchema",
     "NotFound",
+    "PinMismatch",
     "ProblemError",
     "ServerError",
+    "SignatureExpired",
+    "SignatureInvalid",
+    "SignatureRefused",
+    "SignatureReplayed",
+    "SignatureRequired",
     "SlowDown",
     "TooLarge",
     "TransportError",

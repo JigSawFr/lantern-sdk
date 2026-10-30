@@ -21,6 +21,8 @@ from collections.abc import Mapping
 from lantern._base import DocumentError, LanternError
 from lantern._generated.models import ERROR_CODES, Problem
 from lantern.limits import load_json, printable
+from lantern.signatures import parse_accept_signature
+from lantern.spki import short
 
 __all__ = [
     "AccountFrozen",
@@ -34,8 +36,14 @@ __all__ = [
     "LanternError",
     "NewerSchema",
     "NotFound",
+    "PinMismatch",
     "ProblemError",
     "ServerError",
+    "SignatureExpired",
+    "SignatureInvalid",
+    "SignatureRefused",
+    "SignatureReplayed",
+    "SignatureRequired",
     "SlowDown",
     "TooLarge",
     "TransportError",
@@ -73,6 +81,45 @@ class BadRequest(ProblemError):
 
 class Unauthorized(ProblemError):
     """401: no token where one is needed, or one the server does not take."""
+
+
+class SignatureRefused(Unauthorized):
+    """401 for a request's signature (SPEC.md § 5.4). `accept_signature` is
+    what the server's Accept-Signature asks for, when it sent one; `date` is
+    its Date header."""
+
+    def __init__(self, status: int, problem: Problem | None = None, headers: Mapping[str, str] | None = None) -> None:
+        super().__init__(status, problem, headers)
+        self.accept_signature = parse_accept_signature(_header(self.headers, "Accept-Signature"))
+        self.date = _header(self.headers, "Date")
+
+
+class SignatureRequired(SignatureRefused):
+    """401 `signature_required`: the token is bound to a key, or the server
+    takes only bound tokens: sign, or pair again with a key."""
+
+
+class SignatureInvalid(SignatureRefused):
+    """401 `signature_invalid`: not the token's key, or not the form of
+    SPEC.md § 5.4. Pair again rather than retry."""
+
+
+class SignatureExpired(SignatureRefused):
+    """401 `signature_expired`: `created` was outside the server's window. The
+    client signs again once, with the offset of its clock to `date`."""
+
+
+class SignatureReplayed(SignatureRefused):
+    """401 `signature_replayed`: a nonce the server saw: the request was not
+    taken; signed again once with a new nonce."""
+
+
+_SIGNATURE_ERRORS: dict[str, type[SignatureRefused]] = {
+    "signature_required": SignatureRequired,
+    "signature_invalid": SignatureInvalid,
+    "signature_expired": SignatureExpired,
+    "signature_replayed": SignatureReplayed,
+}
 
 
 class Forbidden(ProblemError):
@@ -152,6 +199,19 @@ class TransportError(LanternError):
     """The connection failed, or the server's certificate was refused."""
 
 
+class PinMismatch(TransportError):
+    """The server's key is not the one pinned at pairing (SPEC.md § 5.3): an
+    alarm, not an error to retry. Nothing was sent over the connection. `seen`
+    and `pinned` are the two fingerprints (SHA-256, hex), to show the user;
+    they pair again only when they ask to."""
+
+    def __init__(self, seen: str, pinned: str, where: str = "") -> None:
+        super().__init__(
+            f"{where + ': ' if where else ''}the server's key changed: {short(seen)}, pinned {short(pinned)}"
+        )
+        self.seen, self.pinned = seen, pinned
+
+
 class InsecureTransport(TransportError):
     """Plain HTTP to an address that is not a loopback one (SPEC.md § 2)."""
 
@@ -187,4 +247,6 @@ def problem_error(status: int, body: bytes, headers: Mapping[str, str] | None = 
     cls = _BY_STATUS.get(status) or (ServerError if status >= 500 else ProblemError)
     if cls is Forbidden and problem is not None and problem.code == "account_frozen":
         cls = AccountFrozen
+    if cls is Unauthorized and problem is not None and problem.code in _SIGNATURE_ERRORS:
+        cls = _SIGNATURE_ERRORS[problem.code]
     return cls(status, problem, headers)
