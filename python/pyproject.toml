@@ -1,5 +1,8 @@
 [build-system]
-requires = ["hatchling>=1.27"]
+# Pinned, so that a release's sdist and wheel can be built again byte for byte
+# (RELEASING.md); the release builds with tools/release-requirements.txt, whose
+# hashes pin hatchling's own dependencies too. Raised by hand, with that file.
+requires = ["hatchling==1.32.4"]
 build-backend = "hatchling.build"
 
 [project]
@@ -46,6 +49,8 @@ lantern-static = "lantern.static:main"
 Homepage = "https://github.com/JigSawFr/lantern-sdk"
 Specification = "https://github.com/JigSawFr/lantern"
 Issues = "https://github.com/JigSawFr/lantern-sdk/issues"
+Changelog = "https://github.com/JigSawFr/lantern-sdk/blob/main/CHANGELOG.md"
+Releases = "https://github.com/JigSawFr/lantern-sdk/releases"
 
 [dependency-groups]
 # The tests' runner alone: the CI's job for the core without any extra installs

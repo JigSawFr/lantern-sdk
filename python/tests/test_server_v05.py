@@ -81,8 +81,17 @@ def test_the_handshake_of_0_5(app: LanternApp) -> None:
     hello = doc(call(app, "GET", "/.well-known/lantern", token=DEMO_TOKEN, key=DEMO_KEY))
     assert schema.validate("handshake", hello) == []
     f = hello["features"]
-    assert (f["events"], f["peers"], f["sync"], f["encrypted_saves"]) == (1, 1, 1, 0)
-    assert hello["limits"] == {"page_size": 500, "heartbeat": 5, "event_streams": 2, "wait": 60, "sync_items": 10000}
+    assert (f["events"], f["peers"], f["sync"], f["encrypted_saves"]) == (1, 1, 1, 1)
+    assert hello["limits"] == {
+        "page_size": 500,
+        "heartbeat": 5,
+        "event_streams": 2,
+        "wait": 60,
+        "sync_items": 10000,
+        "save_body": 8 << 20,
+        "save_size": 1 << 30,
+        "saves_kept_per_title": 10,
+    }
     assert base64.b64decode(hello["peers"]["key"]) == ed25519.public_key(GRANT_SEED)
     anon = doc(call(app, "GET", "/.well-known/lantern"))
     assert anon["peers"] == hello["peers"] and anon["features"]["sync"] == 0  # the key, the same for every caller

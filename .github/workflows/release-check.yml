@@ -1,0 +1,106 @@
+# What a release will be, checked before there is one (RELEASING.md): the
+# version each language states (release-please-config.json's files), and
+# each part of the release built twice from the commit, in two folders,
+# with tools/reproduce.sh: the same bytes, or the job fails. The Python
+# package, the npm tarball, the source archive, and the C++ library and C API
+# for Linux x86_64; their SBOMs checked against the CycloneDX schema.
+# Nothing is published or attested here.
+name: release-check
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "cpp/**"
+      - "c/**"
+      - "python/**"
+      - "typescript/**"
+      - "tools/**"
+      - "release-please-config.json"
+      - ".release-please-manifest.json"
+      - ".github/workflows/release*.yml"
+  pull_request:
+    paths:
+      - "cpp/**"
+      - "c/**"
+      - "python/**"
+      - "typescript/**"
+      - "tools/**"
+      - "release-please-config.json"
+      - ".release-please-manifest.json"
+      - ".github/workflows/release*.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  NPM_CONFIG_FUND: "false"
+  NPM_CONFIG_AUDIT: "false"
+  # As release.yml
+  GCC: 15
+
+jobs:
+  versions:
+    name: the version in every language
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Each file release-please writes states a version it can find; they
+      # may differ between releases (a warning), the release requires one
+      - name: tools/release_versions.py
+        run: |
+          set -o pipefail
+          python3 tools/release_versions.py | tee "$RUNNER_TEMP/versions.txt"
+          { echo '```'; cat "$RUNNER_TEMP/versions.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+  reproducible:
+    name: reproducible (${{ matrix.part }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [ python, npm, source, cpp, c ]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: matrix.part == 'npm'
+        with:
+          node-version: "24"
+      - name: Install the compiler
+        if: matrix.part == 'cpp' || matrix.part == 'c'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends ninja-build "g++-$GCC"
+      # As release.yml: by hash; cyclonedx-bom's library checks the SBOMs
+      - name: The release's tools
+        run: |
+          python -m venv "$RUNNER_TEMP/tools"
+          "$RUNNER_TEMP/tools/bin/pip" install --quiet --require-hashes -r tools/release-requirements.txt
+      - name: Built twice, compared
+        env:
+          PART: ${{ matrix.part }}
+          PYTHON: ${{ runner.temp }}/tools/bin/python
+          REPRODUCE_KEEP: ${{ runner.temp }}/built
+        run: |
+          set -o pipefail
+          if [ "$PART" = cpp ] || [ "$PART" = c ]; then export CC=gcc-$GCC CXX=g++-$GCC; fi
+          tools/reproduce.sh twice "$PART" | tee "$RUNNER_TEMP/compared.txt"
+          { echo "### $PART"; echo '```'; cat "$RUNNER_TEMP/compared.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: The SBOMs against the CycloneDX schema
+        if: matrix.part != 'source'
+        run: |
+          "$RUNNER_TEMP/tools/bin/python" tools/sbom.py validate "$RUNNER_TEMP"/built/*.cdx.json

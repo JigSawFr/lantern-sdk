@@ -5,7 +5,7 @@
 cmake_minimum_required(VERSION 3.28)
 
 project(Lantern
-    VERSION 0.5.0
+    VERSION 0.5.0 # x-release-please-version (the SDK's one version: RELEASING.md)
     DESCRIPTION "Client library of the Lantern protocol"
     HOMEPAGE_URL "https://github.com/JigSawFr/lantern-sdk"
     LANGUAGES C CXX)
@@ -161,4 +161,9 @@ if (LANTERN_INSTALL)
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Lantern)
     install(FILES THIRD_PARTY_NOTICES.md third_party/monocypher/LICENCE.md
         DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/lantern)
+    # The library's own licence (the repository's, MIT), with what it vendors
+    if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../LICENSES/MIT.txt)
+        install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../LICENSES/MIT.txt
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/lantern RENAME LICENSE)
+    endif ()
 endif ()

@@ -18,7 +18,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from lantern import homebrew as hb
 from lantern import schema
@@ -31,6 +31,7 @@ from lantern._generated.models import (
     Package,
     RatingCap,
     RemovedTitle,
+    Section,
     Title,
 )
 from lantern.digest import sha256_hex
@@ -41,8 +42,9 @@ from lantern.server.events import LibraryChange
 from lantern.server.files import FileRef
 from lantern.server.http import ServerRequest
 
-#: The families a Library may offer, beyond `changes` (which needs a Journal).
-LIBRARY_FAMILIES = ("library", "titles", "homebrew", "cheats")
+#: The families a Library may offer, beyond `changes` (which needs a Journal); `sections` needs a
+#: SectionSource.
+LIBRARY_FAMILIES = ("library", "titles", "homebrew", "cheats", "sections")
 
 
 @dataclass(frozen=True)
@@ -52,7 +54,8 @@ class Account:
     the handshake shows; `key`, the device key its token is bound to (32
     bytes: LanternApp then checks the request's signature, SPEC.md § 5.4);
     `rating_cap`, the cap its token carries (§ 5.6); `device`, its device's
-    id (§ 5.7)."""
+    id (§ 5.7), and `device_name`, the name its device paired with (which a
+    save backup shows, § 9.1)."""
 
     scopes: frozenset[str] = frozenset()
     state: str = "active"
@@ -60,6 +63,7 @@ class Account:
     key: bytes | None = None
     rating_cap: RatingCap | None = None
     device: str | None = None
+    device_name: str | None = None
 
     @property
     def bound(self) -> bool:
@@ -125,6 +129,41 @@ class Library(Protocol):
     def journal(self) -> Journal | None:
         """The change journal, or None: then the family `changes` is not offered, and
         /v1/titles/changes answers 410 to any token."""
+        ...
+
+
+@runtime_checkable
+class SectionSource(Protocol):
+    """A Library that curates shelves (SPEC.md § 6.5): the family `sections`, when it is among its
+    `families`."""
+
+    def sections(self, languages: Sequence[str]) -> Iterable[Section]:
+        """Every shelf, its title in the best of `languages` it has; LanternApp leaves out the apps a caller
+        does not see (another platform, a rating cap) and the shelves left empty."""
+        ...
+
+
+@runtime_checkable
+class CheatWriter(Protocol):
+    """A Library whose cheat sets clients may write, with the scope cheats.write (SPEC.md § 10). LanternApp
+    checks what is written (the platform's format, the limits, a set that exists) before it calls these."""
+
+    def write_cheat(
+        self,
+        *,
+        platform: str,
+        title_id: str,
+        build_id: str | None,
+        source: str,
+        note: str | None,
+        text: str,
+        replacing: str | None = None,
+    ) -> CheatSet:
+        """A new set, or the set `replacing` with this text and note, under the same id."""
+        ...
+
+    def delete_cheat(self, cheat_id: str) -> bool:
+        """Removes a set; False when there is none of that id."""
         ...
 
 
@@ -211,6 +250,7 @@ class MemoryLibrary:
         self._cheats: dict[str, CheatSet] = {}
         self._files: dict[str, FileRef] = {}
         self._cheat_files: dict[str, FileRef] = {}
+        self._sections: dict[str, Section] = {}
         self._journal = MemoryJournal() if journal else None
         self._lock = threading.RLock()
         self._listeners: list[Callable[[LibraryChange], object]] = []
@@ -352,18 +392,41 @@ class MemoryLibrary:
         updated: str | None = None,
     ) -> CheatSet:
         """A cheat set from its text (SPEC.md § 10)."""
+        return self._put_cheat(
+            "cs_" + secrets.token_urlsafe(9),
+            platform=platform,
+            title_id=title_id,
+            text=text,
+            source=source,
+            build_id=build_id,
+            note=note,
+            updated=updated or now(),
+        )
+
+    def _put_cheat(
+        self,
+        cheat_id: str,
+        *,
+        platform: str,
+        title_id: str,
+        text: str,
+        source: str,
+        build_id: str | None,
+        note: str | None,
+        updated: str,
+    ) -> CheatSet:
         data = text.encode()
         if len(data) > CHEAT_SET:
             raise ValueError(f"a cheat set is {CHEAT_SET} bytes at most")
         file = FileRef.of_bytes(data, "text/plain; charset=utf-8")
         cheat = CheatSet(
-            id="cs_" + secrets.token_urlsafe(9),
+            id=cheat_id,
             platform=platform,
             title_id=title_id,
             build_id=build_id,
             source=source,
             note=note,
-            updated=updated or now(),
+            updated=updated,
             size=file.size,
             sha256=file.sha256,
         )
@@ -375,6 +438,53 @@ class MemoryLibrary:
             self._cheat_files[cheat.id] = file
             self._changed(LibraryChange("cheats", cheat.platform, cheat.title_id))
         return cheat
+
+    def write_cheat(
+        self,
+        *,
+        platform: str,
+        title_id: str,
+        build_id: str | None,
+        source: str,
+        note: str | None,
+        text: str,
+        replacing: str | None = None,
+    ) -> CheatSet:
+        """A set written by a client (SPEC.md § 10): new, or replacing the set of that id."""
+        cheat_id = replacing or "cs_" + secrets.token_urlsafe(9)
+        return self._put_cheat(
+            cheat_id,
+            platform=platform,
+            title_id=title_id,
+            text=text,
+            source=source,
+            build_id=build_id,
+            note=note,
+            updated=now(),
+        )
+
+    def delete_cheat(self, cheat_id: str) -> bool:
+        with self._lock:
+            cheat = self._cheats.pop(cheat_id, None)
+            self._cheat_files.pop(cheat_id, None)
+            if cheat is not None:
+                self._changed(LibraryChange("cheats", cheat.platform, cheat.title_id))
+            return cheat is not None
+
+    def add_section(self, section_id: str, title: str, apps: Sequence[str]) -> Section:
+        """A shelf the server curates (SPEC.md § 6.5): its id, its title, the ids of its apps in order.
+        Adding one of an id that exists replaces it."""
+        section = Section(id=section_id, title=title, apps=list(apps))
+        problems = schema.validate("sections", {"schema": 1, "sections": [section.to_json()]})
+        if problems:
+            raise ValueError(f"section {section_id}: " + "; ".join(problems[:3]))
+        with self._lock:
+            self._sections[section_id] = section
+        return section
+
+    def remove_section(self, section_id: str) -> None:
+        with self._lock:
+            self._sections.pop(section_id, None)
 
     # Library.
 
@@ -393,6 +503,10 @@ class MemoryLibrary:
     def cheats(self) -> list[CheatSet]:
         with self._lock:
             return list(self._cheats.values())
+
+    def sections(self, languages: Sequence[str]) -> list[Section]:
+        with self._lock:
+            return list(self._sections.values())
 
     def file(self, file_id: str) -> FileRef | None:
         with self._lock:

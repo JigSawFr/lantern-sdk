@@ -8,7 +8,8 @@
 # line, the conformance suite against the demo servers (Flask and FastAPI,
 # with the levels they reach, a peer of the toolkit among them) and against
 # the static library the generator writes, and the sdist and wheel. Nothing
-# is published: that comes with the first release and its signing.
+# is published here: release.yml builds, attests and publishes a release
+# (RELEASING.md).
 name: python
 
 # Called by ci.yml when the Python library's files change: its folder, the
