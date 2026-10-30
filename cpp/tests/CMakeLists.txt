@@ -5,8 +5,10 @@ set(LANTERN_SPEC_DIR "${PROJECT_SOURCE_DIR}/../spec" CACHE PATH "The specificati
 add_library(lantern_doctest INTERFACE)
 target_include_directories(lantern_doctest SYSTEM INTERFACE ${PROJECT_SOURCE_DIR}/third_party/doctest)
 # The real <ostream> rather than doctest's own declarations, which Microsoft's
-# standard library does not accept when a std::string_view is printed.
-target_compile_definitions(lantern_doctest INTERFACE DOCTEST_CONFIG_USE_STD_HEADERS)
+# standard library does not accept when a std::string_view is printed. On
+# Windows only: elsewhere it pulls in <ciso646>, which libstdc++ 15 warns
+# about in C++20.
+target_compile_definitions(lantern_doctest INTERFACE $<$<BOOL:${WIN32}>:DOCTEST_CONFIG_USE_STD_HEADERS>)
 # doctest names its test cases with __COUNTER__, which recent clang reports as
 # a C2y extension; an older clang does not know the warning, hence the first
 # flag.
