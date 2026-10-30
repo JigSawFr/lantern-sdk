@@ -4,9 +4,10 @@
  * through fetchHandler() (web Requests, as Hono hands them over), anonymously
  * and with a token bound to its key, with `--admin-writes` (an account made,
  * then deleted) and `--peer` (a PeerServer of the toolkit's, holding the
- * demo's files). Families the toolkit does not offer (sections, saves,
- * requests) are at 0: the suite checks that their routes are refused. With its
- * token the demo reaches the levels LEVELS says. Then lantern-static writes
+ * demo's files). The demo offers every family of draft 0.5: sections, save
+ * backups (encrypted ones too), cheat writes and requests among them, which
+ * the suite writes then deletes. With its token, which holds every scope, the
+ * demo reaches every level LEVELS says. Then lantern-static writes
  * the demo as a static library, which the suite's `--static` checks.
  */
 
@@ -90,7 +91,6 @@ const REQUIRED = [
   "cheats.sets",
   "cheats.text",
   "cheats.unknown",
-  "cheats.write",
   "schema.refused.library",
   "schema.refused.homebrew",
   "errors.unknown-route",
@@ -114,6 +114,8 @@ const REQUIRED = [
     (f) => `features.${f}`,
   ),
 ];
+// Anonymously: the writes a caller without cheats.write is refused.
+const ANONYMOUS = ["cheats.write"];
 // With the demo's token, bound to its key, and every scope the demo serves.
 const WITH_TOKEN = [
   "handshake.account",
@@ -134,7 +136,23 @@ const WITH_TOKEN = [
   "admin.users-write",
   "admin.users-delete",
   "compression.etag",
+  "cheats.write-cycle",
+  "requests.list",
+  "requests.create",
+  "requests.delete",
+  "saves.limits",
+  "saves.list",
+  "saves.no-platform",
+  "saves.upload",
+  "saves.read",
+  "saves.upload-digest",
+  "saves.upload-too-large",
+  "saves.single",
+  "saves.cleanup",
+  "schema.refused.saves",
+  "schema.refused.requests",
   // Draft 0.5.
+  "e2e.upload",
   "events.stream",
   "events.resume",
   "events.bad-token",
@@ -164,7 +182,7 @@ const WITH_TOKEN = [
 const SUITE_READS_ZSTD = spawnSync(PYTHON, ["-c", "import compression.zstd"]).status === 0;
 const NEEDS_ZSTD = ["documents.schema", "documents.limits"];
 /** The levels the demo reaches with its token (SPEC.md § 17). */
-const LEVELS = "Lantern Core +titles +homebrew +cheats +admin +events +peers +sync";
+const LEVELS = "Lantern Core +titles +homebrew +saves +cheats +requests +admin +events +peers +sync +encrypted_saves";
 
 /** A peer of the toolkit's holding the demo's files (written to disk), taking the demo's grants (SPEC.md § 19.4). */
 async function demoPeer(app: LanternApp): Promise<{ url: string; close(): Promise<void> }> {
@@ -262,7 +280,11 @@ for (const adapter of ["node:http", "fetchHandler"]) {
         const failed = report.split("\n").filter((l) => l.startsWith("FAIL"));
         assert.equal(code, 0, report);
         assert.deepEqual(failed, [], report);
-        for (const check of [...REQUIRED, ...(token ? WITH_TOKEN : []), ...(SUITE_READS_ZSTD ? NEEDS_ZSTD : [])]) {
+        for (const check of [
+          ...REQUIRED,
+          ...(token ? WITH_TOKEN : ANONYMOUS),
+          ...(SUITE_READS_ZSTD ? NEEDS_ZSTD : []),
+        ]) {
           assert.equal(status.get(check), "PASS", `${check}\n${report}`);
         }
         if (!SUITE_READS_ZSTD) {

@@ -14,11 +14,13 @@ route of the protocol: pairing with a device key, requests signed by it
 (RFC 9421), the writes, LAN discovery (Node), events (a stream over fetch
 and long polls), grants, mirrors and peers, sync, end-to-end encrypted
 saves and static libraries. The server toolkit pairs devices, checks signed
-requests, and serves the read routes, invitations, rating caps, the
+requests, and serves the read routes, sections, save backups (encrypted ones
+kept as sent), cheat writes, requests, invitations, rating caps, the
 administration API (deleting accounts included), events, grants and sync,
 with a peer server and a static library generator beside it; it reaches
-**Lantern Core +titles +homebrew +cheats +admin +events +peers +sync** in
-the specification's conformance suite, through `node:http` and through web
+every level of draft 0.5, **Lantern Core +titles +homebrew +saves +cheats
++requests +admin +events +peers +sync +encrypted_saves**, in the
+specification's conformance suite, through `node:http` and through web
 Requests, and its static libraries reach **Lantern Static**. See
 [What is not there yet](#what-is-not-there-yet). Nothing is published on npm
 before the first release (`"private": true` until then).
@@ -350,7 +352,7 @@ the device's free space (§ 6.3).
 
 ```ts
 import { createServer } from "node:http";
-import { LanternApp, MemoryAccounts, MemoryLibrary, nodeHandler } from "lantern-protocol/server";
+import { FileSaveStore, LanternApp, MemoryAccounts, MemoryLibrary, nodeHandler } from "lantern-protocol/server";
 
 const library = new MemoryLibrary({ base: "/api/lantern" });
 library.addAppFile({
@@ -363,8 +365,9 @@ library.addAppFile({
   name: "Frostline Tales",
   format: "nsp",
 });
-const accounts = new MemoryAccounts([{ name: "lea", scopes: ["library", "saves"] }, { name: "ada", scopes: ["library", "admin"] }]);
-const app = new LanternApp(library, { uid: SERVER_UID, name: "Living room shelf", accounts, public: false, spki: MY_TLS_KEY_SHA256, secret: SECRET });
+const accounts = new MemoryAccounts([{ name: "lea", scopes: ["library", "saves", "requests"] }, { name: "ada", scopes: ["library", "admin"] }]);
+const saves = await FileSaveStore.open("/var/lib/shelf/saves");
+const app = new LanternApp(library, { uid: SERVER_UID, name: "Living room shelf", accounts, saves, requests: true, public: false, spki: MY_TLS_KEY_SHA256, secret: SECRET });
 createServer(nodeHandler(app)).listen(8080);
 ```
 
@@ -406,12 +409,41 @@ What `LanternApp` serves, with `accounts`:
   its hash), waiting pairings, invitations;
 - the handshake, `library` (filters, sorts, sealed cursors, what is missing,
   files with `ETag`, `Repr-Digest` and ranges), `changes` with a journal,
-  `titles`, `homebrew`, `cheats`; problem+json for every error; `ETag` and
-  `304`, `Cache-Control` and `Vary`; JSON compressed as `Accept-Encoding`
-  asks (zstd, gzip); `Date` on every response;
+  `sections` (§ 6.5: a Library's `sections()`, `MemoryLibrary.addSection()`;
+  their apps of the caller's platform and within its rating cap), `titles`,
+  `homebrew`, `cheats`; problem+json for every error; `ETag` and `304`,
+  `Cache-Control` and `Vary`; JSON compressed as `Accept-Encoding` asks
+  (zstd, gzip); `Date` on every response;
+- cheats written (§ 10, scope `cheats.write`), over a Library with
+  `writeCheat()` and `deleteCheat()` (MemoryLibrary has them; without them,
+  `405`): `POST`, `PUT` and `DELETE`, a set of the same platform, title,
+  build and source `409`, the platform's form checked (a build id where the
+  profile wants one, Atmosphère's and Luma3DS's lines), 1 MiB at most
+  (`413`), a title above the caller's rating cap refused;
+- save backups (§ 9, with `saves: true`, a `FileSaveStore` or a `SaveStore`
+  of the server's own): in one request (`Content-Digest` required and
+  checked, `Lantern-Save-*` headers, `limits.save_body`), by resumable upload
+  (`chunk_size`, `Upload-Offset`, `409` with the server's offset, `HEAD`,
+  `DELETE`, a chunk's own digest, the whole archive's SHA-256 checked then
+  `422 digest_mismatch`, `limits.save_size`, 24 hours to finish), listed
+  newest first per title, read with ranges, deleted; `kind` (of the
+  platform's profile), `slot`, `profile` and `note` within § 13, the
+  device's name kept; `limits.saves_kept_per_title` (`savesKept`) drops the
+  oldest; an archive in clear must be a zip. Encrypted backups (§ 9.4, on
+  unless `encryptedSaves: false`, which then answers `400`) are kept as sent
+  with their `encryption`, checked only to begin with `LTNE2E01` and their
+  key id. `FileSaveStore` keeps them in a folder, its `index.json` read by
+  the `schema` rule (a newer one turns the family off and is never written
+  over; fields it does not know are kept);
+- requests (§ 11, with `requests: true` or a `RequestStore`): made (`201`,
+  or `200` with the open one), listed newest first with the title's name
+  when the caller may see it, withdrawn by their account; done when their
+  title comes into the library, or as the server decides
+  (`app.setRequestStatus(id, "declined")`);
 - deleting an account (§ 5.7): `?confirm=` repeating its name, never the
-  caller's own, its devices, invitations and sync data with it, at once
-  (`Accounts.deleteUser`; a store without it answers 409);
+  caller's own, its devices, invitations, save backups, uploads, requests
+  and sync data with it, at once (`Accounts.deleteUser`; a store without it
+  answers 409);
 - events (§ 18, on by default; `events: false` turns them off): a stream of
   Server-Sent Events, never compressed, `retry` then `ready`, every event
   after `Last-Event-ID` or `?since=` (400 for an id never given, 410 for
@@ -420,9 +452,10 @@ What `LanternApp` serves, with `accounts`:
   revoked or of an account frozen or deleted ended at once; long polls
   (`changes?since=&wait=`). Each caller gets what its token may read: of
   its scopes, account, platform and rating cap. LanternApp writes
-  `pairing`, `sync` and (from a Library with `subscribe()`, as
-  MemoryLibrary) `library`; `app.emit()` writes the server's own
-  (`request`, `save`), and `app.shutdown()` sends `shutdown`;
+  `pairing`, `sync`, `request` and `save`, and (from a Library with
+  `subscribe()`, as MemoryLibrary, or by `app.libraryChanged()`) `library`;
+  `app.emit()` writes the server's own, and `app.shutdown()` sends
+  `shutdown`;
 - grants (§ 19.3, with `peers: { seed }`): the server's own Ed25519 key,
   `peers.key` in the handshake, a grant for a file the caller may read,
   404 otherwise;
@@ -433,8 +466,10 @@ What `LanternApp` serves, with `accounts`:
   form (400), `limits.sync_items` (413), deletions kept 30 days, `DELETE`
   giving a new generation; `MemorySyncStore` keeps it in memory.
 
-The families it does not offer (sections, saves, encrypted saves,
-requests) are at 0 in the handshake, and their routes answer `404`. Each piece is usable on its own:
+A family it is not given (no `saves`, no `requests`, a Library without
+`sections()`) is at 0 in the handshake, and its routes answer `404`. The
+adapters read a body up to `app.bodyLimit` (a backup in one request, an
+upload's chunk, a cheat set), and answer `413` beyond it. Each piece is usable on its own:
 `jsonResponse()`, `problemResponse()`, `fileResponse()`, `platformOf()`,
 `readDocument()`, `Cursors` and `SinceTokens` (sealed with the server's
 secret, nothing kept), `checkHomebrew()`, `makePackage()`, `zipManifest()`.
@@ -486,10 +521,7 @@ and `GenerationChanged` (sync). All derive from `LanternError`.
 
 ## What is not there yet
 
-- In the server toolkit: sections, saves (and so `encrypted_saves`), cheat
-  writes and requests (their families are at 0), DNS-SD, and the routes it
-  could mark deprecated. `app.emit()` is there for a server that serves
-  requests or saves itself.
+- In the server toolkit: DNS-SD, and the routes it could mark deprecated.
 - `PeerServer` over TLS (it speaks plain HTTP on a private network, as
   § 19.4 allows), and DNS-SD of peers (`_lantern-peer._tcp`).
 - DNS-SD on the client: Node has no mDNS stack, and a browser no UDP.

@@ -7,8 +7,9 @@
  *     node test/demo.ts --port 8080 --key-file /tmp/demo.key
  *     python3 ../spec/conformance/run.py http://127.0.0.1:8080/ --token et_demo-… --key /tmp/demo.key
  *
- * It offers events (a heartbeat every 5 seconds), grants of a fixed key and
- * sync in memory. Its accounts are the toolkit's own: mira holds every scope it serves, and
+ * It offers events (a heartbeat every 5 seconds), grants of a fixed key,
+ * sync, save backups (encrypted ones too) and requests in memory, cheat writes
+ * and two shelves (sections). Its accounts are the toolkit's own: mira holds every scope it serves, and
  * DEMO_TOKEN, her console's, is bound to the device key DEMO_KEY: every
  * request it carries is signed. `--key-file` writes DEMO_KEY's seed (base64)
  * where the conformance suite's `--key` reads it. It prints one JSON line
@@ -36,7 +37,16 @@ export const DEMO_TOKEN = "et_demo-0123456789abcdef0123456789abcdef";
 /** The demo device's key, made from a fixed phrase: for the demo only, never a real device's. */
 export const DEMO_SEED = new Uint8Array(createHash("sha256").update("Mira's fictional console key").digest());
 /** Every scope the demo serves: its admin's. */
-export const EVERY_SCOPE = ["library", "cheats", "admin", "sync.read", "sync.write"];
+export const EVERY_SCOPE = [
+  "library",
+  "saves",
+  "cheats",
+  "cheats.write",
+  "requests",
+  "admin",
+  "sync.read",
+  "sync.write",
+];
 /** The demo's grant key (SPEC.md § 19.3), from a fixed phrase: the demo's alone. */
 export const GRANT_SEED = new Uint8Array(createHash("sha256").update("Demo shelf's fictional grant key").digest());
 const AUTHOR_SEED = new Uint8Array(createHash("sha256").update("Mira's fictional signing key").digest()); // for the demo only
@@ -80,8 +90,9 @@ export async function buildLibrary(): Promise<MemoryLibrary> {
     ["Copper Moth", "0100CD3400020000", "0100CD3400020800", "update", 196608, "1.3.0", "nsp", 900],
     ["Quiet Tide", "0100EF5600030000", "0100EF5600030000", "base", 0, "1.0.0", "nsp", 0],
   ];
+  const appIds: string[] = [];
   games.forEach(([name, titleId, appId, type, version, versionName, format, size], i) => {
-    lib.addAppFile({
+    const app = lib.addAppFile({
       data: blob(`${appId}v${version}`, size),
       platform: "switch",
       title_id: titleId,
@@ -93,8 +104,9 @@ export async function buildLibrary(): Promise<MemoryLibrary> {
       format,
       added: `2026-10-${String(10 + i).padStart(2, "0")}T12:00:00Z`,
     });
+    appIds.push(app.id);
   });
-  lib.addAppFile({
+  const android = lib.addAppFile({
     data: blob("lumen-android", 2048),
     platform: "android",
     title_id: "org.example.lumendrift",
@@ -146,6 +158,9 @@ export async function buildLibrary(): Promise<MemoryLibrary> {
     },
   ];
   for (const t of titles) lib.addTitle(t);
+  // Two shelves the demo curates (SPEC.md § 6.5).
+  lib.addSection({ id: "new", title: "New", apps: [appIds[6] ?? "", appIds[4] ?? "", android.id] });
+  lib.addSection({ id: "together", title: "Play together", apps: [appIds[0] ?? ""] });
   await addHomebrew(lib);
   lib.addCheat({
     platform: "switch",
@@ -387,10 +402,12 @@ export async function makeLantern(options: Partial<LanternAppOptions> = {}): Pro
     base: BASE,
     software: ["lantern-protocol demo (TypeScript)", "0.1"],
     accounts: await demoAccounts(),
-    // Events with the shortest heartbeat (the suite waits for one), grants, and sync in memory.
+    // Events with the shortest heartbeat (the suite waits for one), grants, and in memory sync, saves and requests.
     events: { heartbeat: 5 },
     peers: { seed: GRANT_SEED },
     sync: true,
+    saves: true,
+    requests: true,
     ...options,
   });
 }
