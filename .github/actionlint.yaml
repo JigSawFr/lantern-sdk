@@ -1,0 +1,5 @@
+# Runner labels GitHub has and actionlint 1.7.12 does not know yet (it would
+# report them as unknown): remove one once actionlint lists it.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04

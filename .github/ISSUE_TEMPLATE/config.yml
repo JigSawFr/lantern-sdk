@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: A security flaw
+    url: https://github.com/JigSawFr/lantern-sdk/security/advisories/new
+    about: Report it privately, never in a public issue.
+  - name: A change to the protocol
+    url: https://github.com/JigSawFr/lantern/issues/new?template=proposal.yml
+    about: Propose it in the specification's repository first.

@@ -1,0 +1,25 @@
+# Every file's copyright and licence (REUSE.toml, LICENSES/): MIT.
+# https://reuse.software/
+name: reuse
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: reuse lint
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet "reuse==6.2.0"
+          "$RUNNER_TEMP/venv/bin/reuse" lint
