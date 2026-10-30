@@ -91,7 +91,7 @@ final class TransportBox {
     }
 
     func send(_ request: UnsafePointer<lantern_request>, _ response: OpaquePointer,
-              _ error: UnsafeMutablePointer<lantern_error>?) -> lantern_status {
+              _ failure: UnsafeMutablePointer<lantern_error>?) -> lantern_status {
         let r = request.pointee
         var headers: [(String, String)] = []
         for i in 0..<r.header_count {
@@ -102,7 +102,7 @@ final class TransportBox {
         do {
             answer = try transport.send(method: string(r.method_name), url: string(r.url), headers: headers, body: body)
         } catch {
-            lantern_error_set(error, lantern_status(LANTERN_ERROR_TRANSPORT), "\(error)")
+            lantern_error_set(failure, lantern_status(LANTERN_ERROR_TRANSPORT), "\(error)")
             return lantern_status(LANTERN_ERROR_TRANSPORT)
         }
         if !lantern_response_status(response, UInt16(clamping: answer.status)) {
