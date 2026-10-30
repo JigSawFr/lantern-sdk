@@ -1,44 +1,78 @@
-"""The reference routes of the library family, over a Library: what a server
-author mounts in an existing app (lantern.server.flask, lantern.server.fastapi)
-to serve Lantern.
+"""The reference routes of Lantern, over a Library: what a server author
+mounts in an existing app (lantern.server.flask, lantern.server.fastapi) to
+serve Lantern.
 
-    app = LanternApp(library, uid="6f1c2a8e-…", name="Living room shelf")
+    app = LanternApp(library, uid="6f1c2a8e-…", name="Living room shelf", accounts=MemoryAccounts(…))
     response = app.handle(ServerRequest("GET", "/api/lantern/v1/apps", …))
 
 It answers the handshake (at /.well-known/lantern and <base>/v1/), the
 families library (apps, what is missing, files), changes (with a journal),
 titles, homebrew and cheats (reading), and refuses the others with 404
-(their features are 0). Pairing, tokens and saves are not here: a server
-plugs its own `authenticate` hook in, which resolves a request's credentials
-to an Account.
+(their features are 0).
+
+Who calls is decided one of two ways:
+
+- with `accounts` (an Accounts store, such as MemoryAccounts), LanternApp
+  issues the tokens itself: pairing (§ 5.2) with or without a device key,
+  signed requests checked with a replay cache and a skew (§ 5.4),
+  invitations (§ 5.5), rating caps (§ 5.6) and the administration API
+  (§ 5.7). The server's approval page is its own (`approval_page()` is a
+  start): it calls `desk.by_code()` and `desk.approve()`;
+- with an `authenticate` hook, the server resolves its own tokens to an
+  Account; one with a `key` is still checked for its signature.
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
 import secrets
 import traceback
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import TypeVar
 
+from lantern import ed25519, ratings
+from lantern import signatures as sig
 from lantern._base import SCHEMA, DocumentError, JSONObject, JSONValue
 from lantern._generated.models import (
+    AdminPairingDecision,
+    AdminUserCreate,
+    AdminUserUpdate,
     App,
     CheatSet,
     Homebrew,
     HomebrewUpdatesRequest,
+    InvitationCreate,
     MissingRequest,
+    PairingRequest,
+    Rating,
+    RatingCap,
     Title,
 )
-from lantern.limits import TITLES_AT_ONCE
+from lantern.digest import digest_sha256, sha256_hex
+from lantern.limits import NAME, NOTE, TITLES_AT_ONCE, printable
 from lantern.profiles import profile, switch_ids
+from lantern.server.accounts import (
+    ACCOUNT_NAME,
+    SCOPES,
+    AccountError,
+    Accounts,
+    Device,
+    Invitation,
+    ordered_scopes,
+    parse_time,
+    utc,
+)
 from lantern.server.files import file_response
 from lantern.server.http import (
     ProblemError,
     ServerRequest,
     ServerResponse,
     bad_request,
+    caching_headers,
+    html_response,
     json_response,
     method_not_allowed,
     not_found,
@@ -49,10 +83,22 @@ from lantern.server.http import (
 )
 from lantern.server.library import Account, Authenticate, Library
 from lantern.server.paging import Cursors, Sealer, SinceTokens, SortKey, page_size
+from lantern.server.pairing import Limiter, PairingDesk, approval_page, slow_down
+from lantern.spki import short as spki_short
 from lantern.vocabulary import BUILD_ID, CORE_ID, FAMILIES, HOMEBREW_ID, WORD
 
-#: The scope each family needs (SPEC.md § 4.2).
-SCOPE_OF = {"library": "library", "titles": "library", "changes": "library", "homebrew": "library", "cheats": "cheats"}
+#: The scope each family needs (SPEC.md § 4.2); pairing needs none.
+SCOPE_OF = {
+    "library": "library",
+    "titles": "library",
+    "changes": "library",
+    "homebrew": "library",
+    "cheats": "cheats",
+    "admin": "admin",
+}
+#: How long an invitation may live (SPEC.md § 5.5), and how many may wait at once.
+INVITATION_DAYS = 30
+INVITATIONS_LIMIT = 1000
 APP_SORTS = ("name", "added", "release")
 T = TypeVar("T")
 Handler = Callable[[ServerRequest, Account, Sequence[str]], ServerResponse]
@@ -79,6 +125,16 @@ ROUTES = (
     Route(("homebrew", "{}"), ("GET", "HEAD"), "homebrew", "homebrew_entry"),
     Route(("cheats",), ("GET", "HEAD"), "cheats", "cheats"),
     Route(("cheats", "{}"), ("GET", "HEAD"), "cheats", "cheat_text"),
+    Route(("pairing",), ("POST",), "pairing", "pair_start"),
+    Route(("pairing", "{}"), ("GET",), "pairing", "pair_poll"),
+    Route(("admin", "users"), ("GET", "HEAD", "POST"), "admin", "admin_users"),
+    Route(("admin", "users", "{}"), ("PATCH",), "admin", "admin_user"),
+    Route(("admin", "devices"), ("GET", "HEAD"), "admin", "admin_devices"),
+    Route(("admin", "devices", "{}"), ("DELETE",), "admin", "admin_device"),
+    Route(("admin", "pairings"), ("GET", "HEAD"), "admin", "admin_pairings"),
+    Route(("admin", "pairings", "{}"), ("POST",), "admin", "admin_pairing"),
+    Route(("admin", "invitations"), ("GET", "HEAD", "POST"), "admin", "admin_invitations"),
+    Route(("admin", "invitations", "{}"), ("DELETE",), "admin", "admin_invitation"),
 )
 
 
@@ -104,9 +160,23 @@ class LanternApp:
     """Lantern's read routes over a `library`.
 
     - `uid`: the server's UUID, which never changes; `name`: what clients show.
-    - `authenticate`: resolves a request's `Authorization` (a bearer token
-      today) to an Account, or None when it is not a valid one (401). A
-      request without credentials is anonymous: it gets `anonymous_scopes`
+    - `accounts`: the server's accounts, devices and invitations; with it,
+      LanternApp pairs devices and issues, checks and revokes their tokens
+      (features pairing, signatures and admin). `bound_only`: issue and take
+      only tokens bound to a device key (SPEC.md § 5.4). `skew`: auth.skew,
+      60 to 900 seconds. `verify`: the server's approval page (a path on its
+      origin, or an absolute URL), `/pair` by default. `spki`: the SHA-256 of
+      the server's TLS key, which invitation links carry when no CA vouches
+      for it (§ 5.5). `token_lifetime`: seconds a new token lives (none: until
+      revoked). `scheme`: the scheme clients reach the server by, when a proxy
+      in front of it changes it (a signature covers it). `pair_page`: the
+      server's approval page at `verify` (signing the user in, then
+      `desk.approve()`); without it, LanternApp serves a page that shows the
+      code and the key's fingerprint and approves nothing (approval then goes
+      through the administration API).
+    - `authenticate`: without `accounts`, resolves a request's
+      `Authorization` to an Account, or None when it is not a valid one (401).
+      A request without credentials is anonymous: it gets `anonymous_scopes`
       on a `public` server, nothing on a private one.
     - `secret`: seals cursors and since tokens; give the same one to every
       process of the server, and keep it across restarts, or the tokens they
@@ -130,7 +200,19 @@ class LanternApp:
         secret: bytes | None = None,
         cursor_lifetime: float = 3600.0,
         platforms: Sequence[str] | None = None,
+        accounts: Accounts | None = None,
+        bound_only: bool = False,
+        skew: int = sig.SKEW,
+        verify: str = "/pair",
+        spki: str | None = None,
+        token_lifetime: float | None = None,
+        scheme: str | None = None,
+        pair_page: Callable[[ServerRequest], ServerResponse] | None = None,
     ) -> None:
+        if not sig.SKEW_RANGE[0] <= skew <= sig.SKEW_RANGE[1]:
+            raise ValueError("skew is 60 to 900 seconds (SPEC.md § 5.4)")
+        if accounts is not None and authenticate is not None:
+            raise ValueError("accounts or authenticate, not both")
         if not base.startswith("/"):
             raise ValueError("base is a path, such as /api/lantern")
         if not 1 <= page_limit <= 1000:
@@ -145,6 +227,13 @@ class LanternApp:
         self.since = SinceTokens(sealer)
         self.fixed_platforms = list(platforms) if platforms is not None else None
         self.on_error: Callable[[BaseException], object] = traceback.print_exception
+        self.accounts, self.bound_only, self.skew = accounts, bound_only, skew
+        self.verify, self.spki, self.scheme = verify, spki, scheme
+        self.pair_page = pair_page
+        self.nonces = sig.NonceCache(2 * skew)
+        self.desk = PairingDesk(accounts, lifetime=token_lifetime) if accounts is not None else None
+        self.pair_limiter = Limiter(10, 60.0)  # pairing requests per address
+        self.attempts = Limiter(10, 600.0)  # wrong invitation codes per address
 
     # Dispatch.
 
@@ -159,13 +248,42 @@ class LanternApp:
             return problem_response(request, ProblemError(500, "internal", "The server failed; try again later."))
 
     def owns(self, path: str) -> bool:
-        """Whether `path` is one of Lantern's: the handshake or below <base>/v1/."""
-        return path == "/.well-known/lantern" or path == self.base + "/v1" or path.startswith(self.base + "/v1/")
+        """Whether `path` is one of Lantern's: the handshake, below <base>/v1/, or the approval page."""
+        return (
+            path == "/.well-known/lantern"
+            or path == self.base + "/v1"
+            or path.startswith(self.base + "/v1/")
+            or (path == self.verify_path and self.verify_path is not None)
+        )
+
+    @property
+    def verify_path(self) -> str | None:
+        """The approval page's path, when it is on this server and LanternApp pairs."""
+        return self.verify if self.accounts is not None and self.verify.startswith("/") else None
+
+    def approval(self, request: ServerRequest) -> ServerResponse:
+        """The approval page (SPEC.md § 5.2, § 5.3): the server's own, or one that shows the code asked
+        and the short fingerprint of the server's key, and approves nothing."""
+        if self.pair_page is not None:
+            return self.pair_page(request)
+        if request.method not in ("GET", "HEAD"):
+            raise method_not_allowed(["GET", "HEAD"])
+        code = (request.query.get("code") or request.query.get("invitation") or "")[:64]
+        page = approval_page(
+            fingerprint=spki_short(self.spki) if self.spki else None,
+            code=code,
+            message="Sign in on this server to approve a device: an administrator approves it from an admin app.",
+            action=self.verify,
+        )
+        return html_response(request, page)
 
     def route(self, request: ServerRequest) -> ServerResponse:
         path = request.path
+        if self.verify_path is not None and path == self.verify_path:
+            return self.approval(request)
         if path in ("/.well-known/lantern", self.base + "/v1", self.base + "/v1/"):
             account = self.account(request)
+            self.check_signature(request, account)
             if request.method not in ("GET", "HEAD"):
                 raise method_not_allowed(["GET", "HEAD"])
             return json_response(request, self.handshake(account))
@@ -181,7 +299,10 @@ class LanternApp:
         ]
         if not matched:
             raise not_found("No such route on this server.")
+        if not any(self.offered(r.family) for r, _ in matched):
+            raise not_found("This server does not offer it.")
         account = self.account(request)
+        self.check_signature(request, account)
         chosen = next(((r, a) for r, a in matched if request.method in r.methods), None)
         if chosen is None:
             raise method_not_allowed(list(dict.fromkeys(m for r, _ in matched for m in r.methods)))
@@ -199,12 +320,88 @@ class LanternApp:
         scheme, _, value = header.strip().partition(" ")
         if scheme.lower() != "bearer" or not value.strip():
             raise unauthorized("Send a token: Authorization: Bearer <token>.")
-        account = self.authenticate(request) if self.authenticate is not None else None
+        if self.accounts is not None:
+            account = self.account_of(value.strip())
+        else:
+            account = self.authenticate(request) if self.authenticate is not None else None
         if account is None:
             raise unauthorized("Unknown, revoked or expired token.", invalid_token=True)
         return account
 
+    def account_of(self, token: str) -> Account | None:
+        """The caller of a token the server issued: its device's scopes, cut back to its account's."""
+        assert self.accounts is not None
+        device = self.accounts.device_of(token)
+        user = self.accounts.user(device.user) if device is not None else None
+        if device is None or user is None:
+            return None
+        return Account(
+            scopes=frozenset(s for s in device.scopes if s in user.scopes),
+            state="frozen" if user.state == "frozen" else "active",
+            name=user.name,
+            key=device.key,
+            rating_cap=device.rating_cap,
+            device=device.id,
+        )
+
+    # Signed requests (SPEC.md § 5.4).
+
+    def signature_problem(
+        self, request: ServerRequest, code: str, detail: str, with_token: bool, key_id: str | None
+    ) -> ProblemError:
+        titles = {
+            "signature_required": "Signature required",
+            "signature_invalid": "Signature invalid",
+            "signature_expired": "Signature expired",
+            "signature_replayed": "Signature replayed",
+        }
+        challenge = 'Bearer realm="lantern"' + (', error="invalid_token"' if with_token else "")
+        headers = {
+            "WWW-Authenticate": challenge,
+            "Accept-Signature": sig.accept_signature(with_token, bool(request.body), key_id),
+        }
+        return ProblemError(401, code, detail, title=titles[code], headers=headers)
+
+    def verify_signature(self, request: ServerRequest, public: bytes, *, with_token: bool) -> None:
+        """Checks the request's signature by `public`, or raises its 401; then its body against its
+        Content-Digest (422 `digest_mismatch`)."""
+        try:
+            uri = request.target_uri(self.scheme)
+        except ValueError:
+            raise bad_request("No Host this server can read.") from None
+        try:
+            sig.verify_request(
+                request.method,
+                uri,
+                request.headers,
+                public,
+                with_token=with_token,
+                with_body=bool(request.body),
+                nonces=self.nonces,
+                skew=self.skew,
+            )
+        except sig.Refused as e:
+            raise self.signature_problem(request, e.code, e.detail, with_token, sig.keyid(public)) from None
+        if request.body:
+            check_content_digest(request)
+
+    def check_signature(self, request: ServerRequest, account: Account) -> None:
+        if account.key is not None:
+            self.verify_signature(request, account.key, with_token=True)
+        elif self.bound_only and account.state != "anonymous":
+            raise self.signature_problem(
+                request,
+                "signature_required",
+                "This server takes only tokens bound to a device key: pair this device again, with a key.",
+                True,
+                None,
+            )
+
     def offered(self, family: str) -> bool:
+        if family in ("pairing", "signatures"):
+            return self.accounts is not None
+        if family == "admin":
+            return self.accounts is not None
         if family == "changes":
             return "library" in self.library.families and self.library.journal() is not None
         return family in self.library.families
@@ -212,7 +409,9 @@ class LanternApp:
     def allow(self, account: Account, family: str) -> None:
         if not self.offered(family):
             raise not_found("This server does not offer it.")
-        if account.state == "anonymous" and not self.public:
+        if family == "pairing":  # whoever reaches the server may ask to pair (SPEC.md § 4.2, § 5.2)
+            return
+        if account.state == "anonymous" and (not self.public or family == "admin"):
             raise unauthorized("This server asks for a token.")
         if account.state == "frozen":
             raise ProblemError(403, "account_frozen", "This account may do nothing for now.", title="Account frozen")
@@ -229,6 +428,8 @@ class LanternApp:
                 out[family] = SCHEMA
             except ProblemError:
                 out[family] = 0
+        # The same for every caller (SPEC.md § 4.2): whoever reaches the server may pair, with a key.
+        out["pairing"] = out["signatures"] = SCHEMA if self.accounts is not None else 0
         return out
 
     def platforms(self) -> list[str]:
@@ -253,6 +454,10 @@ class LanternApp:
         acc: JSONObject = {"state": account.state, "scopes": scopes}
         if account.name:
             acc["name"] = account.name
+        if account.state != "anonymous":
+            acc["bound"] = account.bound
+        if account.rating_cap is not None:
+            acc["rating_cap"] = account.rating_cap.to_json()
         doc: JSONObject = {"schema": SCHEMA, "uid": self.uid, "name": self.name}
         if self.software:
             doc["software"] = {"name": self.software[0], "version": self.software[1]}
@@ -260,9 +465,42 @@ class LanternApp:
         doc.update({"base": self.base, "versions": [1], "platforms": platforms})
         if self.motd:
             doc["motd"] = self.motd
+        if self.motd:
+            doc["language"] = "en"
         features: JSONObject = dict(self.features(account))
-        doc.update({"account": acc, "features": features, "limits": {"page_size": self.page_limit}})
+        doc.update({"account": acc, "features": features})
+        if features["signatures"]:
+            doc["auth"] = {"bearer_only": not self.bound_only, "skew": self.skew}
+        doc["limits"] = {"page_size": self.page_limit}
         return doc
+
+    # Rating caps (SPEC.md § 5.6).
+
+    def hides(self, account: Account) -> Callable[[str, str], bool]:
+        """Whether the caller's rating cap hides the title (platform, title_id), its apps and cheat sets."""
+        cap = account.rating_cap
+        if cap is None:
+            return lambda platform, title_id: False
+        rated: dict[tuple[str, str], list[Rating]] = {}
+        if "titles" in self.library.families:
+            rated = {(t.platform, t.title_id): list(t.ratings or ()) for t in self.library.titles(())}
+        return lambda platform, title_id: ratings.hidden(rated.get((platform, title_id), []), cap)
+
+    def file_hidden(self, account: Account, file_id: str) -> bool:
+        """Whether the file is a hidden app's or a hidden homebrew's (SPEC.md § 5.6)."""
+        if account.rating_cap is None:
+            return False
+        hide = self.hides(account)
+        tail = "/files/" + file_id
+        for a in self.library.apps():
+            if a.file.endswith(tail) and hide(a.platform, a.title_id):
+                return True
+        if "homebrew" in self.library.families:
+            for e in self.library.homebrew(()):
+                files = [p.file for p in [e.package, *(e.packages or [])]]
+                if any(f.endswith(tail) for f in files) and ratings.hidden(e.ratings, account.rating_cap):
+                    return True
+        return False
 
     # Library (SPEC.md § 6).
 
@@ -314,10 +552,12 @@ class LanternApp:
         if title_id is not None and not CORE_ID.match(title_id):
             raise bad_request("title_id is 1 to 128 letters, digits, '.', '_' and '-'.")
         sort = self._sort(request)
+        hide = self.hides(account)
         apps = [
             a
             for a in self.library.apps()
-            if (platform is None or a.platform == platform)
+            if not hide(a.platform, a.title_id)
+            and (platform is None or a.platform == platform)
             and (kind is None or a.type == kind)
             and (title_id is None or a.title_id == title_id)
             and (not text or text.casefold() in (a.name or "").casefold())
@@ -337,8 +577,9 @@ class LanternApp:
         if not doc.want or any(w not in ("base", "update", "dlc") for w in doc.want):
             raise bad_request("want lists base, update or dlc.")
         sort = self._sort(request)
+        hide = self.hides(account)
         found = missing(
-            [a for a in self.library.apps() if a.platform == platform],
+            [a for a in self.library.apps() if a.platform == platform and not hide(a.platform, a.title_id)],
             platform,
             [(i.app_id, i.version_code) for i in doc.installed],
             set(doc.want),
@@ -350,7 +591,7 @@ class LanternApp:
 
     def h_file(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
         file = self.library.file(args[0])
-        if file is None:
+        if file is None or self.file_hidden(account, args[0]):
             raise not_found("No such file; read the app again.")
         return file_response(request, file)
 
@@ -366,10 +607,10 @@ class LanternApp:
             return json_response(request, {"schema": SCHEMA, "added": [], "removed": [], "since": token})
         after = self.since.position("s", since, journal.epoch, journal.oldest(), current)
         added, removed = journal.app_changes(after, platform)
+        hide = self.hides(account)
         gone_ids: list[JSONValue] = list(removed)
-        return json_response(
-            request, {"schema": SCHEMA, "added": [a.to_json() for a in added], "removed": gone_ids, "since": token}
-        )
+        shown: list[JSONValue] = [a.to_json() for a in added if not hide(a.platform, a.title_id)]
+        return json_response(request, {"schema": SCHEMA, "added": shown, "removed": gone_ids, "since": token})
 
     # Titles (SPEC.md § 7).
 
@@ -386,11 +627,14 @@ class LanternApp:
         if not all(CORE_ID.match(i) for i in ids):
             raise bad_request("A title id is 1 to 128 letters, digits, '.', '_' and '-'.")
         wanted = set(ids)
+        hide = self.hides(account)
         titles = sorted(
             (
                 t
                 for t in self.library.titles(request.languages)
-                if t.title_id in wanted and (platform is None or t.platform == platform)
+                if t.title_id in wanted
+                and (platform is None or t.platform == platform)
+                and not hide(t.platform, t.title_id)
             ),
             key=lambda t: (t.platform, t.title_id),
         )
@@ -406,10 +650,13 @@ class LanternApp:
 
     def h_title(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
         platform = platform_of(request)
+        hide = self.hides(account)
         found = [
             t
             for t in self.library.titles(request.languages)
-            if t.title_id == args[0] and (platform is None or t.platform == platform)
+            if t.title_id == args[0]
+            and (platform is None or t.platform == platform)
+            and not hide(t.platform, t.title_id)
         ]
         title = _one(found, "title")
         return json_response(request, {"schema": SCHEMA, **self._title(title)})
@@ -431,7 +678,8 @@ class LanternApp:
         if since is not None:
             after = self.since.position("t", since, journal.epoch, journal.oldest(), current)
             titles, removed = journal.title_changes(after, platform, request.languages)
-            doc["titles"] = [self._title(t) for t in titles]
+            hide = self.hides(account)
+            doc["titles"] = [self._title(t) for t in titles if not hide(t.platform, t.title_id)]
             doc["removed"] = [r.to_json() for r in removed]
         return json_response(request, doc)
 
@@ -468,7 +716,8 @@ class LanternApp:
         entries = [
             e
             for e in self.library.homebrew(request.languages)
-            if (platform is None or e.platform == platform)
+            if not ratings.hidden(e.ratings, account.rating_cap)
+            and (platform is None or e.platform == platform)
             and (kind is None or e.effective_kind == kind)
             and (genre is None or genre in (e.genres or ()))
             and (not text or text.casefold() in e.name.casefold())
@@ -489,7 +738,9 @@ class LanternApp:
         found = [
             e
             for e in self.library.homebrew(request.languages)
-            if e.id == args[0] and (platform is None or e.platform == platform)
+            if e.id == args[0]
+            and (platform is None or e.platform == platform)
+            and not ratings.hidden(e.ratings, account.rating_cap)
         ]
         entry = _one(found, "homebrew")
         return json_response(request, {"schema": SCHEMA, **entry.to_json()})
@@ -508,7 +759,10 @@ class LanternApp:
         newer = [
             e
             for e in self.library.homebrew(request.languages)
-            if e.platform == platform and e.id in builds and e.build > builds[e.id]
+            if e.platform == platform
+            and e.id in builds
+            and e.build > builds[e.id]
+            and not ratings.hidden(e.ratings, account.rating_cap)
         ]
         scope = self.cursors.scope("updates", platform, sorted(builds.items()))
         page = self.cursors.page(
@@ -528,10 +782,12 @@ class LanternApp:
             raise bad_request("title_id is 1 to 128 letters, digits, '.', '_' and '-'.")
         if build_id is not None and not BUILD_ID.match(build_id):
             raise bad_request("build_id is 1 to 64 letters, digits, '.', '_' and '-'.")
+        hide = self.hides(account)
         sets: list[CheatSet] = [
             c
             for c in self.library.cheats()
-            if (platform is None or c.platform == platform)
+            if not hide(c.platform, c.title_id)
+            and (platform is None or c.platform == platform)
             and (title_id is None or c.title_id == title_id)
             and (build_id is None or c.build_id == build_id)
         ]
@@ -540,11 +796,343 @@ class LanternApp:
 
     def h_cheat_text(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
         platform = platform_of(request)
-        found = [c for c in self.library.cheats() if c.id == args[0] and (platform is None or c.platform == platform)]
+        hide = self.hides(account)
+        found = [
+            c
+            for c in self.library.cheats()
+            if c.id == args[0] and (platform is None or c.platform == platform) and not hide(c.platform, c.title_id)
+        ]
         file = self.library.cheat_file(args[0]) if found else None
         if file is None:
             raise not_found("No such cheat set.")
         return file_response(request, file)
+
+    # Pairing (SPEC.md § 5.2, § 5.4, § 5.5).
+
+    def verify_url(self, request: ServerRequest) -> str:
+        if "://" in self.verify:
+            return self.verify
+        try:
+            return request.origin(self.scheme) + self.verify
+        except ValueError:
+            raise bad_request("No Host this server can read.") from None
+
+    def h_pair_start(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        assert self.desk is not None
+        assert self.accounts is not None
+        raw = read_document(request)
+        try:
+            doc = PairingRequest.from_json(raw, "the body")
+        except DocumentError as e:
+            raise bad_request(f"A pairing request is {{schema, device, scopes, key?, invitation?}}: {e}") from None
+        device = doc.device.strip()
+        if not device or printable(device, NAME) != device:
+            raise bad_request("device is the device's name, 512 bytes at most, without control characters.")
+        known = ordered_scopes(doc.scopes)
+        if not known:
+            raise bad_request("scopes names none of " + ", ".join(SCOPES) + ".")
+        key = None
+        if doc.key is not None:
+            key = _device_key(doc.key.alg, doc.key.public_key)
+        elif self.bound_only:
+            raise ProblemError(
+                400,
+                "key_required",
+                "This server binds every token to a device key: send one (key: {alg: ed25519, public_key}).",
+                title="Device key required",
+            )
+        wait = self.pair_limiter.hit(request.remote)
+        if wait:
+            raise slow_down(wait, "Too many pairing requests from this address.")
+        invitation: Invitation | None = None
+        if doc.invitation is not None:
+            wait = self.attempts.wait(request.remote)
+            if wait:
+                raise slow_down(wait, "Too many attempts at invitations from this address.")
+            invitation = self.accounts.redeem(doc.invitation)
+            if invitation is None:
+                self.attempts.record(request.remote)
+                raise ProblemError(
+                    410, "gone", "This invitation is unknown, expired, revoked or used up.", title="Invitation gone"
+                )
+        entry = self.desk.start(device, known, key)
+        if invitation is not None:  # approved at once, as the invitation says (SPEC.md § 5.5)
+            self.desk.approve(entry, invitation.user, invitation.scopes, invitation.rating_cap, invitation.id)
+        verify = self.verify_url(request)
+        complete = verify + ("&" if "?" in verify else "?") + "code=" + entry.code
+        response = json_response(
+            request,
+            {
+                "schema": SCHEMA,
+                "code": entry.code,
+                "verify": verify,
+                "verify_complete": complete,
+                "poll": f"{self.base}/v1/pairing/{entry.poll}",
+                "interval": entry.interval,
+                "expires": self.desk.expires,
+            },
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    def h_pair_poll(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        assert self.desk is not None
+        entry = self.desk.peek(args[0])
+        if entry is not None and entry.key is not None:  # a pairing with a key polls signed by it (SPEC.md § 5.4)
+            self.verify_signature(request, entry.key, with_token=False)
+        doc = self.desk.poll(args[0])
+        if doc is None:
+            waiting = ServerResponse(202, caching_headers(request))
+            waiting.headers["Cache-Control"] = "no-store"
+            waiting.headers["Content-Length"] = "0"
+            return waiting
+        response = json_response(request, doc)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    # Administration (SPEC.md § 5.7).
+
+    def _admin_page(
+        self, request: ServerRequest, docs: list[JSONObject], scope: str, key: Callable[[JSONObject], SortKey]
+    ) -> ServerResponse:
+        page = self.cursors.page(docs, key, size=self._size(request), cursor=request.query.get("cursor"), scope=scope)
+        items: list[JSONValue] = list(page.items)
+        return json_response(request, {"schema": SCHEMA, "items": items, "total": page.total, "next": page.next})
+
+    def _user_doc(self, name: str) -> JSONObject:
+        assert self.accounts is not None
+        user = self.accounts.user(name)
+        if user is None:
+            raise not_found("No such account.")
+        doc: JSONObject = {
+            "name": user.name,
+            "state": "frozen" if user.state == "frozen" else "active",
+            "scopes": list(user.scopes),
+            "devices": len(self.accounts.devices(user.name)),
+            "created": user.created,
+        }
+        return doc
+
+    @staticmethod
+    def _scopes(values: Sequence[str] | None, what: str = "scopes") -> tuple[str, ...]:
+        if values is None or any(v not in SCOPES for v in values) or len(set(values)) != len(values):
+            raise bad_request(f"{what} is a list of scopes: " + ", ".join(SCOPES) + ".")
+        return ordered_scopes(values)
+
+    def h_admin_users(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        assert self.accounts is not None
+        if request.method != "POST":
+            docs = [self._user_doc(u.name) for u in self.accounts.users()]
+            return self._admin_page(request, docs, self.cursors.scope("admin-users"), lambda d: (str(d["name"]),))
+        raw = read_document(request)
+        if "password" in raw:
+            raise bad_request("An account made here has no password (SPEC.md § 5.7).")
+        try:
+            doc = AdminUserCreate.from_json(raw, "the body")
+        except DocumentError as e:
+            raise bad_request(f"An account is {{schema, name, scopes, state?}}: {e}") from None
+        state = doc.state or "active"
+        if not ACCOUNT_NAME.match(doc.name) or state not in ("active", "frozen"):
+            raise bad_request("name is 1 to 64 letters, digits, '.', '_' and '-'; state is active or frozen.")
+        try:
+            self.accounts.create_user(doc.name, self._scopes(doc.scopes), state)
+        except AccountError as e:
+            raise ProblemError(e.status, e.code, e.detail) from None
+        return json_response(request, {"schema": SCHEMA, **self._user_doc(doc.name)}, 201)
+
+    def h_admin_user(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        assert self.accounts is not None
+        try:
+            doc = AdminUserUpdate.from_json(read_document(request), "the body")
+        except DocumentError as e:
+            raise bad_request(f"A change is {{schema, state?, scopes?}}: {e}") from None
+        if doc.state is None and doc.scopes is None:
+            raise bad_request("Give state (active or frozen), scopes, or both.")
+        if doc.state is not None and doc.state not in ("active", "frozen"):
+            raise bad_request("state is active or frozen.")
+        scopes = None if doc.scopes is None else self._scopes(doc.scopes)
+        try:
+            self.accounts.update_user(args[0], state=doc.state, scopes=scopes)
+        except AccountError as e:
+            raise ProblemError(e.status, e.code, e.detail) from None
+        return json_response(request, {"schema": SCHEMA, **self._user_doc(args[0])})
+
+    @staticmethod
+    def device_doc(device: Device) -> JSONObject:
+        """A device as the administration API shows it: never its token, nor the token's hash."""
+        doc: JSONObject = {
+            "id": device.id,
+            "user": device.user,
+            "device": device.device,
+            "scopes": list(device.scopes),
+            "created": device.created,
+            "bound": device.bound,
+        }
+        if device.key is not None:
+            doc["key"] = sig.short_fingerprint(device.key)
+        if device.rating_cap is not None:
+            doc["rating_cap"] = device.rating_cap.to_json()
+        for k, v in (("invitation", device.invitation), ("expires", device.expires), ("last_used", device.last_used)):
+            if v is not None:
+                doc[k] = v
+        return doc
+
+    def h_admin_devices(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        assert self.accounts is not None
+        user = request.query.get("user")
+        docs = [self.device_doc(d) for d in self.accounts.devices(user)]
+        return self._admin_page(
+            request,
+            docs,
+            self.cursors.scope("admin-devices", user),
+            lambda d: (str(d["user"]), str(d["created"]), str(d["id"])),
+        )
+
+    def h_admin_device(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        assert self.accounts is not None
+        if not self.accounts.revoke(args[0]):
+            raise not_found("No such device.")
+        return _no_content(request)
+
+    def h_admin_pairings(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        assert self.desk is not None
+        docs: list[JSONObject] = []
+        for e in self.desk.waiting():
+            doc: JSONObject = {
+                "id": e.id,
+                "code": e.code,
+                "device": e.device,
+                "scopes": list(e.scopes),
+                "created": e.created,
+                "expires": e.expires,
+            }
+            if e.key is not None:
+                doc["key"] = sig.short_fingerprint(e.key)
+            docs.append(doc)
+        return self._admin_page(
+            request, docs, self.cursors.scope("admin-pairings"), lambda d: (str(d["created"]), str(d["id"]))
+        )
+
+    def h_admin_pairing(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        assert self.desk is not None
+        assert self.accounts is not None
+        try:
+            doc = AdminPairingDecision.from_json(read_document(request), "the body")
+        except DocumentError as e:
+            raise bad_request(f"A decision is {{schema, decision, user?, scopes?, rating_cap?}}: {e}") from None
+        entry = self.desk.by_id(args[0])
+        if entry is None:
+            raise not_found("No such pairing waiting: approved, refused or expired.")
+        if doc.decision == "refuse":
+            self.desk.refuse(entry)
+            return _no_content(request)
+        if doc.decision != "approve":
+            raise bad_request("decision is approve or refuse.")
+        name = doc.user or account.name
+        if name is None or self.accounts.user(name) is None:
+            raise bad_request(f"No account named {str(name)[:64]}.")
+        scopes = None if doc.scopes is None else self._scopes(doc.scopes)
+        self.desk.approve(entry, name, scopes, _cap(doc.rating_cap))
+        return _no_content(request)
+
+    def invitation_doc(self, request: ServerRequest, inv: Invitation) -> JSONObject:
+        verify = self.verify_url(request)
+        query = f"invitation={inv.code}" + (f"&spki={self.spki.lower()}" if self.spki else "")
+        doc: JSONObject = {
+            "id": inv.id,
+            "code": inv.code,
+            "link": verify + ("&" if "?" in verify else "?") + query,
+            "user": inv.user,
+            "scopes": list(inv.scopes),
+            "expires": inv.expires,
+            "devices": inv.devices,
+            "used": inv.used,
+            "created": inv.created,
+        }
+        if inv.rating_cap is not None:
+            doc["rating_cap"] = inv.rating_cap.to_json()
+        if inv.note is not None:
+            doc["note"] = inv.note
+        return doc
+
+    def h_admin_invitations(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        assert self.accounts is not None
+        if request.method != "POST":
+            docs = [self.invitation_doc(request, i) for i in self.accounts.invitations()]
+            return self._admin_page(
+                request, docs, self.cursors.scope("admin-invitations"), lambda d: (str(d["created"]), str(d["id"]))
+            )
+        try:
+            doc = InvitationCreate.from_json(read_document(request), "the body")
+        except DocumentError as e:
+            raise bad_request(f"An invitation is {{schema, user, scopes, expires, devices, …}}: {e}") from None
+        user = self.accounts.user(doc.user)
+        if user is None:
+            raise bad_request("user is the account the devices join, which exists.")
+        scopes = self._scopes(doc.scopes)
+        if not scopes or any(x not in user.scopes for x in scopes):
+            raise bad_request("scopes are some of the account's own (SPEC.md § 5.5).")
+        expires = parse_time(doc.expires)
+        now = datetime.now(UTC)
+        if expires is None or not now < expires <= now + timedelta(days=INVITATION_DAYS):
+            raise bad_request(f"expires is an RFC 3339 time in the next {INVITATION_DAYS} days (SPEC.md § 5.5).")
+        if not 1 <= doc.devices <= 100:
+            raise bad_request("devices is how many devices may redeem it, 1 to 100.")
+        if doc.note is not None and (printable(doc.note, NOTE) != doc.note or "\n" in doc.note):
+            raise bad_request("note: 120 bytes at most, without control characters.")
+        if len(self.accounts.invitations()) >= INVITATIONS_LIMIT:
+            raise slow_down(3600, f"At most {INVITATIONS_LIMIT} invitations at once.")
+        inv = self.accounts.create_invitation(
+            user.name, scopes, utc(expires), doc.devices, rating_cap=_cap(doc.rating_cap), note=doc.note
+        )
+        return json_response(request, {"schema": SCHEMA, **self.invitation_doc(request, inv)}, 201)
+
+    def h_admin_invitation(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        assert self.accounts is not None
+        if not self.accounts.revoke_invitation(args[0]):
+            raise not_found("No such invitation.")
+        return _no_content(request)
+
+
+def _no_content(request: ServerRequest) -> ServerResponse:
+    headers = caching_headers(request)
+    return ServerResponse(204, headers)
+
+
+def _cap(cap: RatingCap | None) -> RatingCap | None:
+    if cap is None:
+        return None
+    problem = ratings.cap_problem(cap)
+    if problem:
+        raise bad_request(problem + " (SPEC.md § 5.6).")
+    return cap
+
+
+def _device_key(alg: str, public_key: str) -> bytes:
+    """A device's public key from a pairing request (SPEC.md § 5.4): 400 unless it is an Ed25519 key that
+    decodes canonically and is not of small order (L-5.4-12)."""
+    try:
+        public = base64.b64decode(public_key, validate=True)
+    except (binascii.Error, ValueError):
+        public = b""
+    if alg != "ed25519" or not ed25519.is_public_key(public):
+        raise bad_request("key is {alg: ed25519, public_key: the 32 bytes of an Ed25519 key, base64}.")
+    return public
+
+
+def check_content_digest(request: ServerRequest) -> None:
+    """A body against its Content-Digest (RFC 9530): 400 when it is not one this server reads, 422
+    `digest_mismatch` when the body does not match it."""
+    header = request.header("Content-Digest")
+    if header is None:
+        return
+    announced = digest_sha256(header)
+    if announced is None:
+        raise bad_request("Content-Digest gives no sha-256 this server reads.")
+    if announced != sha256_hex(request.body):
+        raise ProblemError(
+            422, "digest_mismatch", "The body does not match its Content-Digest.", title="Digest mismatch"
+        )
 
 
 def _one(found: list[T], what: str) -> T:

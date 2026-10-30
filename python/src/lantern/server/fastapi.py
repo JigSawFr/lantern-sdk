@@ -30,7 +30,18 @@ async def to_request(req: Request, body_limit: int = BODY_LIMIT) -> ServerReques
     """The toolkit's request from Starlette's, its body read up to `body_limit`
     (a response, 413, when it is larger)."""
     query = {k: req.query_params.getlist(k)[-1] for k in req.query_params}
-    out = ServerRequest(req.method, req.url.path, query, Headers(req.headers.items()))
+    raw_path = req.scope.get("raw_path") or req.url.path.encode()
+    raw_query = req.scope.get("query_string") or b""
+    target = raw_path.decode("latin-1") + (f"?{raw_query.decode('latin-1')}" if raw_query else "")
+    out = ServerRequest(
+        req.method,
+        req.url.path,
+        query,
+        Headers(req.headers.items()),
+        scheme=req.url.scheme,
+        target=target,
+        remote=req.client.host if req.client else "",
+    )
     if req.method in _WITH_BODY:
         too_large = problem_response(out, ProblemError(413, "too_large", f"At most {body_limit} bytes here."))
         length = req.headers.get("content-length")
@@ -61,5 +72,8 @@ def include(app: FastAPI, lantern: LanternApp, *, body_limit: int = BODY_LIMIT) 
             return to_response(converted)
         return to_response(await run_in_threadpool(lantern.handle, converted))
 
-    for path in ("/.well-known/lantern", lantern.base + "/v1", lantern.base + "/v1/{rest:path}"):
+    paths = ["/.well-known/lantern", lantern.base + "/v1", lantern.base + "/v1/{rest:path}"]
+    if lantern.verify_path is not None and lantern.pair_page is None:
+        paths.append(lantern.verify_path)
+    for path in paths:
         app.add_api_route(path, endpoint, methods=METHODS, include_in_schema=False)

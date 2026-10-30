@@ -5,7 +5,17 @@ conformance runs.
     python tests/demo.py --framework flask --port 8080      # or fastapi
 
 It serves anonymously (the scopes library and cheats), and to a caller with
-the token DEMO_TOKEN, which `authenticate` takes.
+a token. Two ways:
+
+- make_lantern(): an `authenticate` hook takes DEMO_TOKEN (a bearer token the
+  server does not issue: no pairing, no signatures);
+- make_lantern(accounts=demo_accounts()): the toolkit's own accounts, which
+  pair devices (with a key or without), check signed requests, apply rating
+  caps and answer the administration API. DEMO_TOKEN is then bound to the
+  device key DEMO_KEY: every request it carries is signed.
+
+`python tests/demo.py` serves the second, and `--key-file` writes DEMO_KEY's
+seed (base64) where the conformance suite's `--key` reads it.
 """
 
 from __future__ import annotations
@@ -44,9 +54,15 @@ from lantern.models import (
     Title,
 )
 from lantern.server import Account, LanternApp, MemoryLibrary, ServerRequest, make_package
+from lantern.server.accounts import MemoryAccounts, User
+from lantern.signatures import DeviceKey
 
 UID = "3d5c7e1a-0b2f-4c6d-9e8a-1f2b3c4d5e6f"
 DEMO_TOKEN = "et_demo-0123456789abcdef0123456789abcdef"
+#: The demo device's key, made from a fixed phrase: for the demo only, never a real device's.
+DEMO_KEY = DeviceKey(hashlib.sha256(b"Mira's fictional console key").digest())
+#: Every scope the demo serves: its admin's.
+EVERY_SCOPE = ("library", "cheats", "admin")
 SEED = hashlib.sha256(b"Mira's fictional signing key").digest()  # for the demo only
 BASE = "/api/lantern"
 
@@ -380,14 +396,22 @@ def authenticate(request: ServerRequest) -> Account | None:
     return None
 
 
+def demo_accounts() -> MemoryAccounts:
+    """The demo's accounts: mira, who holds every scope, and DEMO_TOKEN, her console's, bound to DEMO_KEY."""
+    accounts = MemoryAccounts([User("mira", EVERY_SCOPE), User("noor", ("library",))])
+    accounts.add_token(DEMO_TOKEN, "mira", "Mira's console", EVERY_SCOPE, key=DEMO_KEY.public)
+    return accounts
+
+
 def make_lantern(library: MemoryLibrary | None = None, **options: Any) -> LanternApp:
+    if "accounts" not in options:
+        options["authenticate"] = authenticate
     return LanternApp(
         library or build_library(),
         uid=UID,
         name="Demo shelf",
         base=BASE,
         software=("lantern-protocol demo", "0.1"),
-        authenticate=authenticate,
         **options,
     )
 
@@ -459,9 +483,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--framework", choices=("flask", "fastapi"), default="flask")
     parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument("--key-file", type=Path, help="write the demo token's device key here (its seed, base64)")
     args = parser.parse_args()
-    with serve(args.framework, port=args.port) as url:
-        print(f"demo: {url} ({args.framework}); token {DEMO_TOKEN}", flush=True)
+    if args.key_file:
+        args.key_file.write_text(DEMO_KEY.seed_b64() + "\n", encoding="ascii")
+    with serve(args.framework, make_lantern(accounts=demo_accounts()), port=args.port) as url:
+        print(f"demo: {url} ({args.framework}); token {DEMO_TOKEN}, bound to its key", flush=True)
         try:
             while True:
                 time.sleep(3600)

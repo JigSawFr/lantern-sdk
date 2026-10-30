@@ -28,6 +28,7 @@ from lantern._generated.models import (
     Homebrew,
     ManifestEntry,
     Package,
+    RatingCap,
     RemovedTitle,
     Title,
 )
@@ -43,16 +44,28 @@ LIBRARY_FAMILIES = ("library", "titles", "homebrew", "cheats")
 
 @dataclass(frozen=True)
 class Account:
-    """The caller, as `authenticate` resolves it: its state (`active` or
-    `frozen`), its scopes (SPEC.md § 4.2) and the name the handshake shows."""
+    """The caller, as `authenticate` (or the server's Accounts) resolves it:
+    its state (`active` or `frozen`), its scopes (SPEC.md § 4.2) and the name
+    the handshake shows; `key`, the device key its token is bound to (32
+    bytes: LanternApp then checks the request's signature, SPEC.md § 5.4);
+    `rating_cap`, the cap its token carries (§ 5.6); `device`, its device's
+    id (§ 5.7)."""
 
     scopes: frozenset[str] = frozenset()
     state: str = "active"
     name: str | None = None
+    key: bytes | None = None
+    rating_cap: RatingCap | None = None
+    device: str | None = None
+
+    @property
+    def bound(self) -> bool:
+        return self.key is not None
 
 
-#: Resolves a request's credentials (its Authorization, and in a later draft
-#: its signature) to an account, or None when they are not valid ones.
+#: Resolves a request's credentials (its Authorization) to an account, or None
+#: when they are not valid ones. LanternApp checks the signature of a request
+#: whose account has a `key`.
 Authenticate = Callable[[ServerRequest], Account | None]
 
 

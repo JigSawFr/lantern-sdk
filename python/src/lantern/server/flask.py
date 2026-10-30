@@ -13,6 +13,8 @@ every method (the toolkit answers 405 where a route does not take one).
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 import flask
 
 from lantern.http import Headers
@@ -27,7 +29,20 @@ def to_request(req: flask.Request, body_limit: int = BODY_LIMIT) -> ServerReques
     """The toolkit's request from Flask's, its body read up to `body_limit`
     (a response, 413, when it is larger)."""
     query = {k: req.args.getlist(k)[-1] for k in req.args}
-    out = ServerRequest(req.method, req.path, query, Headers(list(req.headers.items())))
+    env = req.environ
+    target = env.get("RAW_URI") or env.get("REQUEST_URI") or ""
+    if not isinstance(target, str) or not target.startswith("/"):
+        raw_query = env.get("QUERY_STRING") or ""
+        target = quote(req.path, safe="/:@!$&'()*+,;=-._~") + (f"?{raw_query}" if raw_query else "")
+    out = ServerRequest(
+        req.method,
+        req.path,
+        query,
+        Headers(list(req.headers.items())),
+        scheme=req.scheme,
+        target=target,
+        remote=req.remote_addr or "",
+    )
     if req.method in _WITH_BODY:
         if req.content_length is not None and req.content_length > body_limit:
             return problem_response(out, ProblemError(413, "too_large", f"At most {body_limit} bytes here."))
@@ -59,3 +74,5 @@ def init_app(app: flask.Flask, lantern: LanternApp, *, body_limit: int = BODY_LI
     app.add_url_rule(lantern.base + "/v1", f"{endpoint}_v1", view, methods=METHODS, strict_slashes=True)
     app.add_url_rule(lantern.base + "/v1/", f"{endpoint}_v1_slash", view, methods=METHODS)
     app.add_url_rule(lantern.base + "/v1/<path:rest>", f"{endpoint}_routes", view, methods=METHODS)
+    if lantern.verify_path is not None and lantern.pair_page is None:
+        app.add_url_rule(lantern.verify_path, f"{endpoint}_pair", view, methods=METHODS)
