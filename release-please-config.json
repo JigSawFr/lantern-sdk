@@ -1,0 +1,39 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "include-v-in-tag": true,
+  "include-component-in-tag": false,
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": false,
+  "changelog-sections": [
+    { "type": "feat", "section": "🚀 Features" },
+    { "type": "change", "section": "🚀 Features" },
+    { "type": "deprecate", "section": "⚠️ Changes" },
+    { "type": "remove", "section": "⚠️ Changes" },
+    { "type": "fix", "section": "🐞 Bug Fixes" },
+    { "type": "revert", "section": "🐞 Bug Fixes" },
+    { "type": "security", "section": "🐞 Bug Fixes" },
+    { "type": "perf", "section": "✨ Polish" },
+    { "type": "refactor", "section": "✨ Polish" },
+    { "type": "style", "section": "✨ Polish" },
+    { "type": "build", "section": "🧰 Other" },
+    { "type": "chore", "section": "🧰 Other" },
+    { "type": "deps", "section": "🧰 Other", "hidden": true },
+    { "type": "ci", "section": "🧰 Other", "hidden": true },
+    { "type": "test", "section": "🧪 Tests" },
+    { "type": "docs", "section": "📚 Documentation" }
+  ],
+  "packages": {
+    ".": {
+      "release-type": "simple",
+      "package-name": "lantern-sdk",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        { "type": "generic", "path": "cpp/CMakeLists.txt" },
+        { "type": "generic", "path": "c/include/lantern/lantern.h" },
+        { "type": "generic", "path": "python/src/lantern/_version.py" },
+        { "type": "json", "path": "typescript/package.json", "jsonpath": "$.version" },
+        { "type": "generic", "path": "typescript/src/client/client.ts" }
+      ]
+    }
+  }
+}

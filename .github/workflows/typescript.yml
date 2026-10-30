@@ -9,7 +9,8 @@
 # (node:http and fetchHandler, with the levels it reaches, a peer of the
 # toolkit's, and lantern-static's output checked by --static); and the library
 # in Chromium (events and decryption included).
-# Nothing is published: that comes with the first release and its signing.
+# Nothing is published here: release.yml builds, attests and publishes a
+# release (RELEASING.md).
 name: typescript
 
 on:

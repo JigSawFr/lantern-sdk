@@ -101,7 +101,7 @@ import {
   type TransportRequest,
 } from "./transport.ts";
 
-export const VERSION = "0.1.0";
+export const VERSION = "0.5.0"; // x-release-please-version (the SDK's one version: RELEASING.md)
 const USER_AGENT = `LanternTypeScript/${VERSION}`;
 const ERROR_BODY = 1 << 16;
 const MISSING_WANTS = ["base", "update", "dlc"] as const;
