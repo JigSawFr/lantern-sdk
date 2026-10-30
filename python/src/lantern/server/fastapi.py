@@ -24,6 +24,8 @@ from lantern.server.http import BODY_LIMIT, ProblemError, ServerRequest, ServerR
 
 METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]
 _WITH_BODY = ("POST", "PUT", "PATCH")
+#: A body above the limit is still read, and dropped, up to this: the client then gets its 413.
+DRAIN = 4 << 20
 
 
 async def to_request(req: Request, body_limit: int = BODY_LIMIT) -> ServerRequest | ServerResponse:
@@ -45,13 +47,18 @@ async def to_request(req: Request, body_limit: int = BODY_LIMIT) -> ServerReques
     if req.method in _WITH_BODY:
         too_large = problem_response(out, ProblemError(413, "too_large", f"At most {body_limit} bytes here."))
         length = req.headers.get("content-length")
-        if length is not None and length.isdigit() and int(length) > body_limit:
-            return too_large
+        if length is not None and length.isdigit() and int(length) > max(body_limit, DRAIN):
+            return too_large  # too much to read: the connection is closed
         data = bytearray()
+        seen = 0
         async for chunk in req.stream():
-            data += chunk
-            if len(data) > body_limit:
+            seen += len(chunk)
+            if seen <= body_limit:
+                data += chunk
+            elif seen > max(body_limit, DRAIN):
                 return too_large
+        if seen > body_limit:
+            return too_large  # read to its end, so that the client gets the answer rather than a reset
         out.body = bytes(data)
     return out
 

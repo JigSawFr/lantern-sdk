@@ -1,7 +1,9 @@
 """The client side: LanternClient (sync, standard library by default) and
-AsyncLanternClient (async, over httpx), and their request pipeline."""
+AsyncLanternClient (async, over httpx), their request pipeline, and what
+pairing and signing need (DeviceSigner, Pairing, invitation links)."""
 
 from lantern.client.aio import AsyncLanternClient
+from lantern.client.auth import DeviceSigner, InvitationLink, Pairing, invitation_link
 from lantern.client.stdlib import StdlibTransport
 from lantern.client.sync import LanternClient
 from lantern.client.transport import (
@@ -21,10 +23,14 @@ __all__ = [
     "AsyncTransport",
     "BearerToken",
     "Credentials",
+    "DeviceSigner",
+    "InvitationLink",
     "LanternClient",
+    "Pairing",
     "Request",
     "RequestSigner",
     "Response",
     "StdlibTransport",
     "Transport",
+    "invitation_link",
 ]

@@ -35,6 +35,7 @@ httpx = ["httpx>=0.27"]
 flask = ["flask>=3.0"]
 fastapi = ["fastapi>=0.110"]
 crypto = ["cryptography>=42"]
+dnssd = ["zeroconf>=0.132"]
 
 [project.urls]
 Homepage = "https://github.com/JigSawFr/lantern-sdk"
@@ -52,6 +53,7 @@ dev = [
     "fastapi>=0.110",
     "uvicorn>=0.30",
     "cryptography>=42",
+    "zeroconf>=0.132",
     "jsonschema>=4.23",
     "referencing>=0.35",
     "rfc3339-validator>=0.1.4",
@@ -111,7 +113,7 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
 markers = [
-    "integration: against the reference server of the specification (spec/server)",
+    "integration: against the reference server of the specification (spec/server), and DNS-SD on loopback",
     "conformance: the specification's conformance suite against the demo servers",
 ]
 filterwarnings = ["error"]

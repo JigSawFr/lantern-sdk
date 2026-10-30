@@ -389,4 +389,4 @@ def test_async_client(tmp_path: Path) -> None:
 
 def test_the_package_exports() -> None:
     assert lantern.NotFound is lantern.errors.NotFound
-    assert lantern.__version__ and lantern.SPEC_DRAFT == "0.3"
+    assert lantern.__version__ and lantern.SPEC_DRAFT == "0.4"
