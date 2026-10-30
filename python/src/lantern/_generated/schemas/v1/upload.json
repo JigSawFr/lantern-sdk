@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/upload.json",
+  "title": "An upload session",
+  "description": "The answer to POST <base>/v1/saves/{title_id}/uploads (SPEC.md § 9.3).",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "$ref": "common.json#/$defs/schema1"
+    },
+    "upload": {
+      "$ref": "common.json#/$defs/url",
+      "description": "Where to PATCH chunks and HEAD the offset."
+    },
+    "chunk_size": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "offset": {
+      "$ref": "common.json#/$defs/uint64"
+    },
+    "expires": {
+      "$ref": "common.json#/$defs/time"
+    }
+  },
+  "required": [
+    "schema",
+    "upload",
+    "chunk_size",
+    "offset",
+    "expires"
+  ]
+}

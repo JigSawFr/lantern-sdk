@@ -7,3 +7,11 @@ path = ["**"]
 precedence = "closest"
 SPDX-FileCopyrightText = "2026 JigSawFr"
 SPDX-License-Identifier = "MIT"
+
+# The Python library's models and schemas, generated from the specification's
+# (JigSawFr/lantern, MIT) by python/tools/generate.py.
+[[annotations]]
+path = ["python/src/lantern/_generated/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "2026 JigSawFr"
+SPDX-License-Identifier = "MIT"

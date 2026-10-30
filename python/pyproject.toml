@@ -1,0 +1,126 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lantern-protocol"
+description = "Client and server library for the Lantern protocol, between console homebrews and home game library servers."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "JigSawFr" }]
+requires-python = ">=3.11"
+dynamic = ["version"]
+keywords = ["lantern", "homebrew", "game library", "protocol"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Framework :: Flask",
+    "Framework :: FastAPI",
+    "Topic :: Internet :: WWW/HTTP",
+    "Typing :: Typed",
+]
+# The core needs nothing but the standard library.
+dependencies = []
+
+[project.optional-dependencies]
+httpx = ["httpx>=0.27"]
+flask = ["flask>=3.0"]
+fastapi = ["fastapi>=0.110"]
+crypto = ["cryptography>=42"]
+
+[project.urls]
+Homepage = "https://github.com/JigSawFr/lantern-sdk"
+Specification = "https://github.com/JigSawFr/lantern"
+Issues = "https://github.com/JigSawFr/lantern-sdk/issues"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.13",
+    "ruff>=0.8",
+    "pytest>=8",
+    "pytest-cov>=6",
+    "httpx>=0.27",
+    "flask>=3.0",
+    "fastapi>=0.110",
+    "uvicorn>=0.30",
+    "cryptography>=42",
+    "jsonschema>=4.23",
+    "referencing>=0.35",
+    "rfc3339-validator>=0.1.4",
+]
+
+[tool.hatch.version]
+path = "src/lantern/_version.py"
+
+[tool.hatch.build.targets.sdist]
+include = ["src/lantern", "tests", "tools", "README.md", "LICENSE", "pyproject.toml"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lantern"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+src = ["src", "tests", "tools"]
+# Written by tools/generate.py, checked by it in CI (--check), and typed by mypy.
+extend-exclude = ["src/lantern/_generated"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "C4", "PIE", "PT", "RET", "TC", "PL", "S", "BLE", "ASYNC"]
+ignore = [
+    "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR2004",  # protocol code is branchy, and full of the spec's numbers
+    "S101",     # assert, in tests
+    "S324",     # md5 and sha1: the hashes a port's data file is compared with (SPEC.md § 8.6), not security
+    "RET505", "RET506", "SIM108",
+    "PLC0415",  # imports inside functions: the optional extras are imported only when used
+    "TC001", "TC002", "TC003",
+    "ASYNC109", # a transport's timeout is the protocol's, given to the HTTP library
+    "RUF036",   # JSONValue spelled as JSON's own order
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "PLR", "B011", "BLE001", "PT018", "PT011"]
+"tools/**" = ["S"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["lantern"]
+
+[tool.mypy]
+strict = true
+python_version = "3.11"
+mypy_path = "src"
+files = ["src", "tests", "tools"]
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+# uvicorn and the conformance suite's validators, and the specification's reference server and fictional
+# library (spec/server, spec/tests), which the tests import from the submodule.
+module = ["uvicorn", "uvicorn.*", "jsonschema", "jsonschema.*", "referencing", "referencing.*", "library", "server",
+          "server.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "integration: against the reference server of the specification (spec/server)",
+    "conformance: the specification's conformance suite against the demo servers",
+]
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+source = ["lantern"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "\\.\\.\\."]

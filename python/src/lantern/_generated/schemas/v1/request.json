@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/request.json",
+  "title": "A request",
+  "description": "POST <base>/v1/requests, answered with 201 or 200 (SPEC.md § 11): the request, as listed.",
+  "allOf": [
+    {
+      "$ref": "common.json#/$defs/request"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "$ref": "common.json#/$defs/schema1"
+        }
+      },
+      "required": [
+        "schema"
+      ]
+    }
+  ]
+}
