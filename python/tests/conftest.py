@@ -15,6 +15,7 @@ HERE = Path(__file__).resolve().parent
 SPEC = HERE.parents[1] / "spec"
 EXAMPLES = SPEC / "examples" / "v1"
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent / "tools"))
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
 
