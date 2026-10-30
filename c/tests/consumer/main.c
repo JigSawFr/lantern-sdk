@@ -13,5 +13,6 @@ int main(void)
     lantern_short_form(digest, short_form);
     printf("Lantern C API %u (%s), draft %s: %s\n", (unsigned)lantern_version(), lantern_version_string(),
         lantern_spec_draft(), short_form);
-    return lantern_version() >= LANTERN_C_API_VERSION && strcmp(short_form, "BA78 16BF 8F01 CFEA") == 0 ? 0 : 1;
+    return lantern_version() >= LANTERN_C_API_VERSION && strcmp(short_form, "BA78 16BF 8F01 CFEA") == 0 ? 0
+                                                                                                        : 1;
 }
