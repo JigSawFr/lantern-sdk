@@ -27,14 +27,17 @@ from lantern._generated.models import (
     CheatSet,
     Homebrew,
     ManifestEntry,
+    Mirror,
     Package,
     RatingCap,
     RemovedTitle,
     Title,
 )
 from lantern.digest import sha256_hex
+from lantern.grants import MIRRORS_LIMIT, mirror_ok
 from lantern.limits import CHEAT_SET
 from lantern.profiles import profile
+from lantern.server.events import LibraryChange
 from lantern.server.files import FileRef
 from lantern.server.http import ServerRequest
 
@@ -210,6 +213,16 @@ class MemoryLibrary:
         self._cheat_files: dict[str, FileRef] = {}
         self._journal = MemoryJournal() if journal else None
         self._lock = threading.RLock()
+        self._listeners: list[Callable[[LibraryChange], object]] = []
+
+    def subscribe(self, listener: Callable[[LibraryChange], object]) -> None:
+        """Calls `listener` with each change of the library (LanternApp sends the event `library` of it,
+        SPEC.md § 18.2)."""
+        self._listeners.append(listener)
+
+    def _changed(self, change: LibraryChange) -> None:
+        for listener in list(self._listeners):
+            listener(change)
 
     # Adding and removing.
 
@@ -236,6 +249,7 @@ class MemoryLibrary:
             self._apps[app.id] = app
             if self._journal is not None:
                 self._journal.record("added", app.id, app.platform)
+            self._changed(LibraryChange("apps", app.platform, app.title_id))
         return app
 
     def add_app_file(
@@ -252,8 +266,12 @@ class MemoryLibrary:
         format: str,
         version_name: str | None = None,
         added: str | None = None,
+        mirrors: Sequence[str] = (),
     ) -> App:
-        """An app from a file (hashed now) or bytes, given its identity (SPEC.md § 6.1)."""
+        """An app from a file (hashed now) or bytes, given its identity (SPEC.md § 6.1), and the other
+        addresses of its exact bytes, `mirrors` (§ 19.2: HTTPS, or HTTP at a private network's address)."""
+        if len(mirrors) > MIRRORS_LIMIT or not all(mirror_ok(m) for m in mirrors):
+            raise ValueError(f"mirrors: {MIRRORS_LIMIT} at most, HTTPS or HTTP on a private network (SPEC.md § 19.2)")
         if (path is None) == (data is None):
             raise ValueError("a path or data")
         file = FileRef.of(path) if path is not None else FileRef.of_bytes(data or b"")
@@ -271,6 +289,7 @@ class MemoryLibrary:
             sha256=file.sha256,
             added=added or now(),
             file="",
+            mirrors=[Mirror(url=m) for m in mirrors] or None,
         )
         return self.add_app(app, file)
 
@@ -279,6 +298,8 @@ class MemoryLibrary:
             app = self._apps.pop(app_id, None)
             if app is not None and self._journal is not None:
                 self._journal.record("removed", app_id, app.platform)
+            if app is not None:
+                self._changed(LibraryChange("apps", app.platform, app.title_id))
 
     def add_title(self, title: Title) -> Title:
         title.schema = None
@@ -289,12 +310,15 @@ class MemoryLibrary:
             self._titles[(title.platform, title.title_id)] = title
             if self._journal is not None:
                 self._journal.record("title", f"{title.platform}/{title.title_id}", title.platform)
+            self._changed(LibraryChange("titles", title.platform, title.title_id))
         return title
 
     def remove_title(self, platform: str, title_id: str) -> None:
         with self._lock:
-            if self._titles.pop((platform, title_id), None) is not None and self._journal is not None:
-                self._journal.record("title", f"{platform}/{title_id}", platform)
+            if self._titles.pop((platform, title_id), None) is not None:
+                if self._journal is not None:
+                    self._journal.record("title", f"{platform}/{title_id}", platform)
+                self._changed(LibraryChange("titles", platform, title_id))
 
     def add_homebrew(self, entry: Homebrew, files: dict[str, FileRef] | None = None) -> Homebrew:
         """Serve a homebrew entry. `files` maps each package's `file` to the
@@ -313,6 +337,7 @@ class MemoryLibrary:
             raise ValueError(f"homebrew {entry.platform}/{entry.id}: " + "; ".join(problems[:3]))
         with self._lock:
             self._homebrew[(entry.platform, entry.id)] = entry
+            self._changed(LibraryChange("homebrew", entry.platform, ratings=tuple(entry.ratings or ())))
         return entry
 
     def add_cheat(
@@ -348,6 +373,7 @@ class MemoryLibrary:
         with self._lock:
             self._cheats[cheat.id] = cheat
             self._cheat_files[cheat.id] = file
+            self._changed(LibraryChange("cheats", cheat.platform, cheat.title_id))
         return cheat
 
     # Library.

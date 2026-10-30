@@ -138,6 +138,178 @@ def main():
                      f"{c_string(path['why'])} }},")
     lines.append("};")
     lines.append("")
+    # Draft 0.5: grants, sync's merge, a static library's paths, encrypted saves
+    grants = json.loads((vectors / "grants.json").read_text(encoding="utf-8"))
+    merge = json.loads((vectors / "sync-merge.json").read_text(encoding="utf-8"))
+    layout = json.loads((vectors / "static-layout.json").read_text(encoding="utf-8"))
+    saves = json.loads((vectors / "encrypted-saves.json").read_text(encoding="utf-8"))
+    import base64
+
+    def key_hex(text):
+        return base64.b64decode(text).hex()
+
+    lines.append("typedef struct grant_case")
+    lines.append("{")
+    lines.append("    const char* name;")
+    lines.append("    const char* grant;")
+    lines.append("    const char* path_sha256;")
+    lines.append("    int64_t peer_time;")
+    lines.append("    const char* server_uid;")
+    lines.append("    const char* server_key; /* hex */")
+    lines.append("    bool serves;")
+    lines.append("} grant_case;")
+    lines.append("")
+    lines.append(f"static const char* const grant_public_key = {c_string(key_hex(grants['key']['public_key']))};")
+    lines.append("static const grant_case grant_cases[] = {")
+    for case in grants["cases"]:
+        (uid, key), = case["servers"].items()
+        lines.append(f"    {{ {c_string(case['name'])}, {c_string(case['grant'])}, {c_string(case['path_sha256'])}, "
+                     f"{int(case['peer_time'])}, {c_string(uid)}, {c_string(key_hex(key))}, "
+                     f"{'true' if case['serves'] else 'false'} }},")
+    lines.append("};")
+    lines.append("")
+
+    def item(value):
+        """(value JSON or "", deleted, updated) of a merge's item."""
+        if value is None:
+            return None
+        raw = json.dumps(value["value"], separators=(",", ":"), ensure_ascii=False) if "value" in value else ""
+        return raw, bool(value.get("deleted")), value["updated"]
+
+    lines.append("typedef struct merge_item")
+    lines.append("{")
+    lines.append("    bool present;")
+    lines.append("    const char* value; /* JSON, \"\" for a deletion */")
+    lines.append("    bool deleted;")
+    lines.append("    const char* updated;")
+    lines.append("} merge_item;")
+    lines.append("")
+    lines.append("typedef struct merge_case")
+    lines.append("{")
+    lines.append("    const char* name;")
+    lines.append("    merge_item have;")
+    lines.append("    merge_item sent;")
+    lines.append("    bool replaced;")
+    lines.append("    const char* kept_updated;")
+    lines.append("    const char* canonical_have; /* \"\" when the vector gives none */")
+    lines.append("    const char* canonical_sent;")
+    lines.append("} merge_case;")
+    lines.append("")
+
+    def c_item(value):
+        got = item(value)
+        if got is None:
+            return '{ false, "", false, "" }'
+        raw, deleted, updated = got
+        return f"{{ true, {c_string(raw)}, {'true' if deleted else 'false'}, {c_string(updated)} }}"
+
+    lines.append(f"static const char* const merge_server_time = {c_string(merge['server_time'])};")
+    lines.append(f"static const int64_t merge_skew = {int(merge['skew'])};")
+    lines.append("static const merge_case merge_cases[] = {")
+    for case in merge["cases"]:
+        canonical = case.get("canonical", {})
+        lines.append(f"    {{ {c_string(case['name'])}, {c_item(case['have'])}, {c_item(case['sent'])}, "
+                     f"{'true' if case['replaced'] else 'false'}, {c_string(case['kept']['updated'])}, "
+                     f"{c_string(canonical.get('have', ''))}, {c_string(canonical.get('sent', ''))} }},")
+    lines.append("};")
+    lines.append("")
+    lines.append("static const char* const static_route_files[] = {")
+    for route in layout["routes"]:
+        lines.append(f"    {c_string(route['file'])},")
+    lines.append("};")
+    lines.append("")
+    lines.append("static const path_vector static_paths[] = {")
+    for path in layout["paths"]:
+        lines.append(f"    {{ {c_string(path['path'])}, {len(path['path'].encode('utf-8'))}U, "
+                     f"{'true' if path['accepted'] else 'false'}, \"\" }},")
+    lines.append("};")
+    lines.append("")
+
+    # Encrypted saves: hex throughout; an archive of a size given has byte i = i % 251
+    primitives = saves["primitives"]
+    hkdf = primitives["hkdf_sha256"][0]
+    hchacha = primitives["hchacha20"][0]
+    lines.append(f"static const char* const hkdf_ikm = {c_string(hkdf['ikm'])};")
+    lines.append(f"static const char* const hkdf_salt = {c_string(hkdf['salt'])};")
+    lines.append(f"static const char* const hkdf_info = {c_string(hkdf['info'])};")
+    lines.append(f"static const char* const hkdf_okm = {c_string(hkdf['okm'])};")
+    lines.append(f"static const char* const hchacha_key = {c_string(hchacha['key'])};")
+    lines.append(f"static const char* const hchacha_nonce = {c_string(hchacha['nonce'])};")
+    lines.append(f"static const char* const hchacha_subkey = {c_string(hchacha['subkey'])};")
+    lines.append("typedef struct xchacha_case")
+    lines.append("{")
+    lines.append("    const char* key;")
+    lines.append("    const char* nonce;")
+    lines.append("    const char* aad;")
+    lines.append("    const char* plaintext;")
+    lines.append("    const char* sealed;")
+    lines.append("} xchacha_case;")
+    lines.append("static const xchacha_case xchacha_cases[] = {")
+    for case in primitives["xchacha20poly1305"]:
+        lines.append(f"    {{ {c_string(case['key'])}, {c_string(case['nonce'])}, {c_string(case['aad'])}, "
+                     f"{c_string(case['plaintext'])}, {c_string(case['sealed'])} }},")
+    lines.append("};")
+    lines.append("typedef struct save_key_case")
+    lines.append("{")
+    lines.append("    const char* save_key;")
+    lines.append("    const char* key_id;")
+    lines.append("    const char* phrase;")
+    lines.append("    const char* qr;")
+    lines.append("} save_key_case;")
+    lines.append("static const save_key_case save_key_cases[] = {")
+    for key in saves["keys"]:
+        lines.append(f"    {{ {c_string(key['save_key'])}, {c_string(key['key_id'])}, {c_string(key['phrase'])}, "
+                     f"{c_string(key['qr'])} }},")
+    lines.append("};")
+    lines.append("typedef struct backup_case")
+    lines.append("{")
+    lines.append("    const char* name;")
+    lines.append("    const char* save_key;")
+    lines.append("    const char* file_key;")
+    lines.append("    const char* wrap_nonce;")
+    lines.append("    const char* archive; /* hex, or NULL: archive_size bytes, byte i = i % 251 */")
+    lines.append("    size_t archive_size;")
+    lines.append("    const char* header;")
+    lines.append("    uint64_t size;")
+    lines.append("    const char* sha256;")
+    lines.append("    const char* encrypted; /* hex, or \"\" for a large one */")
+    lines.append("} backup_case;")
+    lines.append("static const backup_case backup_cases[] = {")
+    for b in saves["backups"]:
+        archive = b["archive"]
+        if isinstance(archive, str):
+            text, size = c_string(archive), len(archive) // 2
+        else:
+            text, size = "NULL", archive["size"]
+        lines.append(f"    {{ {c_string(b['name'])}, {c_string(b['save_key'])}, {c_string(b['file_key'])}, "
+                     f"{c_string(b['wrap_nonce'])}, {text}, {size}U, {c_string(b['header'])}, {b['size']}U, "
+                     f"{c_string(b['sha256'])}, {c_string(b.get('encrypted', ''))} }},")
+    lines.append("};")
+    lines.append("typedef struct refused_backup")
+    lines.append("{")
+    lines.append("    const char* name;")
+    lines.append("    const char* backup; /* a backup_case's name, or \"\" */")
+    lines.append("    const char* operation;")
+    lines.append("    const char* save_key;")
+    lines.append("    const char* sha256;")
+    lines.append("} refused_backup;")
+    lines.append("static const refused_backup refused_backups[] = {")
+    for r in saves["refused"]:
+        lines.append(f"    {{ {c_string(r['name'])}, {c_string(r['backup'] or '')}, {c_string(r['operation'])}, "
+                     f"{c_string(r['save_key'])}, {c_string(r['sha256'])} }},")
+        assert r["opens"] is False
+    lines.append("};")
+    lines.append("typedef struct phrase_case")
+    lines.append("{")
+    lines.append("    const char* name;")
+    lines.append("    const char* phrase;")
+    lines.append("    bool accepted;")
+    lines.append("} phrase_case;")
+    lines.append("static const phrase_case phrase_cases[] = {")
+    for ph in saves["phrases"]:
+        lines.append(f"    {{ {c_string(ph['name'])}, {c_string(ph['phrase'])}, {'true' if ph['accepted'] else 'false'} }},")
+    lines.append("};")
+    lines.append("")
     lines.append("#endif")
     lines.append("")
     Path(args.out).write_text("\n".join(lines), encoding="utf-8")

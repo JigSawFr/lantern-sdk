@@ -28,6 +28,9 @@
     },
     "note": {
       "$ref": "common.json#/$defs/note"
+    },
+    "encryption": {
+      "$ref": "common.json#/$defs/encryption"
     }
   },
   "required": [

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/grant.json",
+  "title": "A grant",
+  "description": "GET <base>/v1/grants/sha256/{hex} (SPEC.md § 19.3): a statement signed by the server's grant key, which a peer checks before it serves the file.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "$ref": "common.json#/$defs/schema1"
+    },
+    "sha256": {
+      "$ref": "common.json#/$defs/sha256"
+    },
+    "size": {
+      "$ref": "common.json#/$defs/uint64"
+    },
+    "grant": {
+      "type": "string",
+      "maxLength": 1024,
+      "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{86}$"
+    },
+    "expires": {
+      "$ref": "common.json#/$defs/time"
+    }
+  },
+  "required": [
+    "schema",
+    "sha256",
+    "size",
+    "grant",
+    "expires"
+  ]
+}

@@ -77,7 +77,7 @@ class StdlibTransport:
         def chunks() -> Iterator[bytes]:
             got = 0
             try:
-                while chunk := answer.read(CHUNK):
+                while chunk := answer.read1(CHUNK):  # what has arrived: an event stream's lines as they come
                     got += len(chunk)
                     yield chunk
             except (OSError, http.client.HTTPException) as e:
@@ -85,7 +85,13 @@ class StdlibTransport:
             if expected is not None and got < expected and request.method != "HEAD" and answer.status != 304:
                 raise TransportError(f"{request.method} {request.url}: cut after {got} of {expected} bytes")
 
-        response = Response(answer.status, Headers(answer.getheaders()), chunks(), conn.close)
+        def close() -> None:
+            # The answer holds the socket too: both closed, so that the server sees the connection end at once
+            # (an event stream's slot, SPEC.md § 18.4).
+            answer.close()
+            conn.close()
+
+        response = Response(answer.status, Headers(answer.getheaders()), chunks(), close)
         response.spki = spki
         return response
 

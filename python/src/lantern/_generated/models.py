@@ -40,6 +40,8 @@ SCOPES: tuple[str, ...] = (
     "cheats.write",
     "requests",
     "admin",
+    "sync.read",
+    "sync.write",
 )
 
 #: A save's kinds (SPEC.md § 9.1).
@@ -73,6 +75,7 @@ ERROR_CODES: tuple[str, ...] = (
     "not_found",
     "conflict",
     "gone",
+    "precondition_failed",
     "too_large",
     "unsupported_schema",
     "digest_mismatch",
@@ -580,9 +583,10 @@ class App:
     file: str
     atlas: str | None = None
     installed_size: int | None = None
+    mirrors: list[Mirror] | None = None
     extra: JSONObject = field(default_factory=dict)
 
-    KEYS: ClassVar[frozenset[str]] = frozenset({"id", "platform", "title_id", "app_id", "type", "version_code", "version_name", "name", "size", "format", "sha256", "added", "file", "atlas", "installed_size"})
+    KEYS: ClassVar[frozenset[str]] = frozenset({"id", "platform", "title_id", "app_id", "type", "version_code", "version_name", "name", "size", "format", "sha256", "added", "file", "atlas", "installed_size", "mirrors"})
 
     @classmethod
     def from_json(cls, data: JSONValue, where: str = "App") -> App:
@@ -603,6 +607,7 @@ class App:
             file=_m.req(o, "file", where, _m.as_str),
             atlas=_m.opt(o, "atlas", where, _m.as_str),
             installed_size=_m.opt(o, "installed_size", where, _m.as_int),
+            mirrors=_m.opt(o, "mirrors", where, lambda v, w: _m.as_list(v, w, Mirror.from_json)),
             extra=_m.extras(o, cls.KEYS),
         )
 
@@ -628,13 +633,42 @@ class App:
             out["atlas"] = self.atlas
         if self.installed_size is not None:
             out["installed_size"] = self.installed_size
+        if self.mirrors is not None:
+            out["mirrors"] = _m.json_list(x.to_json() for x in self.mirrors)
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class Mirror:
+    """Another address of a file's exact bytes (SPEC.md § 19.2): HTTPS, or HTTP at an address of a private network (10/8, 172.16/12, 192.168/16, fc00::/7, fe80::/10).
+
+    From common.json#/$defs/mirror.
+    """
+
+    url: str
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"url"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "Mirror") -> Mirror:
+        o = _m.obj(data, where)
+        return cls(
+            url=_m.req(o, "url", where, _m.as_str),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        out["url"] = self.url
         out.update(self.extra)
         return out
 
 
 @dataclass(kw_only=True, slots=True)
 class Changes:
-    """GET <base>/v1/changes (SPEC.md § 6.4).
+    """GET <base>/v1/changes (SPEC.md § 6.4); with wait, a long poll, and its events (§ 18.3).
 
     From changes.
     """
@@ -643,9 +677,10 @@ class Changes:
     added: list[App]
     removed: list[str]
     since: str
+    events: list[Event] | None = None
     extra: JSONObject = field(default_factory=dict)
 
-    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "added", "removed", "since"})
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "added", "removed", "since", "events"})
 
     @classmethod
     def from_json(cls, data: JSONValue, where: str = "Changes") -> Changes:
@@ -655,6 +690,7 @@ class Changes:
             added=_m.req(o, "added", where, lambda v, w: _m.as_list(v, w, App.from_json)),
             removed=_m.req(o, "removed", where, lambda v, w: _m.as_list(v, w, _m.as_str)),
             since=_m.req(o, "since", where, _m.as_str),
+            events=_m.opt(o, "events", where, lambda v, w: _m.as_list(v, w, Event.from_json)),
             extra=_m.extras(o, cls.KEYS),
         )
 
@@ -664,6 +700,68 @@ class Changes:
         out["added"] = _m.json_list(x.to_json() for x in self.added)
         out["removed"] = _m.json_list(self.removed)
         out["since"] = self.since
+        if self.events is not None:
+            out["events"] = _m.json_list(x.to_json() for x in self.events)
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class Event:
+    """An event (SPEC.md § 18): its id, a token of /v1/changes, its type and its document.
+
+    From common.json#/$defs/event.
+    """
+
+    id: str
+    event: str
+    data: EventData
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"id", "event", "data"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "Event") -> Event:
+        o = _m.obj(data, where)
+        return cls(
+            id=_m.req(o, "id", where, _m.as_str),
+            event=_m.req(o, "event", where, _m.as_str),
+            data=_m.req(o, "data", where, EventData.from_json),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        out["id"] = self.id
+        out["event"] = self.event
+        out["data"] = self.data.to_json()
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class EventData:
+    """EventData..
+
+    From common.json#/$defs/event/data.
+    """
+
+    schema: int
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "EventData") -> EventData:
+        o = _m.obj(data, where)
+        return cls(
+            schema=_m.req(o, "schema", where, _m.as_int),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        out["schema"] = self.schema
         out.update(self.extra)
         return out
 
@@ -851,6 +949,57 @@ class Discovery:
 
 
 @dataclass(kw_only=True, slots=True)
+class DiscoveryPeer:
+    """A peer's answer, unicast, to a discovery request that asks for peers (SPEC.md § 19.5).
+
+    From discovery-peer.
+    """
+
+    schema: int
+    lantern: str
+    uid: str
+    name: str
+    port: int
+    base: str
+    tls: bool
+    slots: int
+    servers: list[str]
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "lantern", "uid", "name", "port", "base", "tls", "slots", "servers"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "DiscoveryPeer") -> DiscoveryPeer:
+        o = _m.obj(data, where)
+        return cls(
+            schema=_m.req(o, "schema", where, _m.as_int),
+            lantern=_m.req(o, "lantern", where, _m.as_str),
+            uid=_m.req(o, "uid", where, _m.as_str),
+            name=_m.req(o, "name", where, _m.as_str),
+            port=_m.req(o, "port", where, _m.as_int),
+            base=_m.req(o, "base", where, _m.as_str),
+            tls=_m.req(o, "tls", where, _m.as_bool),
+            slots=_m.req(o, "slots", where, _m.as_int),
+            servers=_m.req(o, "servers", where, lambda v, w: _m.as_list(v, w, _m.as_str)),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        out["schema"] = self.schema
+        out["lantern"] = self.lantern
+        out["uid"] = self.uid
+        out["name"] = self.name
+        out["port"] = self.port
+        out["base"] = self.base
+        out["tls"] = self.tls
+        out["slots"] = self.slots
+        out["servers"] = _m.json_list(self.servers)
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
 class DiscoveryRequest:
     """The datagram a client sends to UDP 47115, as a directed broadcast (SPEC.md § 4.1).
 
@@ -859,9 +1008,10 @@ class DiscoveryRequest:
 
     schema: int
     lantern: str
+    peers: bool | None = None
     extra: JSONObject = field(default_factory=dict)
 
-    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "lantern"})
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "lantern", "peers"})
 
     @classmethod
     def from_json(cls, data: JSONValue, where: str = "DiscoveryRequest") -> DiscoveryRequest:
@@ -869,6 +1019,7 @@ class DiscoveryRequest:
         return cls(
             schema=_m.req(o, "schema", where, _m.as_int),
             lantern=_m.req(o, "lantern", where, _m.as_str),
+            peers=_m.opt(o, "peers", where, _m.as_bool),
             extra=_m.extras(o, cls.KEYS),
         )
 
@@ -876,6 +1027,47 @@ class DiscoveryRequest:
         out: JSONObject = {}
         out["schema"] = self.schema
         out["lantern"] = self.lantern
+        if self.peers is not None:
+            out["peers"] = self.peers
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class Grant:
+    """GET <base>/v1/grants/sha256/{hex} (SPEC.md § 19.3): a statement signed by the server's grant key, which a peer checks before it serves the file.
+
+    From grant.
+    """
+
+    schema: int
+    sha256: str
+    size: int
+    grant: str
+    expires: str
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "sha256", "size", "grant", "expires"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "Grant") -> Grant:
+        o = _m.obj(data, where)
+        return cls(
+            schema=_m.req(o, "schema", where, _m.as_int),
+            sha256=_m.req(o, "sha256", where, _m.as_str),
+            size=_m.req(o, "size", where, _m.as_int),
+            grant=_m.req(o, "grant", where, _m.as_str),
+            expires=_m.req(o, "expires", where, _m.as_str),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        out["schema"] = self.schema
+        out["sha256"] = self.sha256
+        out["size"] = self.size
+        out["grant"] = self.grant
+        out["expires"] = self.expires
         out.update(self.extra)
         return out
 
@@ -900,9 +1092,11 @@ class Handshake:
     limits: Limits | None = None
     language: str | None = None
     auth: HandshakeAuth | None = None
+    peers: HandshakePeers | None = None
+    static: HandshakeStatic | None = None
     extra: JSONObject = field(default_factory=dict)
 
-    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "uid", "name", "software", "base", "versions", "platforms", "motd", "account", "features", "limits", "language", "auth"})
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "uid", "name", "software", "base", "versions", "platforms", "motd", "account", "features", "limits", "language", "auth", "peers", "static"})
 
     @classmethod
     def from_json(cls, data: JSONValue, where: str = "Handshake") -> Handshake:
@@ -921,6 +1115,8 @@ class Handshake:
             limits=_m.opt(o, "limits", where, Limits.from_json),
             language=_m.opt(o, "language", where, _m.as_str),
             auth=_m.opt(o, "auth", where, HandshakeAuth.from_json),
+            peers=_m.opt(o, "peers", where, HandshakePeers.from_json),
+            static=_m.opt(o, "static", where, HandshakeStatic.from_json),
             extra=_m.extras(o, cls.KEYS),
         )
 
@@ -944,6 +1140,10 @@ class Handshake:
             out["language"] = self.language
         if self.auth is not None:
             out["auth"] = self.auth.to_json()
+        if self.peers is not None:
+            out["peers"] = self.peers.to_json()
+        if self.static is not None:
+            out["static"] = self.static.to_json()
         out.update(self.extra)
         return out
 
@@ -1033,9 +1233,13 @@ class Limits:
     save_body: int | None = None
     save_size: int | None = None
     saves_kept_per_title: int | None = None
+    heartbeat: int | None = None
+    event_streams: int | None = None
+    wait: int | None = None
+    sync_items: int | None = None
     extra: JSONObject = field(default_factory=dict)
 
-    KEYS: ClassVar[frozenset[str]] = frozenset({"page_size", "save_body", "save_size", "saves_kept_per_title"})
+    KEYS: ClassVar[frozenset[str]] = frozenset({"page_size", "save_body", "save_size", "saves_kept_per_title", "heartbeat", "event_streams", "wait", "sync_items"})
 
     @classmethod
     def from_json(cls, data: JSONValue, where: str = "Limits") -> Limits:
@@ -1045,6 +1249,10 @@ class Limits:
             save_body=_m.opt(o, "save_body", where, _m.as_int),
             save_size=_m.opt(o, "save_size", where, _m.as_int),
             saves_kept_per_title=_m.opt(o, "saves_kept_per_title", where, _m.as_int),
+            heartbeat=_m.opt(o, "heartbeat", where, _m.as_int),
+            event_streams=_m.opt(o, "event_streams", where, _m.as_int),
+            wait=_m.opt(o, "wait", where, _m.as_int),
+            sync_items=_m.opt(o, "sync_items", where, _m.as_int),
             extra=_m.extras(o, cls.KEYS),
         )
 
@@ -1058,6 +1266,14 @@ class Limits:
             out["save_size"] = self.save_size
         if self.saves_kept_per_title is not None:
             out["saves_kept_per_title"] = self.saves_kept_per_title
+        if self.heartbeat is not None:
+            out["heartbeat"] = self.heartbeat
+        if self.event_streams is not None:
+            out["event_streams"] = self.event_streams
+        if self.wait is not None:
+            out["wait"] = self.wait
+        if self.sync_items is not None:
+            out["sync_items"] = self.sync_items
         out.update(self.extra)
         return out
 
@@ -1088,6 +1304,66 @@ class HandshakeAuth:
         out: JSONObject = {}
         out["bearer_only"] = self.bearer_only
         out["skew"] = self.skew
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class HandshakePeers:
+    """The server's grants (SPEC.md § 19.3): its grant key's public key, the same for every caller, and a grant's lifetime.
+
+    From handshake/peers.
+    """
+
+    key: str
+    grant_lifetime: int
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"key", "grant_lifetime"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "HandshakePeers") -> HandshakePeers:
+        o = _m.obj(data, where)
+        return cls(
+            key=_m.req(o, "key", where, _m.as_str),
+            grant_lifetime=_m.req(o, "grant_lifetime", where, _m.as_int),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        out["key"] = self.key
+        out["grant_lifetime"] = self.grant_lifetime
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class HandshakeStatic:
+    """A static library's (SPEC.md § 21.2): when its files were written, and the size of its pages.
+
+    From handshake/static.
+    """
+
+    generated: str
+    page_size: int
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"generated", "page_size"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "HandshakeStatic") -> HandshakeStatic:
+        o = _m.obj(data, where)
+        return cls(
+            generated=_m.req(o, "generated", where, _m.as_str),
+            page_size=_m.req(o, "page_size", where, _m.as_int),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        out["generated"] = self.generated
+        out["page_size"] = self.page_size
         out.update(self.extra)
         return out
 
@@ -1358,9 +1634,10 @@ class Package:
     signature: Signature | None = None
     signer_sha256: str | None = None
     installed_size: int | None = None
+    mirrors: list[Mirror] | None = None
     extra: JSONObject = field(default_factory=dict)
 
-    KEYS: ClassVar[frozenset[str]] = frozenset({"format", "file", "size", "sha256", "manifest_sha256", "path", "manifest", "arch", "signature", "signer_sha256", "installed_size"})
+    KEYS: ClassVar[frozenset[str]] = frozenset({"format", "file", "size", "sha256", "manifest_sha256", "path", "manifest", "arch", "signature", "signer_sha256", "installed_size", "mirrors"})
 
     @classmethod
     def from_json(cls, data: JSONValue, where: str = "Package") -> Package:
@@ -1377,6 +1654,7 @@ class Package:
             signature=_m.opt(o, "signature", where, Signature.from_json),
             signer_sha256=_m.opt(o, "signer_sha256", where, _m.as_str),
             installed_size=_m.opt(o, "installed_size", where, _m.as_int),
+            mirrors=_m.opt(o, "mirrors", where, lambda v, w: _m.as_list(v, w, Mirror.from_json)),
             extra=_m.extras(o, cls.KEYS),
         )
 
@@ -1399,6 +1677,8 @@ class Package:
             out["signer_sha256"] = self.signer_sha256
         if self.installed_size is not None:
             out["installed_size"] = self.installed_size
+        if self.mirrors is not None:
+            out["mirrors"] = _m.json_list(x.to_json() for x in self.mirrors)
         out.update(self.extra)
         return out
 
@@ -2452,9 +2732,10 @@ class Save:
     profile: str | None = None
     note: str | None = None
     device: str | None = None
+    encryption: Encryption | None = None
     extra: JSONObject = field(default_factory=dict)
 
-    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "platform", "title_id", "save_id", "created", "size", "sha256", "slot", "kind", "game_version_code", "profile", "note", "device"})
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "platform", "title_id", "save_id", "created", "size", "sha256", "slot", "kind", "game_version_code", "profile", "note", "device", "encryption"})
 
     @classmethod
     def from_json(cls, data: JSONValue, where: str = "Save") -> Save:
@@ -2473,6 +2754,7 @@ class Save:
             profile=_m.opt(o, "profile", where, _m.as_str),
             note=_m.opt(o, "note", where, _m.as_str),
             device=_m.opt(o, "device", where, _m.as_str),
+            encryption=_m.opt(o, "encryption", where, Encryption.from_json),
             extra=_m.extras(o, cls.KEYS),
         )
 
@@ -2498,6 +2780,38 @@ class Save:
             out["note"] = self.note
         if self.device is not None:
             out["device"] = self.device
+        if self.encryption is not None:
+            out["encryption"] = self.encryption.to_json()
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class Encryption:
+    """An end-to-end encrypted backup's metadata (SPEC.md § 9.4): its scheme and key id, in clear.
+
+    From common.json#/$defs/encryption.
+    """
+
+    scheme: str
+    key_id: str
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"scheme", "key_id"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "Encryption") -> Encryption:
+        o = _m.obj(data, where)
+        return cls(
+            scheme=_m.req(o, "scheme", where, _m.as_str),
+            key_id=_m.req(o, "key_id", where, _m.as_str),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        out["scheme"] = self.scheme
+        out["key_id"] = self.key_id
         out.update(self.extra)
         return out
 
@@ -2591,6 +2905,193 @@ class Section:
         out["id"] = self.id
         out["title"] = self.title
         out["apps"] = _m.json_list(self.apps)
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class Sync:
+    """GET <base>/v1/sync (SPEC.md § 20.3): what the account keeps, and the caller's device id.
+
+    From sync.
+    """
+
+    schema: int
+    generation: str
+    device: str | None = None
+    collections: dict[str, SyncSummary]
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "generation", "device", "collections"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "Sync") -> Sync:
+        o = _m.obj(data, where)
+        return cls(
+            schema=_m.req(o, "schema", where, _m.as_int),
+            generation=_m.req(o, "generation", where, _m.as_str),
+            device=_m.opt(o, "device", where, _m.as_str),
+            collections=_m.req(o, "collections", where, lambda v, w: _m.as_map(v, w, SyncSummary.from_json)),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        out["schema"] = self.schema
+        out["generation"] = self.generation
+        if self.device is not None:
+            out["device"] = self.device
+        out["collections"] = _m.json_map({k: x.to_json() for k, x in self.collections.items()})
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class SyncSummary:
+    """SyncSummary..
+
+    From sync/collections{}.
+    """
+
+    rev: int
+    items: int
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"rev", "items"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "SyncSummary") -> SyncSummary:
+        o = _m.obj(data, where)
+        return cls(
+            rev=_m.req(o, "rev", where, _m.as_int),
+            items=_m.req(o, "items", where, _m.as_int),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        out["rev"] = self.rev
+        out["items"] = self.items
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class SyncCollection:
+    """GET <base>/v1/sync/{collection} and the answer to PATCH (SPEC.md § 20.3, § 20.4): items, a page at a time when read.
+
+    From sync-collection.
+    """
+
+    schema: int
+    collection: str
+    generation: str
+    rev: int
+    items: list[SyncItem]
+    next: str | None = None
+    extra: JSONObject = field(default_factory=dict)
+    nulls: frozenset[str] = frozenset()
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "collection", "generation", "rev", "items", "next"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "SyncCollection") -> SyncCollection:
+        o = _m.obj(data, where)
+        return cls(
+            schema=_m.req(o, "schema", where, _m.as_int),
+            collection=_m.req(o, "collection", where, _m.as_str),
+            generation=_m.req(o, "generation", where, _m.as_str),
+            rev=_m.req(o, "rev", where, _m.as_int),
+            items=_m.req(o, "items", where, lambda v, w: _m.as_list(v, w, SyncItem.from_json)),
+            next=_m.opt(o, "next", where, _m.nullable(_m.as_str)),
+            extra=_m.extras(o, cls.KEYS),
+            nulls=_m.nulls(o, ("next",)),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        out["schema"] = self.schema
+        out["collection"] = self.collection
+        out["generation"] = self.generation
+        out["rev"] = self.rev
+        out["items"] = _m.json_list(x.to_json() for x in self.items)
+        if self.next is not None or "next" in self.nulls:
+            out["next"] = None if self.next is None else self.next
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class SyncItem:
+    """An item of a sync collection (SPEC.md § 20.2): a value, or a deletion.
+
+    From common.json#/$defs/sync_item.
+    """
+
+    key: str
+    value: JSONValue | None = None
+    deleted: bool | None = None
+    updated: str
+    rev: int | None = None
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"key", "value", "deleted", "updated", "rev"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "SyncItem") -> SyncItem:
+        o = _m.obj(data, where)
+        return cls(
+            key=_m.req(o, "key", where, _m.as_str),
+            value=_m.opt(o, "value", where, _m.as_any),
+            deleted=_m.opt(o, "deleted", where, _m.as_bool),
+            updated=_m.req(o, "updated", where, _m.as_str),
+            rev=_m.opt(o, "rev", where, _m.as_int),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        out["key"] = self.key
+        if self.value is not None:
+            out["value"] = self.value
+        if self.deleted is not None:
+            out["deleted"] = self.deleted
+        out["updated"] = self.updated
+        if self.rev is not None:
+            out["rev"] = self.rev
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class SyncWrite:
+    """PATCH <base>/v1/sync/{collection} (SPEC.md § 20.4): items sent, merged by the rule of § 20.4.
+
+    From sync-write.
+    """
+
+    schema: int
+    generation: str
+    items: list[SyncItem]
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "generation", "items"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "SyncWrite") -> SyncWrite:
+        o = _m.obj(data, where)
+        return cls(
+            schema=_m.req(o, "schema", where, _m.as_int),
+            generation=_m.req(o, "generation", where, _m.as_str),
+            items=_m.req(o, "items", where, lambda v, w: _m.as_list(v, w, SyncItem.from_json)),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        out["schema"] = self.schema
+        out["generation"] = self.generation
+        out["items"] = _m.json_list(x.to_json() for x in self.items)
         out.update(self.extra)
         return out
 
@@ -2846,7 +3347,7 @@ class RemovedTitle:
 
 @dataclass(kw_only=True, slots=True)
 class Titles:
-    """GET <base>/v1/titles?ids=… (SPEC.md § 7.2).
+    """GET <base>/v1/titles?ids=… (SPEC.md § 7.2); in a static library, a page of a platform's titles, with next (§ 21.1).
 
     From titles.
     """
@@ -2854,9 +3355,11 @@ class Titles:
     schema: int
     titles: list[Title]
     unknown: list[str]
+    next: str | None = None
     extra: JSONObject = field(default_factory=dict)
+    nulls: frozenset[str] = frozenset()
 
-    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "titles", "unknown"})
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "titles", "unknown", "next"})
 
     @classmethod
     def from_json(cls, data: JSONValue, where: str = "Titles") -> Titles:
@@ -2865,7 +3368,9 @@ class Titles:
             schema=_m.req(o, "schema", where, _m.as_int),
             titles=_m.req(o, "titles", where, lambda v, w: _m.as_list(v, w, Title.from_json)),
             unknown=_m.req(o, "unknown", where, lambda v, w: _m.as_list(v, w, _m.as_str)),
+            next=_m.opt(o, "next", where, _m.nullable(_m.as_str)),
             extra=_m.extras(o, cls.KEYS),
+            nulls=_m.nulls(o, ("next",)),
         )
 
     def to_json(self) -> JSONObject:
@@ -2873,6 +3378,8 @@ class Titles:
         out["schema"] = self.schema
         out["titles"] = _m.json_list(x.to_json() for x in self.titles)
         out["unknown"] = _m.json_list(self.unknown)
+        if self.next is not None or "next" in self.nulls:
+            out["next"] = None if self.next is None else self.next
         out.update(self.extra)
         return out
 
@@ -2931,9 +3438,10 @@ class UploadRequest:
     game_version_code: int | None = None
     profile: str | None = None
     note: str | None = None
+    encryption: Encryption | None = None
     extra: JSONObject = field(default_factory=dict)
 
-    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "size", "sha256", "kind", "slot", "game_version_code", "profile", "note"})
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "size", "sha256", "kind", "slot", "game_version_code", "profile", "note", "encryption"})
 
     @classmethod
     def from_json(cls, data: JSONValue, where: str = "UploadRequest") -> UploadRequest:
@@ -2947,6 +3455,7 @@ class UploadRequest:
             game_version_code=_m.opt(o, "game_version_code", where, _m.as_int),
             profile=_m.opt(o, "profile", where, _m.as_str),
             note=_m.opt(o, "note", where, _m.as_str),
+            encryption=_m.opt(o, "encryption", where, Encryption.from_json),
             extra=_m.extras(o, cls.KEYS),
         )
 
@@ -2965,6 +3474,8 @@ class UploadRequest:
             out["profile"] = self.profile
         if self.note is not None:
             out["note"] = self.note
+        if self.encryption is not None:
+            out["encryption"] = self.encryption.to_json()
         out.update(self.extra)
         return out
 
@@ -2994,7 +3505,10 @@ DOCUMENTS: dict[str, type[Any]] = {
     "cheat-write": CheatWrite,
     "cheats": CheatSets,
     "discovery": Discovery,
+    "discovery-peer": DiscoveryPeer,
     "discovery-request": DiscoveryRequest,
+    "event": Event,
+    "grant": Grant,
     "handshake": Handshake,
     "homebrew": Homebrew,
     "homebrew-page": HomebrewPage,
@@ -3013,6 +3527,9 @@ DOCUMENTS: dict[str, type[Any]] = {
     "save": Save,
     "saves": Saves,
     "sections": Sections,
+    "sync": Sync,
+    "sync-collection": SyncCollection,
+    "sync-write": SyncWrite,
     "title": Title,
     "title-changes": TitleChanges,
     "titles": Titles,
@@ -3042,12 +3559,19 @@ __all__ = [
     "DOCUMENTS",
     "DeviceKey",
     "Discovery",
+    "DiscoveryPeer",
     "DiscoveryRequest",
     "ERROR_CODES",
+    "Encryption",
+    "Event",
+    "EventData",
     "GENRES",
     "GPU_NAMES",
+    "Grant",
     "Handshake",
     "HandshakeAuth",
+    "HandshakePeers",
+    "HandshakeStatic",
     "Homebrew",
     "HomebrewPage",
     "HomebrewUpdatesRequest",
@@ -3059,6 +3583,7 @@ __all__ = [
     "Invitations",
     "Limits",
     "ManifestEntry",
+    "Mirror",
     "MissingRequest",
     "Package",
     "PairingCode",
@@ -3089,6 +3614,11 @@ __all__ = [
     "Sections",
     "Signature",
     "Software",
+    "Sync",
+    "SyncCollection",
+    "SyncItem",
+    "SyncSummary",
+    "SyncWrite",
     "Title",
     "TitleChanges",
     "TitleRequest",

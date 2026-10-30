@@ -19,8 +19,10 @@ namespace
 class Handler final : public lantern::DiscoveryHandler
 {
   public:
-    Handler(lantern_discovery_handler handler, void* user, Resource* resource) noexcept
+    Handler(lantern_discovery_handler handler, lantern_discovery_peer_handler peers, void* user,
+        Resource* resource) noexcept
         : handler_(handler)
+        , peers_(peers)
         , user_(user)
         , resource_(resource)
     {
@@ -39,8 +41,29 @@ class Handler final : public lantern::DiscoveryHandler
         return handler_(user_, &out);
     }
 
+    [[nodiscard]] bool on_peer(const lantern::DiscoveredPeer& peer) override
+    {
+        if (peers_ == nullptr)
+            return true;
+        const lantern::Allocator allocator(resource_);
+        const lantern::String address(peer.address, allocator);
+        const lantern::String host(peer.endpoint.host, allocator);
+        const lantern::String base(peer.endpoint.base, allocator);
+        lantern_discovered_peer out {};
+        out.struct_size          = sizeof(out);
+        out.address              = view(address);
+        out.reply                = wrap(peer.reply);
+        out.endpoint.struct_size = sizeof(out.endpoint);
+        out.endpoint.host        = host.c_str();
+        out.endpoint.port        = peer.endpoint.port;
+        out.endpoint.base        = base.c_str();
+        out.endpoint.tls         = peer.endpoint.tls;
+        return peers_(user_, &out);
+    }
+
   private:
     lantern_discovery_handler handler_;
+    lantern_discovery_peer_handler peers_;
     void* user_;
     Resource* resource_;
 };
@@ -105,7 +128,8 @@ LANTERN_API lantern_status lantern_discover(lantern_udp_socket* socket,
     settings.wait     = std::chrono::milliseconds(o.wait_ms == 0 ? 1500 : o.wait_ms);
     settings.attempts = o.attempts == 0 ? 2 : o.attempts;
     settings.decode   = decode_options(o.limits, resource);
-    Handler wrapped(handler, user, resource);
+    settings.peers    = o.peers;
+    Handler wrapped(handler, o.on_peer, user, resource);
     const auto found = lantern::discover(*socket, settings, wrapped);
     if (!found)
         return fail(error, found.error());

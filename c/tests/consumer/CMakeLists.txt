@@ -6,7 +6,7 @@ project(LanternCConsumer LANGUAGES C CXX)
 
 set(LANTERN_CONSUMER package CACHE STRING "package or subdirectory")
 if (LANTERN_CONSUMER STREQUAL "package")
-    find_package(LanternC 0.4 REQUIRED)
+    find_package(LanternC 0.5 REQUIRED)
 else ()
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../.. lantern-c)
 endif ()

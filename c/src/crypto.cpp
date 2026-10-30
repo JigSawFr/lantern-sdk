@@ -376,7 +376,7 @@ LANTERN_API lantern_status lantern_check_signature(
     const lantern::SignatureVerdict verdict = lantern::check_signature(in);
     lantern_signature_verdict result {};
     result.struct_size = sizeof(result);
-    result.code        = static_cast<lantern_code>(verdict.code);
+    result.code        = code_of(verdict.code);
     copy_text(verdict.nonce, result.nonce, sizeof(result.nonce));
     copy_text(verdict.keyid, result.keyid, sizeof(result.keyid));
     give_struct(result, out);

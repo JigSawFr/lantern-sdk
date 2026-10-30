@@ -5,15 +5,20 @@ the open REST/JSON protocol between console homebrews and the library
 servers people run at home for their own games
 ([lantern.boreale.dev](https://lantern.boreale.dev/?utm_source=github&utm_medium=readme)):
 a client, a toolkit to add Lantern to an existing server, the checks both
-sides share, and a malicious test server for clients. It follows the
-specification's **draft 0.4**.
+sides share, a minimal peer, the generator of static libraries, and a
+malicious test server for clients. It follows the specification's **draft
+0.5**.
 
-**Status: early, complete for draft 0.4's client.** The client speaks every
+**Status: early, complete for draft 0.5's client.** The client speaks every
 route of the protocol: pairing with a device key, requests signed by it
-(RFC 9421), the writes, LAN discovery. The server toolkit pairs devices,
-checks signed requests, and serves the read routes, invitations, rating
-caps and the administration API; it reaches **Lantern Core +titles
-+homebrew +cheats +admin** in the specification's conformance suite. See
+(RFC 9421), the writes, LAN discovery; event streams and long polls, files
+from mirrors and peers, sync with its user's consent, backups encrypted on
+the device, and static libraries. The server toolkit pairs devices, checks
+signed requests, serves the read routes, invitations, rating caps and the
+administration API, events, grants and sync; it reaches **Lantern Core
++titles +homebrew +cheats +admin +events +peers +sync** in the
+specification's conformance suite, its peer passes the suite's `--peer`,
+and what its generator writes, **Lantern Static**. See
 [What is not there yet](#what-is-not-there-yet). Nothing is published on
 PyPI before the first release.
 
@@ -27,13 +32,20 @@ pip install lantern-protocol              # the core: models, checks, a stdlib c
 pip install "lantern-protocol[httpx]"     # an httpx transport, and the async client
 pip install "lantern-protocol[flask]"     # the Flask adapter
 pip install "lantern-protocol[fastapi]"   # the FastAPI adapter
-pip install "lantern-protocol[crypto]"    # ed25519 by `cryptography` (pure Python otherwise)
+pip install "lantern-protocol[crypto]"    # ed25519 by `cryptography`, and encrypted saves (XChaCha20-Poly1305)
 pip install "lantern-protocol[dnssd]"     # DNS-SD discovery and advertising (zeroconf)
 ```
 
 A device that signs its requests should install `crypto`: the pure-Python
 Ed25519 works everywhere but is not constant-time, which matters for a
-secret key on a device someone else can time.
+secret key on a device someone else can time. Encrypted saves (§ 9.4) need
+it: their XChaCha20-Poly1305 is the RFC 8439 ChaCha20-Poly1305 of
+`cryptography` (OpenSSL's), after HChaCha20, written here (the ARX rounds of
+draft-irtf-cfrg-xchacha, no table and no branch on the key) and checked
+against the draft's vector and the specification's. One audited dependency
+the library already offers, rather than a second binding (PyNaCl) for one
+function; the key ids, phrases and QR codes need nothing but the standard
+library.
 
 The distribution is `lantern-protocol`; the package is `lantern`.
 
@@ -137,12 +149,107 @@ client.withdraw_request(request.id)
 ```
 
 With the scope `admin`, the administration API (§ 5.7): `iter_admin_users()`,
-`create_user()`, `update_user()`, `iter_admin_devices()`, `revoke_device()`,
-`iter_admin_pairings()` (show each code next to the server's fingerprint),
-`approve_pairing(…, rating_cap=…)`, `refuse_pairing()`,
-`create_invitation()`, `revoke_invitation()`.
+`create_user()`, `update_user()`, `delete_user(name, confirm=…)` (the name
+typed again: a slip deletes nothing; never one's own account),
+`iter_admin_devices()`, `revoke_device()`, `iter_admin_pairings()` (show
+each code next to the server's fingerprint), `approve_pairing(…,
+rating_cap=…)`, `refuse_pairing()`, `create_invitation()`,
+`revoke_invitation()`.
 
 Each call that writes is in `AsyncLanternClient` too, awaited.
+
+### Events
+
+```python
+for event in client.events():  # Server-Sent Events (§ 18.1); one stream per server
+    if event.event == "request":
+        notify(event.data)  # {"id", "platform", "title_id", "status"}; read the document itself
+    keep(event.id)  # a token of /v1/changes: resume from it after a restart
+
+found, since = client.poll_events(last_id, wait=60)  # long polling (§ 18.3), for a console that sleeps
+```
+
+The stream reads its lines within § 13's bounds (an event's data is 4 KiB
+at most: a longer one raises DocumentError and closes the stream), skips
+an event it does not know or of a newer schema, connects again after a cut,
+after twice `limits.heartbeat` of silence or after `shutdown`, waiting the
+server's `retry` at least and longer while connecting fails, and resumes
+with `Last-Event-ID`. A server that no longer knows that id raises `Gone`:
+read again what the app shows, and iterate again. `AsyncLanternClient`
+has the same, `async for event in client.events()`.
+
+### Mirrors and peers
+
+```python
+from lantern.discovery import PeerFinder, discover_peers
+
+peers = PeerFinder().peers(client.hello.uid)  # discovery with "peers": true, once a minute at most
+client.download_from(app, "frostline.nsz", peers=peers)  # mirrors, then peers, then the server
+```
+
+Whatever gave the bytes, they are checked by the size and SHA-256 of the
+server's document before they are kept; a source that gives more than the
+size or bytes that fail is left for the next, and the server's file comes
+last (§ 19.1). No token, signature or cookie goes to a mirror or a peer: a
+peer gets a grant, asked for once (`client.grant()`, checked against the
+handshake's `peers.key` before it leaves), and plain HTTP goes only to a
+private network's address. `browse_dnssd_peers()` finds `_lantern-peer._tcp`
+with the `dnssd` extra.
+
+### Sync
+
+```python
+from lantern.sync import Item, SyncConsent, ms
+
+client.sync_consent = SyncConsent(server_uid, wishes=True)  # after asking the user, per profile and server
+client.sync_write(
+    "wishes", [Item("switch/0100ABCD00010000", ms(now), {"platform": "switch", "title_id": "0100ABCD00010000"})]
+)
+items, rev = client.sync_items("wishes")  # since=rev later: the changes, deletions included
+client.delete_sync()  # when the user turns sync off
+```
+
+No call of `/v1/sync` leaves without a consent for that server
+(`ConsentRequired`), and `installed` needs its own, by name (§ 20.1). A
+read of another `generation` than the one kept means the data was deleted
+since: the client drops the consent and raises `SyncReset`, and writes
+nothing back (§ 20.3). `sync_write(…, if_match=True)` writes all or nothing
+against the revision last read (`PreconditionFailed`, 412, otherwise).
+`lantern.sync.merge()` is § 20.4's rule, for a client's own copy.
+
+### Encrypted saves
+
+```python
+from lantern.e2e import SaveKey
+
+key = SaveKey.generate()  # once; kept where the system keeps keys
+show_once(key.phrase())  # 14 groups of 4 symbols, to write down; key.qr() for a camera
+key = SaveKey.from_phrase(typed)  # BadPhrase when its check does not match
+save = client.upload_encrypted_save("0100ABCD00010000", "save.zip", key)  # resumable: last_upload, last_header
+client.download_encrypted_save(save, key, "back.zip")  # RefusedBackup: nothing kept
+```
+
+`lantern-save-e2e-1` (§ 9.4): a new file key and nonce for each backup,
+64 KiB chunks sealed with their index and whether they are the last, so
+that a chunk cut, moved, dropped or added never opens. Only the key's id
+leaves the device. A resumed upload encrypts again to the same bytes from
+the archive and its header, without an encrypted copy on disk.
+`save_encrypted()` sends a small one in one request.
+
+### Static libraries
+
+```python
+from lantern.static import StaticLibrary
+
+with StaticLibrary("https://lea.example.org/library/") as lib:  # or file:///…, or a folder
+    todo = lib.missing([("0100ABCD00010000", 0)], ["update", "dlc"], platform="switch")
+    lib.download(todo[0], "update.nsz")
+```
+
+A static library (§ 21) is read as files, as JSON whatever their type,
+each file a document points at by a path relative to the root and checked
+by its size and SHA-256; what is missing and the homebrew to update are
+computed from the pages, by the server's rules.
 
 ### On the LAN
 
@@ -205,6 +312,13 @@ free space (`installed_size`, § 6.3).
   for byte.
 - `lantern.store`: files kept by the `schema` rule (a newer file is never
   written over; unknown keys are kept).
+- `lantern.events`: the Server-Sent Events parser, bounded, and the reading
+  rule of § 18.1; `lantern.grants`: grants made and checked (§ 19.3), and
+  the addresses plain HTTP may reach (§ 19.2); `lantern.sync`: the merge
+  rule (§ 20.4) and consent; `lantern.e2e`: encrypted saves (§ 9.4);
+  `lantern.missing`: what a device is missing, for a server and for a
+  static library's reader. The vectors `encrypted-saves`, `grants`,
+  `sync-merge` and `static-layout` pass byte for byte.
 
 ## Adding Lantern to a Flask app
 
@@ -285,7 +399,57 @@ the accounts that hold it:
 - rating caps (§ 5.6): what is above a token's cap is left out of every
   listing and answers `404`, as if the server had none;
 - the administration API (§ 5.7): accounts, devices (never their token or
-  its hash), waiting pairings, invitations.
+  its hash), waiting pairings, invitations; deleting an account, confirmed
+  by its name, whose devices, invitations, pairings and sync data go at
+  once.
+
+Draft 0.5's families, each an option of `LanternApp`:
+
+- events (§ 18), on by default: `<base>/v1/events` (Server-Sent Events:
+  `retry`, `ready`, heartbeats, `Last-Event-ID`), and long polls with
+  `changes?since=&wait=`; event ids are `changes` tokens. Each caller gets
+  only what it could read (scope, account, platform, rating cap); a token
+  holds `event_streams` streams; a revoked token's stream ends at its next
+  wake, and `app.shutdown()` sends `shutdown` to every stream. A
+  MemoryLibrary tells it of its changes (`library`); a server sends its own
+  with `app.emit()` or `app.library_changed()`. The Flask and FastAPI
+  adapters send a stream as it comes, and free its slot once the client
+  left;
+- grants (§ 19.3), with `grant_seed` (the server's grant key, kept): the
+  handshake's `peers`, and `<base>/v1/grants/sha256/{hex}` for the files a
+  caller may read;
+- sync (§ 20), with `sync=MemorySync()` (or a store of the server's own,
+  `SyncStore`): collections merged by § 20.4's rule, If-Match, generations,
+  deletions kept 30 days, `limits.sync_items`; a device writes its own item
+  of `installed` only (`d_` and 16 hex digits, the ids MemoryAccounts
+  gives).
+
+### A peer
+
+`lantern.peer` is a paired console's sharing (§ 19.4): the files of a
+folder whose size and SHA-256 are its server's apps' and packages', served
+to the holders of a grant, on its own networks only, with `slots` downloads
+at once and a few requests a second per address; discovery's `"peers":
+true` and `_lantern-peer._tcp` (the `dnssd` extra).
+
+```sh
+python -m lantern.peer --folder /media/games --server https://shelf.example.org/ --token … --key-file device.key \
+    --host 192.168.1.20 --discovery
+```
+
+### The generator of static libraries
+
+```sh
+lantern-static ./shelf --out ./site     # or python -m lantern.static; reads ./shelf/lantern-static.json
+```
+
+builds a static library (§ 21) from a folder of files and a metadata file
+(its form is in `lantern/static.py`), or, in a program, from any `Library`
+(`lantern.static.export(library, out, uid=…, name=…)`): the handshake with
+`static`, the pages of apps, titles and homebrew per platform, each title,
+entry and cheat set, and every file by its SHA-256. It never writes over a
+`lantern.json` of a newer schema and keeps the keys it does not know of
+the one it replaces; the suite's `--static` checks what it writes.
 
 `LanternApp.handle()` needs the request's `scheme`, `target` (as sent) and
 `remote` address, which the Flask and FastAPI adapters fill; behind a proxy
@@ -309,9 +473,10 @@ What `LanternApp` serves, besides what the previous section says:
   `422` for a request document of a newer schema, `ETag` and `304`,
   `Cache-Control` and `Vary`.
 
-The families it does not offer (sections, saves, requests; pairing,
-signatures and admin without `accounts`) are at 0 in the handshake, and
-their routes answer `404`. JSON is compressed as `Accept-Encoding` asks
+The families it does not offer (sections, saves, encrypted saves,
+requests; pairing, signatures and admin without `accounts`; peers without a
+grant key, sync without a store) are at 0 in the handshake, and their
+routes answer `404`. JSON is compressed as `Accept-Encoding` asks
 (zstd on Python 3.14, gzip before), problems say their `language`, and a
 body above the adapter's limit is read and answered `413`. Each piece is usable on
 its own: `json_response()`, `problem_response()`, `file_response()`,
@@ -331,7 +496,8 @@ A server's error answer raises the `lantern.ProblemError` of its status:
 (`SignatureRequired`, `SignatureInvalid`, `SignatureExpired`,
 `SignatureReplayed`), `Forbidden` and `AccountFrozen`, `NotFound`, `Conflict`, `Gone` (an expired cursor or token:
 read again from the start), `TooLarge`, `Unprocessable`, `SlowDown`,
-`ServerError` and `Unavailable`. `e.status` is always there; `e.code` is
+`ServerError` and `Unavailable`, and `PreconditionFailed` (412, a sync
+write against a revision gone). `e.status` is always there; `e.code` is
 the code when this library knows it, `None` otherwise (act on the status
 alone, SPEC.md § 12); `e.detail` is bounded and without control characters;
 `e.retry_after` is in seconds.
@@ -340,8 +506,9 @@ The client's own errors: `DocumentError` (a malformed document, or one
 beyond § 13), `NewerSchema` (treat as absent), `IntegrityError` (a download
 that is not its document's), `TransportError` and `InsecureTransport`, and
 `UnexpectedResponse` (a redirect, an unexpected status or content type),
-`PinMismatch` (a server's key that is not the one pinned). All derive from
-`lantern.LanternError`.
+`PinMismatch` (a server's key that is not the one pinned), `ConsentRequired`
+and `SyncReset` (sync, § 20), `RefusedBackup` (an encrypted backup that
+does not open). All derive from `lantern.LanternError`.
 
 ## The malicious test server
 
@@ -351,7 +518,9 @@ hostile manifests (`..`, relative paths, outside the roots), a newer
 `schema`, documents beyond SPEC.md § 13, a bad digest, a truncated
 download, a wrong `Content-Range`, extra bytes, a forged signature of a
 small-order key, signature refusals that never end, a pairing code that
-points elsewhere, a redirect. `tests/test_hostile.py` proves this client
+points elsewhere, a redirect; and draft 0.5's: a forged or expired grant,
+an event of 64 KiB, a mirror that serves other bytes, a static library of
+a newer schema. `tests/test_hostile.py` proves this client
 refuses each one. It is shared: any language's CI starts it from the
 command line.
 
@@ -366,9 +535,13 @@ that a harness checks what its client sent. The TLS scenarios need the
 
 ## What is not there yet
 
-- In the server toolkit: sections, saves, cheat writes and requests (their
-  families are at 0, their routes answer `404` or `405`), and the routes it
-  could mark deprecated (`Deprecation`, `Sunset`).
+- In the server toolkit: sections, saves (and so encrypted saves), cheat
+  writes and requests (their families are at 0, their routes answer `404`
+  or `405`), and the routes it could mark deprecated (`Deprecation`,
+  `Sunset`). Its event streams live in one process: a server of several
+  processes gives each its own, or shares a hub of its own making.
+- In `AsyncLanternClient`: `download_from()`, the mirrors' and peers', which
+  `LanternClient` alone has.
 - Drawing the QR code of `verify_complete`: the client gives its text; an
   app draws it with its own toolkit (SPEC.md § 5.2 wants no image from the
   server).
@@ -393,11 +566,16 @@ python -m pytest --cov               # unit, integration and conformance tests
 `pytest -m integration` runs the client against the specification's
 reference server (`spec/server`): over plain HTTP on loopback and over TLS
 with a self-signed key, pairing, a token bound to its key, every write and
-the administration API; and DNS-SD on loopback. `pytest -m conformance` runs
-the specification's conformance suite against the demo server
+the administration API; its event stream, its peer (`spec/server/peer.py`),
+sync, encrypted saves sent and read back, and its static export read from
+a folder and over HTTP; and DNS-SD on loopback. `pytest -m conformance`
+runs the specification's conformance suite against the demo server
 (`tests/demo.py`), through Flask and FastAPI, anonymously and with a token
-bound to its key: it reaches Lantern Core +titles +homebrew +cheats +admin.
-`tests/test_hostile.py` runs the client against the malicious test server.
+bound to its key, with a peer of the toolkit and LAN discovery: it reaches
+Lantern Core +titles +homebrew +cheats +admin +events +peers +sync; and
+against the static library the generator writes (`--static`): Lantern
+Static. `tests/test_hostile.py` runs the client against the malicious test
+server.
 Examples and tests use made-up games and names.
 
 ## Licence

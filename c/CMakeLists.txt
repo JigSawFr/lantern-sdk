@@ -95,9 +95,14 @@ set(LANTERN_C_SOURCES
     src/common.cpp
     src/crypto.cpp
     src/discovery.cpp
+    src/events.cpp
     src/generated/documents.cpp
     src/homebrew.cpp
+    src/peers.cpp
+    src/saves.cpp
     src/state.cpp
+    src/static_library.cpp
+    src/sync.cpp
     src/transports.cpp)
 
 # Compiled once, for both libraries

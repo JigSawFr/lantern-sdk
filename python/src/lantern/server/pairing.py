@@ -83,6 +83,7 @@ class Pending:
     granted: tuple[str, ...] = ()
     rating_cap: RatingCap | None = None
     lifetime: float | None = None
+    user: str | None = None
 
 
 class PairingDesk:
@@ -96,11 +97,14 @@ class PairingDesk:
         expires: int = 600,
         lifetime: float | None = None,
         clock: Callable[[], float] = time.monotonic,
+        announce: Callable[[Pending], object] | None = None,
     ) -> None:
         if not 1 <= expires <= 600:
             raise ValueError("a code expires within 10 minutes (SPEC.md § 5.2)")
         self.accounts, self.interval, self.expires, self.lifetime = accounts, interval, expires, lifetime
         self.clock = clock
+        #: Told of each pairing that waits for its user (the event `pairing`, SPEC.md § 18.2).
+        self.announce = announce
         self._pending: dict[str, Pending] = {}
         self._lock = threading.Lock()
 
@@ -109,7 +113,14 @@ class PairingDesk:
         for poll in [p for p, e in self._pending.items() if e.until <= now]:
             del self._pending[poll]
 
-    def start(self, device: str, scopes: Sequence[str], key: bytes | None) -> Pending:
+    def start(self, device: str, scopes: Sequence[str], key: bytes | None, *, waiting: bool = True) -> Pending:
+        """A pairing waiting for its user; `waiting` False for one an invitation approves at once."""
+        entry = self._start(device, scopes, key)
+        if waiting and self.announce is not None:
+            self.announce(entry)
+        return entry
+
+    def _start(self, device: str, scopes: Sequence[str], key: bytes | None) -> Pending:
         with self._lock:
             self._purge()
             if len(self._pending) >= PENDING_LIMIT:
@@ -188,8 +199,14 @@ class PairingDesk:
         )
         with self._lock:
             entry.state, entry.token, entry.granted, entry.rating_cap = "approved", token, granted, rating_cap
-            entry.lifetime = self.lifetime
+            entry.lifetime, entry.user = self.lifetime, user
         return granted
+
+    def forget_user(self, user: str) -> None:
+        """An account deleted (SPEC.md § 5.7): the tokens approved for it and not yet collected are dropped."""
+        with self._lock:
+            for poll in [p for p, e in self._pending.items() if e.user == user]:
+                del self._pending[poll]
 
     def refuse(self, entry: Pending) -> None:
         with self._lock:

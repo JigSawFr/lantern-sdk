@@ -7,8 +7,9 @@ serve Lantern.
 
 It answers the handshake (at /.well-known/lantern and <base>/v1/), the
 families library (apps, what is missing, files), changes (with a journal),
-titles, homebrew and cheats (reading), and refuses the others with 404
-(their features are 0).
+titles, homebrew and cheats (reading); events (a stream and long polling,
+§ 18), grants for peers (with a grant key, § 19.3) and sync (with a sync
+store, § 20); and refuses the others with 404 (their features are 0).
 
 Who calls is decided one of two ways:
 
@@ -26,15 +27,18 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import secrets
+import time
 import traceback
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import TypeVar
 
-from lantern import ed25519, ratings
+from lantern import ed25519, ratings, schema
 from lantern import signatures as sig
+from lantern import sync as syncing
 from lantern._base import SCHEMA, DocumentError, JSONObject, JSONValue
 from lantern._generated.models import (
     AdminPairingDecision,
@@ -49,11 +53,14 @@ from lantern._generated.models import (
     PairingRequest,
     Rating,
     RatingCap,
+    SyncWrite,
     Title,
 )
 from lantern.digest import digest_sha256, sha256_hex
+from lantern.grants import LIFETIME_LIMIT, make_grant
+from lantern.http import Headers
 from lantern.limits import NAME, NOTE, TITLES_AT_ONCE, printable
-from lantern.profiles import profile, switch_ids
+from lantern.missing import missing
 from lantern.server.accounts import (
     ACCOUNT_NAME,
     SCOPES,
@@ -65,6 +72,7 @@ from lantern.server.accounts import (
     parse_time,
     utc,
 )
+from lantern.server.events import EVENT_SCOPES, EventHub, EventStreamBody, LibraryChange, Recorded
 from lantern.server.files import file_response
 from lantern.server.http import (
     ProblemError,
@@ -83,9 +91,10 @@ from lantern.server.http import (
 )
 from lantern.server.library import Account, Authenticate, Library
 from lantern.server.paging import Cursors, Sealer, SinceTokens, SortKey, page_size
-from lantern.server.pairing import Limiter, PairingDesk, approval_page, slow_down
+from lantern.server.pairing import Limiter, PairingDesk, Pending, approval_page, slow_down
+from lantern.server.sync import SyncStore
 from lantern.spki import short as spki_short
-from lantern.vocabulary import BUILD_ID, CORE_ID, FAMILIES, HOMEBREW_ID, WORD
+from lantern.vocabulary import BUILD_ID, CORE_ID, FAMILIES, HOMEBREW_ID, PLATFORM, SHA256, WORD
 
 #: The scope each family needs (SPEC.md § 4.2); pairing needs none.
 SCOPE_OF = {
@@ -95,6 +104,9 @@ SCOPE_OF = {
     "homebrew": "library",
     "cheats": "cheats",
     "admin": "admin",
+    "peers": "library",
+    "sync": "sync.read",
+    "sync.write": "sync.write",
 }
 #: How long an invitation may live (SPEC.md § 5.5), and how many may wait at once.
 INVITATION_DAYS = 30
@@ -116,7 +128,13 @@ ROUTES = (
     Route(("apps",), ("GET", "HEAD"), "library", "apps"),
     Route(("apps", "missing"), ("POST",), "library", "missing"),
     Route(("files", "{}"), ("GET", "HEAD"), "library", "file"),
-    Route(("changes",), ("GET", "HEAD"), "changes", "changes"),
+    Route(("changes",), ("GET", "HEAD"), "changes", "changes"),  # with wait, a long poll: family events
+    Route(("events",), ("GET",), "events", "events"),
+    Route(("grants", "sha256", "{}"), ("GET", "HEAD"), "peers", "grant"),
+    Route(("sync",), ("GET", "HEAD"), "sync", "sync_overview"),
+    Route(("sync",), ("DELETE",), "sync.write", "sync_erase"),
+    Route(("sync", "{}"), ("GET", "HEAD"), "sync", "sync_read"),
+    Route(("sync", "{}"), ("PATCH", "DELETE"), "sync.write", "sync_write"),
     Route(("titles",), ("GET", "HEAD"), "titles", "titles"),
     Route(("titles", "changes"), ("GET", "HEAD"), "titles", "title_changes"),
     Route(("titles", "{}"), ("GET", "HEAD"), "titles", "title"),
@@ -128,7 +146,7 @@ ROUTES = (
     Route(("pairing",), ("POST",), "pairing", "pair_start"),
     Route(("pairing", "{}"), ("GET",), "pairing", "pair_poll"),
     Route(("admin", "users"), ("GET", "HEAD", "POST"), "admin", "admin_users"),
-    Route(("admin", "users", "{}"), ("PATCH",), "admin", "admin_user"),
+    Route(("admin", "users", "{}"), ("PATCH", "DELETE"), "admin", "admin_user"),
     Route(("admin", "devices"), ("GET", "HEAD"), "admin", "admin_devices"),
     Route(("admin", "devices", "{}"), ("DELETE",), "admin", "admin_device"),
     Route(("admin", "pairings"), ("GET", "HEAD"), "admin", "admin_pairings"),
@@ -181,6 +199,19 @@ class LanternApp:
     - `secret`: seals cursors and since tokens; give the same one to every
       process of the server, and keep it across restarts, or the tokens they
       gave are refused.
+    - `events`: offer the family events (SPEC.md § 18): a stream at
+      <base>/v1/events, and long polls with changes?wait=; `heartbeat`,
+      `event_streams` and `wait_limit` are the handshake's limits.heartbeat,
+      .event_streams and .wait. Streams are held in this process: run one
+      process, or give each its own hub. `stream_probe`: how often an idle
+      stream writes a blank line, to learn that its client left.
+      `library_changed()` and `emit()` send events of the server's own.
+    - `grant_seed`: the 32-byte seed of the server's grant key (SPEC.md
+      § 19.3), which offers the family peers: grants for the files of the
+      library, valid `grant_lifetime` seconds. Keep it, and keep it for
+      grants alone: peers know its public key from the handshake.
+    - `sync`: a SyncStore (MemorySync is one), which offers the family sync
+      (SPEC.md § 20) to the accounts with sync.read and sync.write.
     """
 
     def __init__(
@@ -208,6 +239,15 @@ class LanternApp:
         token_lifetime: float | None = None,
         scheme: str | None = None,
         pair_page: Callable[[ServerRequest], ServerResponse] | None = None,
+        events: bool = True,
+        heartbeat: int = 15,
+        event_streams: int = 2,
+        wait_limit: int = 60,
+        stream_probe: float = 1.0,
+        stream_lifetime: float = 3600.0,
+        grant_seed: bytes | None = None,
+        grant_lifetime: int = 600,
+        sync: SyncStore | None = None,
     ) -> None:
         if not sig.SKEW_RANGE[0] <= skew <= sig.SKEW_RANGE[1]:
             raise ValueError("skew is 60 to 900 seconds (SPEC.md § 5.4)")
@@ -217,6 +257,12 @@ class LanternApp:
             raise ValueError("base is a path, such as /api/lantern")
         if not 1 <= page_limit <= 1000:
             raise ValueError("page_limit is 1 to 1000 (SPEC.md § 13)")
+        if not (5 <= heartbeat <= 60 and event_streams >= 1 and 30 <= wait_limit <= 300):
+            raise ValueError("heartbeat is 5 to 60 s, event_streams 1 or more, wait_limit 30 to 300 s (SPEC.md § 18.4)")
+        if grant_seed is not None and len(grant_seed) != 32:
+            raise ValueError("grant_seed is an Ed25519 seed of 32 bytes")
+        if not 1 <= grant_lifetime <= LIFETIME_LIMIT:
+            raise ValueError("grant_lifetime is 1 to 900 seconds (SPEC.md § 19.3)")
         self.library, self.uid, self.name, self.base = library, uid, name, base.rstrip("/")
         self.software, self.motd = software, motd
         self.authenticate, self.public = authenticate, public
@@ -231,8 +277,21 @@ class LanternApp:
         self.verify, self.spki, self.scheme = verify, spki, scheme
         self.pair_page = pair_page
         self.nonces = sig.NonceCache(2 * skew)
-        self.desk = PairingDesk(accounts, lifetime=token_lifetime) if accounts is not None else None
-        self.pair_limiter = Limiter(10, 60.0)  # pairing requests per address
+        self.desk = (
+            PairingDesk(accounts, lifetime=token_lifetime, announce=self._announce_pairing)
+            if accounts is not None
+            else None
+        )
+        self.hub = EventHub() if events else None
+        self.heartbeat, self.event_streams, self.wait_limit = heartbeat, event_streams, wait_limit
+        self.stream_probe, self.stream_lifetime = stream_probe, stream_lifetime
+        self.grant_seed, self.grant_lifetime = grant_seed, grant_lifetime
+        self.grant_public = ed25519.public_key(grant_seed) if grant_seed is not None else None
+        self.sync = sync
+        subscribe = getattr(library, "subscribe", None)
+        if self.hub is not None and callable(subscribe):
+            subscribe(lambda change: self.library_changed([change]))
+        self.pair_limiter = Limiter(30, 60.0)  # pairing requests per address, as the reference server
         self.attempts = Limiter(10, 600.0)  # wrong invitation codes per address
 
     # Dispatch.
@@ -299,7 +358,7 @@ class LanternApp:
         ]
         if not matched:
             raise not_found("No such route on this server.")
-        if not any(self.offered(r.family) for r, _ in matched):
+        if not any(self.offered(self._family(r, request)) for r, _ in matched):
             raise not_found("This server does not offer it.")
         account = self.account(request)
         self.check_signature(request, account)
@@ -307,9 +366,16 @@ class LanternApp:
         if chosen is None:
             raise method_not_allowed(list(dict.fromkeys(m for r, _ in matched for m in r.methods)))
         route, args = chosen
-        self.allow(account, route.family)
+        self.allow(account, self._family(route, request))
         handler: Handler = getattr(self, "h_" + route.handler)
         return handler(request, account, args)
+
+    @staticmethod
+    def _family(route: Route, request: ServerRequest) -> str:
+        """The family a request is of: changes with `wait` is a long poll of events (SPEC.md § 18.3)."""
+        if route.handler == "changes" and "wait" in request.query:
+            return "events"
+        return route.family
 
     # Who calls, and what they may do (SPEC.md § 4.2, § 5.1).
 
@@ -404,6 +470,14 @@ class LanternApp:
             return self.accounts is not None
         if family == "changes":
             return "library" in self.library.families and self.library.journal() is not None
+        if family == "events":
+            return self.hub is not None
+        if family == "peers":
+            return self.grant_seed is not None and "library" in self.library.families
+        if family in ("sync", "sync.write"):
+            return self.sync is not None
+        if family == "encrypted_saves":
+            return False
         return family in self.library.families
 
     def allow(self, account: Account, family: str) -> None:
@@ -411,10 +485,14 @@ class LanternApp:
             raise not_found("This server does not offer it.")
         if family == "pairing":  # whoever reaches the server may ask to pair (SPEC.md § 4.2, § 5.2)
             return
-        if account.state == "anonymous" and (not self.public or family == "admin"):
+        if account.state == "anonymous" and (not self.public or family in ("admin", "sync", "sync.write")):
             raise unauthorized("This server asks for a token.")
         if account.state == "frozen":
             raise ProblemError(403, "account_frozen", "This account may do nothing for now.", title="Account frozen")
+        if family == "events":  # SPEC.md § 18: offered to whoever may read one kind of event
+            if not set(EVENT_SCOPES.values()) & account.scopes:
+                raise ProblemError(403, "forbidden", "This account may read no event.")
+            return
         if SCOPE_OF[family] not in account.scopes:
             raise ProblemError(403, "forbidden", f"This account lacks the scope {SCOPE_OF[family]}.")
 
@@ -422,7 +500,7 @@ class LanternApp:
         out = {}
         for family in FAMILIES:
             try:
-                if family not in SCOPE_OF:
+                if family not in SCOPE_OF and family != "events":
                     raise not_found()
                 self.allow(account, family)
                 out[family] = SCHEMA
@@ -471,7 +549,14 @@ class LanternApp:
         doc.update({"account": acc, "features": features})
         if features["signatures"]:
             doc["auth"] = {"bearer_only": not self.bound_only, "skew": self.skew}
-        doc["limits"] = {"page_size": self.page_limit}
+        if self.grant_public is not None and self.offered("peers"):  # the same for every caller (L-19.3-3)
+            doc["peers"] = {"key": base64.b64encode(self.grant_public).decode(), "grant_lifetime": self.grant_lifetime}
+        limits: JSONObject = {"page_size": self.page_limit}
+        if self.hub is not None:
+            limits.update(heartbeat=self.heartbeat, event_streams=self.event_streams, wait=self.wait_limit)
+        if self.sync is not None:
+            limits["sync_items"] = self.sync.limit
+        doc["limits"] = limits
         return doc
 
     # Rating caps (SPEC.md § 5.6).
@@ -595,22 +680,386 @@ class LanternApp:
             raise not_found("No such file; read the app again.")
         return file_response(request, file)
 
+    def changes_token(self) -> str:
+        """The token of now (SPEC.md § 6.4): the journal's position, and the events' when there are."""
+        journal = self.library.journal()
+        epoch, position = (journal.epoch, journal.position()) if journal is not None else ("", 0)
+        return self.since.give("s", epoch, position, (self.hub.epoch, self.hub.seq) if self.hub else None)
+
+    def _token_at(self, seq: int) -> str:
+        """An event's id: a token of /v1/changes at the journal's position now (L-18.1-1)."""
+        journal = self.library.journal()
+        epoch, position = (journal.epoch, journal.position()) if journal is not None else ("", 0)
+        assert self.hub is not None
+        return self.since.give("s", epoch, position, (self.hub.epoch, seq))
+
+    def _app_changes(
+        self, account: Account, since: str, platform: str | None
+    ) -> tuple[list[JSONValue], list[JSONValue]]:
+        journal = self.library.journal()
+        if journal is None or not self._may(account, "changes"):
+            return [], []
+        after = self.since.position("s", since, journal.epoch, journal.oldest(), journal.position())
+        added, removed = journal.app_changes(after, platform)
+        hide = self.hides(account)
+        return [a.to_json() for a in added if not hide(a.platform, a.title_id)], list(removed)
+
     def h_changes(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        if "wait" in request.query:
+            return self.long_poll(request, account)
         journal = self.library.journal()
         if journal is None:
             raise not_found("This server does not offer it.")
         platform = platform_of(request)
-        current = journal.position()
-        token = self.since.give("s", journal.epoch, current)
+        token = self.changes_token()
         since = request.query.get("since")
         if since is None:
             return json_response(request, {"schema": SCHEMA, "added": [], "removed": [], "since": token})
-        after = self.since.position("s", since, journal.epoch, journal.oldest(), current)
-        added, removed = journal.app_changes(after, platform)
-        hide = self.hides(account)
-        gone_ids: list[JSONValue] = list(removed)
-        shown: list[JSONValue] = [a.to_json() for a in added if not hide(a.platform, a.title_id)]
+        shown, gone_ids = self._app_changes(account, since, platform)
         return json_response(request, {"schema": SCHEMA, "added": shown, "removed": gone_ids, "since": token})
+
+    # Events (SPEC.md § 18).
+
+    def _may(self, account: Account, family: str) -> bool:
+        try:
+            self.allow(account, family)
+        except ProblemError:
+            return False
+        return True
+
+    def emit(
+        self,
+        event: str,
+        data: JSONObject,
+        *,
+        user: str | None = None,
+        platform: str | None = None,
+        title_id: str | None = None,
+    ) -> Recorded | None:
+        """Sends an event of the server's own (a request done, a backup kept: SPEC.md § 18.2) to the streams
+        that may see it: of its scope, of `user`'s account, of `platform`, within their rating cap for
+        `title_id`. None when the server offers no events."""
+        if self.hub is None:
+            return None
+        return self.hub.emit(
+            event, data, self._token_at, scope=EVENT_SCOPES.get(event), user=user, platform=platform, title_id=title_id
+        )
+
+    def library_changed(self, changes: Sequence[LibraryChange]) -> None:
+        """The library changed (MemoryLibrary says so by itself): the event `library`, each caller told only
+        of the families and platforms of which it sees a change (L-18.2-1)."""
+        if self.hub is None or not changes:
+            return
+        self.hub.emit("library", {"schema": SCHEMA}, self._token_at, scope="library", changes=changes)
+
+    def _announce_pairing(self, entry: Pending) -> None:
+        doc: JSONObject = {
+            "schema": SCHEMA,
+            "id": entry.id,
+            "code": entry.code,
+            "device": entry.device,
+            "expires": entry.expires,
+        }
+        if entry.key is not None:
+            doc["key"] = sig.short_fingerprint(entry.key)
+        self.emit("pairing", doc)
+
+    def shutdown(self) -> None:
+        """The server stops on purpose: every stream gets `shutdown` and ends (L-18.2-2)."""
+        if self.hub is not None:
+            self.hub.stop()
+
+    def visible(self, account: Account, platform: str | None, rec: Recorded) -> JSONObject | None:
+        """The data of an event for this caller, or None when it may not see it (SPEC.md § 18.2): of its
+        scopes and account, of its platform when it named one, within its rating cap."""
+        if rec.event in ("ready", "shutdown"):
+            return rec.data
+        if rec.scope is None or rec.scope not in account.scopes:
+            return None
+        if rec.event == "library":
+            hide = self.hides(account) if account.rating_cap is not None else None
+            families, platforms = set(), set()
+            for c in rec.changes:
+                if platform is not None and c.platform != platform:
+                    continue
+                if account.rating_cap is not None and c.ratings is not None:
+                    hidden = ratings.hidden(list(c.ratings), account.rating_cap)
+                else:
+                    hidden = hide is not None and c.title_id is not None and hide(c.platform, c.title_id)
+                if not hidden:
+                    families.add(c.family)
+                    platforms.add(c.platform)
+            if not families:
+                return None
+            fams: list[JSONValue] = [*sorted(families)]
+            plats: list[JSONValue] = [*sorted(platforms)]
+            return {"schema": SCHEMA, "families": fams, "platforms": plats}
+        if rec.user is not None and rec.user != account.name:
+            return None
+        if platform is not None and rec.platform not in (None, platform):
+            return None
+        capped = rec.title_id is not None and rec.platform is not None and account.rating_cap is not None
+        if capped and self.hides(account)(str(rec.platform), str(rec.title_id)):
+            return None
+        return rec.data
+
+    def _event_start(self, since: str | None) -> int:
+        """The event a stream or a long poll starts after: `since`'s, or now's; 400 for a token never given,
+        410 for one too old (L-18.1-4)."""
+        assert self.hub is not None
+        if since is None:
+            return self.hub.seq
+        found = self.since.events("s", since)
+        if found is None or found[0] != self.hub.epoch or found[1] < self.hub.floor:
+            raise ProblemError(
+                410, "gone", "This event id is too old for this server: read again, then connect without one."
+            )
+        if found[1] > self.hub.seq:
+            raise bad_request("Unknown event id: one this server never gave.")
+        return found[1]
+
+    def long_poll(self, request: ServerRequest, account: Account) -> ServerResponse:
+        assert self.hub is not None
+        wait, since = request.query.get("wait") or "", request.query.get("since")
+        if not wait.isdigit() or since is None:
+            raise bad_request("wait is a number of seconds, from 0, with since (SPEC.md § 18.3).")
+        platform = platform_of(request)
+        start = self._event_start(since)
+        deadline = time.monotonic() + min(int(wait), self.wait_limit)
+        while True:
+            examined = self.hub.seq
+            found: list[JSONValue] = []
+            for e in self.hub.after(start):
+                if e.seq > examined:
+                    break
+                data = self.visible(account, platform, e)
+                if data is not None and e.event not in ("ready", "shutdown"):
+                    found.append({"id": e.id, "event": e.event, "data": data})
+            left = deadline - time.monotonic()
+            if found or left <= 0 or self.hub.stopping.is_set():
+                break
+            self.hub.wait(examined, min(left, 1.0))
+        added, removed = self._app_changes(account, since, platform)
+        doc: JSONObject = {
+            "schema": SCHEMA,
+            "added": added,
+            "removed": removed,
+            "since": self._token_at(examined),
+            "events": found,
+        }
+        response = json_response(request, doc)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    def h_events(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        assert self.hub is not None
+        hub = self.hub
+        platform = platform_of(request)
+        since = request.query.get("since") or (request.header("Last-Event-ID") or "").strip() or None
+        start = self._event_start(since)
+        ready = since if since is not None else self._token_at(start)
+        header = request.header("Authorization")
+        key = "t:" + hashlib.sha256(header.encode()).hexdigest() if header else "a:" + request.remote
+        if not hub.take_stream(key, self.event_streams):
+            raise slow_down(self.heartbeat, f"At most {self.event_streams} event streams at once (SPEC.md § 18.4).")
+
+        def alive() -> bool:
+            try:
+                now = self.account(request)
+            except ProblemError:
+                return False
+            return now.state != "frozen"
+
+        body = EventStreamBody(
+            hub,
+            start=start,
+            ready_id=ready,
+            visible=lambda rec: self.visible(account, platform, rec),
+            alive=alive,
+            release=lambda: hub.release_stream(key),
+            shutdown_id=lambda: self._token_at(hub.seq),
+            heartbeat=self.heartbeat,
+            probe=self.stream_probe,
+            lifetime=self.stream_lifetime,
+        )
+        headers = Headers(
+            {
+                "Content-Type": "text/event-stream; charset=utf-8",
+                "Cache-Control": "no-store",
+                "X-Accel-Buffering": "no",
+                "Vary": "Authorization, Lantern-Platform",
+            }
+        )
+        return ServerResponse(200, headers, body)
+
+    # Grants (SPEC.md § 19.3).
+
+    def h_grant(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        assert self.grant_seed is not None
+        sha = args[0]
+        if not SHA256.match(sha):
+            raise not_found("A file is named by its SHA-256, lower-case hex.")
+        platform = platform_of(request)
+        hide = self.hides(account)
+        size = next(
+            (
+                a.size
+                for a in self.library.apps()
+                if a.sha256 == sha and (platform is None or a.platform == platform) and not hide(a.platform, a.title_id)
+            ),
+            None,
+        )
+        if size is None and "homebrew" in self.library.families:
+            for e in self.library.homebrew(()):
+                if (platform is None or e.platform == platform) and not ratings.hidden(e.ratings, account.rating_cap):
+                    size = next((p.size for p in [e.package, *(e.packages or [])] if p.sha256 == sha), size)
+        if size is None:
+            raise not_found("No such file for this caller.")
+        exp = int(time.time()) + self.grant_lifetime
+        doc: JSONObject = {
+            "schema": SCHEMA,
+            "sha256": sha,
+            "size": size,
+            "grant": make_grant(self.grant_seed, self.uid, sha, size, exp),
+            "expires": utc(datetime.fromtimestamp(exp, UTC)),
+        }
+        response = json_response(request, doc)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    # Sync (SPEC.md § 20).
+
+    @staticmethod
+    def _collection(name: str) -> str:
+        if name not in syncing.COLLECTIONS:
+            raise not_found("No such collection: " + ", ".join(syncing.COLLECTIONS) + ".")
+        return name
+
+    def _sync_event(self, account: Account, collection: str, rev: int) -> None:
+        self.emit("sync", {"schema": SCHEMA, "collection": collection, "rev": rev}, user=account.name)
+
+    def h_sync_overview(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        assert self.sync is not None
+        assert account.name is not None
+        generation, collections = self.sync.overview(account.name)
+        doc: JSONObject = {
+            "schema": SCHEMA,
+            "generation": generation,
+            "collections": {k: {"rev": rev, "items": n} for k, (rev, n) in collections.items()},
+        }
+        if account.device is not None and syncing.DEVICE_ID.match(account.device):
+            doc["device"] = account.device
+        return json_response(request, doc)
+
+    def h_sync_erase(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        assert self.sync is not None
+        assert account.name is not None
+        self.sync.erase(account.name)
+        for name in syncing.COLLECTIONS:
+            self._sync_event(account, name, 0)
+        return _no_content(request)
+
+    def h_sync_read(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        assert self.sync is not None
+        assert account.name is not None
+        name = self._collection(args[0])
+        text = request.query.get("since")
+        if text is not None and not text.isdigit():
+            raise bad_request("since is a revision, an integer.")
+        since = int(text) if text is not None else None
+        generation, rev, items = self.sync.read(account.name, name, since)
+
+        def key(i: syncing.Item) -> SortKey:
+            return (i.rev or 0, i.key) if since is not None else (i.key,)
+
+        scope = self.cursors.scope("sync", account.name, name, since, generation)
+        page = self.cursors.page(items, key, size=self._size(request), cursor=request.query.get("cursor"), scope=scope)
+        doc: JSONObject = {
+            "schema": SCHEMA,
+            "collection": name,
+            "generation": generation,
+            "rev": rev,
+            "items": [i.to_json() for i in page.items],
+            "next": page.next,
+        }
+        return json_response(request, doc)
+
+    def _sync_item(self, account: Account, name: str, raw: JSONValue) -> syncing.Item:
+        """An item sent, of its collection's form (SPEC.md § 20.2, § 20.4, L-20.4-6); 403 for another device's
+        item of installed (L-20.4-5)."""
+        if not isinstance(raw, dict) or not isinstance(raw.get("key"), str) or "rev" in raw:
+            raise bad_request("An item is {key, value, updated} or {key, deleted: true, updated} (SPEC.md § 20.2).")
+        key, updated = raw["key"], raw.get("updated")
+        if syncing.parse_updated(updated) is None:
+            raise bad_request("updated is a UTC time to the millisecond, such as 2026-10-30T09:12:03.250Z.")
+        assert isinstance(key, str)
+        assert isinstance(updated, str)
+        deleted = raw.get("deleted")
+        if ("value" in raw) == (deleted is not None) or deleted not in (None, True):
+            raise bad_request("An item has a value, or deleted: true, not both.")
+        value = raw.get("value")
+        if name == "wishes":
+            platform, _, title_id = key.partition("/")
+            if not PLATFORM.match(platform) or not CORE_ID.match(title_id):
+                raise bad_request(f"{key[:80]!r}: a wish's key is <platform>/<title_id> (SPEC.md § 20.2).")
+            if value is not None and (
+                not isinstance(value, dict)
+                or value.get("platform") != platform
+                or value.get("title_id") != title_id
+                or schema.definition("wish", value)
+            ):
+                raise bad_request("A wish is {platform, title_id, name?, note?}, those of its key.")
+        elif name == "installed":
+            if not syncing.DEVICE_ID.match(key):
+                raise bad_request("An item of installed is keyed by its device's id, d_….")
+            if value is not None and (not isinstance(value, dict) or schema.definition("installed", value)):
+                raise bad_request(
+                    "installed is {device, platform, apps: [{app_id, version_code}], homebrew: [{id, "
+                    "build}]} (SPEC.md § 20.2)."
+                )
+            if key != account.device:
+                raise ProblemError(403, "forbidden", "A device writes its own item of installed only (SPEC.md § 20.4).")
+        return syncing.Item(key, updated, value, deleted is True)
+
+    def h_sync_write(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        assert self.sync is not None
+        assert account.name is not None
+        name = self._collection(args[0])
+        if request.method == "DELETE":
+            self.sync.erase(account.name, name)
+            self._sync_event(account, name, 0)
+            return _no_content(request)
+        raw = read_document(request)
+        try:
+            doc = SyncWrite.from_json(raw, "the body")
+        except DocumentError:
+            doc = None
+        items = raw.get("items")
+        if doc is None or not isinstance(items, list) or not 1 <= len(items) <= syncing.WRITE_LIMIT:
+            raise bad_request(f"A write is {{schema, generation, items}}, 1 to {syncing.WRITE_LIMIT} items.")
+        checked = [self._sync_item(account, name, i) for i in items]
+        if len({i.key for i in checked}) != len(checked):
+            raise bad_request("An item's key twice in one write.")
+        before = self.sync.overview(account.name)[1][name][0]
+        generation, rev, out = self.sync.merge(
+            account.name,
+            name,
+            doc.generation,
+            checked,
+            if_match=request.header("If-Match"),
+            now=datetime.now(UTC),
+            skew=self.skew,
+        )
+        if rev != before:
+            self._sync_event(account, name, rev)
+        body: JSONObject = {
+            "schema": SCHEMA,
+            "collection": name,
+            "generation": generation,
+            "rev": rev,
+            "items": [i.to_json() for i in out],
+        }
+        return json_response(request, body)
 
     # Titles (SPEC.md § 7).
 
@@ -855,7 +1304,7 @@ class LanternApp:
                 raise ProblemError(
                     410, "gone", "This invitation is unknown, expired, revoked or used up.", title="Invitation gone"
                 )
-        entry = self.desk.start(device, known, key)
+        entry = self.desk.start(device, known, key, waiting=invitation is None)
         if invitation is not None:  # approved at once, as the invitation says (SPEC.md § 5.5)
             self.desk.approve(entry, invitation.user, invitation.scopes, invitation.rating_cap, invitation.id)
         verify = self.verify_url(request)
@@ -942,6 +1391,8 @@ class LanternApp:
 
     def h_admin_user(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
         assert self.accounts is not None
+        if request.method == "DELETE":
+            return self.delete_user(request, account, args[0])
         try:
             doc = AdminUserUpdate.from_json(read_document(request), "the body")
         except DocumentError as e:
@@ -956,6 +1407,29 @@ class LanternApp:
         except AccountError as e:
             raise ProblemError(e.status, e.code, e.detail) from None
         return json_response(request, {"schema": SCHEMA, **self._user_doc(args[0])})
+
+    def delete_user(self, request: ServerRequest, account: Account, name: str) -> ServerResponse:
+        """DELETE an account (SPEC.md § 5.7): confirmed by its name (400 otherwise), never the caller's own
+        (409); its devices, invitations, pairings not yet collected and sync data go at once, and its
+        streams end at their next wake (L-5.7-6, L-5.7-7, L-18.1-8)."""
+        assert self.accounts is not None
+        if self.accounts.user(name) is None:
+            raise not_found("No such account.")
+        if request.query.get("confirm") != name:
+            raise bad_request("confirm repeats the account's name: ?confirm=<name> (SPEC.md § 5.7).")
+        if name == account.name:
+            raise ProblemError(409, "conflict", "An admin does not delete the account they use.")
+        try:
+            self.accounts.delete_user(name)
+        except AccountError as e:
+            raise ProblemError(e.status, e.code, e.detail) from None
+        if self.desk is not None:
+            self.desk.forget_user(name)
+        if self.sync is not None:
+            self.sync.forget(name)
+        if self.hub is not None:
+            self.hub.wake()
+        return _no_content(request)
 
     @staticmethod
     def device_doc(device: Device) -> JSONObject:
@@ -1142,40 +1616,3 @@ def _one(found: list[T], what: str) -> T:
     if len(found) > 1:
         raise bad_request("Several platforms have it: name one (Lantern-Platform).")
     return found[0]
-
-
-def missing(apps: list[App], platform: str, installed: list[tuple[str, int]], want: set[str]) -> list[App]:
-    """What a device of `platform` is missing (SPEC.md § 6.3), among `apps` (of that platform)."""
-    prof = profile(platform)
-    replaces = prof.newer_base_replaces if prof is not None else False
-    by_app = {a.app_id: a for a in apps}
-    have: dict[str, int] = {}
-    for app_id, version in installed:
-        known = by_app.get(app_id)
-        if known is not None:
-            title, kind = known.title_id, known.type
-        elif platform == "switch" and len(app_id) == 16:
-            try:
-                title, kind = switch_ids(app_id)
-            except ValueError:
-                continue
-        else:
-            continue  # a game this server does not know
-        if kind in ("base", "update"):
-            have[title] = max(have.get(title, -1), version)
-    ids = {app_id for app_id, _ in installed}
-    out: dict[str, App] = {}
-    for title, version in have.items():
-        mine = [a for a in apps if a.title_id == title]
-        if replaces:
-            updates = [a for a in mine if a.type == "base" and a.app_id in ids]
-        else:
-            updates = [a for a in mine if a.type == "update"]
-        newest = max((a.version_code for a in updates), default=-1)
-        if "update" in want and newest > version:
-            out.update({a.id: a for a in updates if a.version_code == newest})
-        if "dlc" in want:
-            out.update({a.id: a for a in mine if a.type == "dlc" and a.app_id not in ids})
-    if "base" in want:
-        out.update({a.id: a for a in apps if a.type == "base" and a.title_id not in have})
-    return list(out.values())

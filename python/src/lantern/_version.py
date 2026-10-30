@@ -2,4 +2,4 @@
 
 __version__ = "0.1.0.dev0"
 #: The specification draft this version follows.
-SPEC_DRAFT = "0.4"
+SPEC_DRAFT = "0.5"

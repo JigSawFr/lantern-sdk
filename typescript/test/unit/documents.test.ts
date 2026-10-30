@@ -51,14 +51,20 @@ describe("the generated readers", () => {
       assert.deepEqual(JSON.parse(JSON.stringify(got)), doc);
     });
 
+    // An event carries its schema in its data (SPEC.md § 18.1); every other document at its top.
+    const holder = (doc: Record<string, unknown>): Record<string, unknown> =>
+      name === "event" ? (doc["data"] as Record<string, unknown>) : doc;
+
     test(`${name}: a newer schema is absent`, () => {
-      const doc = { ...example(name), schema: 2 };
+      const doc = example<Record<string, unknown>>(name);
+      holder(doc)["schema"] = 2;
       assert.equal(readNamed(name, doc), undefined);
-      assert.equal(isNewer(doc), true);
+      assert.equal(isNewer(holder(doc)), true);
     });
 
     test(`${name}: an absent schema is not a document`, () => {
-      const { schema: _schema, ...doc } = example(name);
+      const doc = example<Record<string, unknown>>(name);
+      delete holder(doc)["schema"];
       assert.throws(
         () => readNamed(name, doc),
         (e: unknown) => e instanceof DocumentError && /schema/.test(e.message),

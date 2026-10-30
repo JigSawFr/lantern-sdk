@@ -12,6 +12,7 @@
 import { isObject, SCHEMA } from "./base.ts";
 import { fromUtf8, utf8 } from "./bytes.ts";
 import { DATAGRAM, NAME, printable } from "./limits.ts";
+import { type Peer, peerUrl } from "./peers.ts";
 
 export const PORT = 47115;
 /** The request a client sends (SPEC.md § 4.1). */
@@ -88,5 +89,50 @@ export function readReply(data: Uint8Array, address: string): Found | undefined 
     base,
     versions: versions as number[],
     url: port === 443 ? `https://${host}/` : `https://${host}:${port}/`,
+  };
+}
+
+/** The request that also asks the peers of the network (SPEC.md § 19.5). */
+export const PEERS_REQUEST: Uint8Array = utf8(JSON.stringify({ schema: SCHEMA, lantern: "discover", peers: true }));
+
+/**
+ * A peer's reply (SPEC.md § 19.5), or undefined when it is not one this
+ * library reads: above 1200 bytes, of a newer schema, not a peer's, with a
+ * field not of its form, or plain HTTP from an address outside a private
+ * network (a grant never goes there, L-19.4-6). A hint, as any reply.
+ */
+export function readPeerReply(data: Uint8Array, address: string): Peer | undefined {
+  if (data.length > DATAGRAM) return undefined;
+  let doc: unknown;
+  try {
+    doc = JSON.parse(fromUtf8(data));
+  } catch {
+    return undefined;
+  }
+  if (!isObject(doc)) return undefined;
+  const { schema, port, uid, name, base, tls, slots, servers } = doc;
+  if (typeof schema !== "number" || !Number.isInteger(schema) || schema < 1 || schema > SCHEMA) return undefined;
+  if (doc["lantern"] !== "peer" || typeof uid !== "string" || uid.length < 1 || uid.length > 64) return undefined;
+  if (typeof name !== "string" || !baseOk(base) || typeof tls !== "boolean") return undefined;
+  if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535) return undefined;
+  if (typeof slots !== "number" || !Number.isInteger(slots) || slots < 1 || slots > 8) return undefined;
+  if (!Array.isArray(servers) || servers.length > 16 || !servers.every((s) => typeof s === "string" && s.length <= 64))
+    return undefined;
+  let url: string;
+  try {
+    url = peerUrl(address, port, base, tls);
+  } catch {
+    return undefined;
+  }
+  return {
+    address,
+    port,
+    base,
+    tls,
+    uid,
+    name: printable(name, NAME).replaceAll("\n", " "),
+    slots,
+    servers: servers as string[],
+    url,
   };
 }

@@ -34,6 +34,12 @@ struct Client::Call
     DeviceSigner* poll_signer = nullptr;
     // The handshake: its Date sets the clock's offset (Annex B.9).
     bool take_date = false;
+    // What the answer may be (an event stream's text/event-stream).
+    std::string_view accept = "application/json";
+    // A mirror or a peer (§ 19.1): no token, no signature, none of the
+    // client's own headers but its User-Agent; plain HTTP to a private
+    // network allowed (§ 19.2).
+    bool untrusted = false;
 };
 
 // A whole answer, for the documents and the errors.

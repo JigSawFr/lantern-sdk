@@ -68,6 +68,18 @@ std::uint64_t feature(const Handshake& handshake, Family family) noexcept
         case Family::admin:
             value = f.admin;
             break;
+        case Family::events:
+            value = f.events;
+            break;
+        case Family::peers:
+            value = f.peers;
+            break;
+        case Family::sync:
+            value = f.sync;
+            break;
+        case Family::encrypted_saves:
+            value = f.encrypted_saves;
+            break;
     }
     return value.value_or(0);
 }
@@ -98,6 +110,14 @@ std::string_view family_name(Family family) noexcept
             return "signatures";
         case Family::admin:
             return "admin";
+        case Family::events:
+            return "events";
+        case Family::peers:
+            return "peers";
+        case Family::sync:
+            return "sync";
+        case Family::encrypted_saves:
+            return "encrypted_saves";
     }
     return "";
 }
@@ -266,15 +286,22 @@ class Client::Retry final : public ResponseHandler
     [[nodiscard]] std::string_view deprecation() const noexcept { return deprecation_; }
     [[nodiscard]] std::string_view sunset() const noexcept { return sunset_; }
 
-    // A 401 held for a signature refused as expired, with the server's Date.
-    [[nodiscard]] bool expired_signature() const
+    // The code of a 401 held for a signature refused as expired (with the
+    // server's Date) or replayed: both mend by signing again, once.
+    [[nodiscard]] Code refused_signature() const
     {
-        if (!holding_ || date_.empty())
-            return false;
+        if (!holding_)
+            return Code::none;
         DecodeOptions options       = client_.decode_;
         options.limits.max_document = std::min(options.limits.max_document, max_body_);
         const auto read             = read_problem(body_, options);
-        return read && *read && (**read).code == "signature_expired";
+        if (!read || !*read)
+            return Code::none;
+        if ((**read).code == "signature_expired" && !date_.empty())
+            return Code::signature_expired;
+        if ((**read).code == "signature_replayed")
+            return Code::signature_replayed;
+        return Code::none;
     }
 
     // Gives the held 401 to the call's handler, as it came.
@@ -323,6 +350,8 @@ Client::Client(Transport& transport, const ClientConfig& config)
     , token_(allocator_)
     , base_(allocator_)
     , accept_schema_(allocator_)
+    , sync_generation_(allocator_)
+    , sync_device_(allocator_)
 {
 }
 
@@ -434,7 +463,8 @@ void Client::update_accept_schema()
     if (!handshake_)
         return;
     for (const Family family : { Family::library, Family::titles, Family::changes, Family::sections,
-             Family::homebrew, Family::saves, Family::cheats, Family::requests, Family::admin })
+             Family::homebrew, Family::saves, Family::cheats, Family::requests, Family::admin, Family::events,
+             Family::peers, Family::sync, Family::encrypted_saves })
     {
         if (feature(*handshake_, family) > known_schema)
         {
@@ -486,13 +516,30 @@ Result<void> Client::send_once(const Call& call, ResponseHandler& handler)
     const auto target = split_url(call.url);
     if (!target)
         return std::unexpected(target.error());
+    if (call.untrusted)
+    {
+        // § 19.1: a mirror or a peer gets nothing of the server's
+        if (auto scheme = check_untrusted_scheme(*target); !scheme)
+            return std::unexpected(scheme.error());
+        Vector<Header> headers(allocator_);
+        headers.reserve(4 + call.extra.size());
+        headers.push_back({ "User-Agent", user_agent_ });
+        headers.push_back({ "Accept", call.accept });
+        for (const Header& header : call.extra)
+            headers.push_back(header);
+        Request request;
+        request.method  = call.method;
+        request.url     = call.url;
+        request.headers = headers;
+        return transport_->send(request, handler);
+    }
     if (auto scheme = check_scheme(*target); !scheme)
         return std::unexpected(scheme.error());
     const bool to_origin = same_origin(*target, origin());
     Vector<Header> headers(allocator_);
     headers.reserve(20 + call.extra.size());
     headers.push_back({ "User-Agent", user_agent_ });
-    headers.push_back({ "Accept", "application/json" });
+    headers.push_back({ "Accept", call.accept });
     if (!platform_.empty())
         headers.push_back({ "Lantern-Platform", platform_ });
     if (!accept_language_.empty())
@@ -566,25 +613,30 @@ Result<void> Client::send_once(const Call& call, ResponseHandler& handler)
 Result<void> Client::exchange(const Call& call, ResponseHandler& handler)
 {
     const bool signed_request
-        = call.poll_signer != nullptr || (signer_ && !token_.empty() && !call.anonymous);
+        = !call.untrusted && (call.poll_signer != nullptr || (signer_ && !token_.empty() && !call.anonymous));
     Retry first(*this, handler, signed_request, max_error_body_);
     auto sent                   = send_once(call, first);
     const std::string_view date = first.date();
     if (call.take_date && !date.empty())
         take_server_date(date);
-    if (!first.deprecation().empty() && deprecations_ != nullptr)
+    if (!first.deprecation().empty() && deprecations_ != nullptr && !call.untrusted)
         deprecations_->deprecated(call.url, first.deprecation(), first.sunset());
     if (!first.holding())
         return sent;
-    if (!first.expired_signature())
+    const Code refused = first.refused_signature();
+    if (refused == Code::none)
     {
         first.replay();
         return {};
     }
-    // § 5.4: the server's clock, then the request again, once, newly signed
-    take_server_date(date);
-    if (call.poll_signer != nullptr)
-        call.poll_signer->set_clock_offset(clock_offset_);
+    // § 5.4: the server's clock (L-5.4-8), or a new nonce, then the request
+    // again, once, newly signed
+    if (refused == Code::signature_expired)
+    {
+        take_server_date(date);
+        if (call.poll_signer != nullptr)
+            call.poll_signer->set_clock_offset(clock_offset_);
+    }
     Retry second(*this, handler, false, max_error_body_);
     return send_once(call, second);
 }
@@ -692,6 +744,9 @@ Read<Handshake> Client::handshake()
     if (!read_one || !*read_one)
         return read_one;
     const Handshake& document = **read_one;
+    if (document.static_)
+        return fail(Category::unsupported,
+            "a static library (SPEC.md 21): read it with lantern::StaticLibrary, not as a server");
     if (document.base.empty() || document.base.front() != '/' || document.base.back() == '/'
         || document.base.find_first_of("?#") != String::npos)
         return fail(Category::invalid_response, "the handshake's base is not a path (SPEC.md 2)");

@@ -14,17 +14,23 @@ console homebrews and the game library servers people run at home.
   client checks before it installs anything, and what it keeps of a server;
 - lantern.signatures, lantern.spki, lantern.ratings, lantern.discovery: signed
   requests (RFC 9421), key fingerprints, rating caps, LAN discovery;
+- lantern.events, lantern.grants, lantern.sync, lantern.e2e, lantern.static:
+  event streams, grants and mirrors, sync's merge rule and consent,
+  encrypted saves, and static libraries (read, and generated);
+- lantern.peer: a minimal peer, which serves the files a console holds to
+  the holders of a grant;
 - lantern.server: the toolkit a server is built with (Flask and FastAPI
   adapters in lantern.server.flask and lantern.server.fastapi);
 - lantern.schema, lantern.limits, lantern.store: validation, SPEC.md § 13's
   limits, and files kept by the `schema` rule.
 
-Follows the specification's draft 0.4 (SPEC_DRAFT).
+Follows the specification's draft 0.5 (SPEC_DRAFT).
 """
 
 from lantern._base import SCHEMA, DocumentError, JSONObject, JSONValue, LanternError
 from lantern._version import SPEC_DRAFT, __version__
 from lantern.client import AsyncLanternClient, BearerToken, LanternClient
+from lantern.e2e import BadPhrase, RefusedBackup
 from lantern.errors import (
     AccountFrozen,
     BadRequest,
@@ -36,6 +42,7 @@ from lantern.errors import (
     NewerSchema,
     NotFound,
     PinMismatch,
+    PreconditionFailed,
     ProblemError,
     ServerError,
     SignatureExpired,
@@ -51,15 +58,18 @@ from lantern.errors import (
     UnexpectedResponse,
     Unprocessable,
 )
+from lantern.sync import ConsentRequired, SyncReset
 
 __all__ = [
     "SCHEMA",
     "SPEC_DRAFT",
     "AccountFrozen",
     "AsyncLanternClient",
+    "BadPhrase",
     "BadRequest",
     "BearerToken",
     "Conflict",
+    "ConsentRequired",
     "DocumentError",
     "Forbidden",
     "Gone",
@@ -72,7 +82,9 @@ __all__ = [
     "NewerSchema",
     "NotFound",
     "PinMismatch",
+    "PreconditionFailed",
     "ProblemError",
+    "RefusedBackup",
     "ServerError",
     "SignatureExpired",
     "SignatureInvalid",
@@ -80,6 +92,7 @@ __all__ = [
     "SignatureReplayed",
     "SignatureRequired",
     "SlowDown",
+    "SyncReset",
     "TooLarge",
     "TransportError",
     "Unauthorized",

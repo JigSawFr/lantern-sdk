@@ -2,6 +2,11 @@
  * The client against the malicious test server (python/tools/hostile_server.py),
  * started from its command line as any language's CI does: for each scenario,
  * the client refuses what it must, and sends nothing it must not.
+ *
+ * The scenarios are read from the server's `--list`: each one listed runs its
+ * test here, a scenario this file has no test for fails by its name, what it
+ * does and what a client must do, and a test of a scenario the server does not
+ * list (yet) is not defined.
  */
 
 import assert from "node:assert/strict";
@@ -16,20 +21,24 @@ import {
   DocumentError,
   FetchTransport,
   homebrew as hb,
+  IntegrityError as Integrity,
   IntegrityError,
   LanternClient,
   MemorySink,
+  NewerSchema as Newer,
   NewerSchema,
   PinMismatch,
   SignatureExpired,
   SignatureReplayed,
+  StaticLibrary,
   TransportError,
   UnexpectedResponse,
 } from "../../src/index.ts";
 import { NodeLanternClient, NodeTransport } from "../../src/node/index.ts";
 import { AGENT, PYTHON, REPOSITORY, requestsOf, type Served, servePython, until } from "../helpers.ts";
 
-const TOOL = join(REPOSITORY, "python", "tools", "hostile_server.py");
+/** The server's script: the repository's, or another checkout's (LANTERN_HOSTILE), to try scenarios before they land. */
+const TOOL = process.env["LANTERN_HOSTILE"] ?? join(REPOSITORY, "python", "tools", "hostile_server.py");
 const KEY_SEED = new Uint8Array(32).map((_, i) => i); // a fictional device's
 
 interface Hostile {
@@ -42,6 +51,8 @@ interface Hostile {
 interface Scenario {
   name: string;
   tls: boolean;
+  what?: string;
+  expect?: string;
 }
 
 const SCENARIOS = JSON.parse(execFileSync(PYTHON, [TOOL, "--list"], { encoding: "utf8" })) as Scenario[];
@@ -70,9 +81,16 @@ function client(
 }
 
 const TESTED = new Set<string>();
+const LISTED = new Set(SCENARIOS.map((s) => s.name));
 
 function covers(...names: string[]): void {
   for (const n of names) TESTED.add(n);
+}
+
+/** A test of a scenario, defined when the server lists it (a later version may add scenarios first). */
+function when(name: string, title: string, run: () => Promise<void>): void {
+  covers(name);
+  if (LISTED.has(name)) test(title, run);
 }
 
 describe("the malicious test server", () => {
@@ -292,7 +310,67 @@ describe("the malicious test server", () => {
     }
   });
 
-  test("every scenario is tested", () => {
-    assert.deepEqual(SCENARIOS.map((s) => s.name).sort(), [...TESTED].sort());
+  // Draft 0.5's scenarios (SPEC.md § 18, § 19, § 21).
+  for (const name of ["forged-grant", "expired-grant"]) {
+    when(name, `a grant that does not verify: ${name}, refused before it goes to a peer`, async () => {
+      await scenario(name, async (server) => {
+        const c = client(server);
+        const app = (await c.apps()).items[0];
+        assert.ok(app);
+        await assert.rejects(c.grant(app.sha256), Integrity);
+        await c.close();
+      });
+    });
+  }
+
+  when("oversized-event", "an event beyond SPEC.md § 13: refused at the bound", async () => {
+    await scenario("oversized-event", async (server) => {
+      const c = client(server);
+      await c.handshake();
+      const stream = await c.events({ tries: 1 });
+      const seen: string[] = [];
+      await assert.rejects(
+        (async () => {
+          for await (const e of stream) seen.push(e.event);
+        })(),
+        DocumentError,
+      );
+      assert.deepEqual(seen, ["ready"]);
+      await c.close();
+    });
+  });
+
+  when(
+    "mirror-wrong-bytes",
+    "a mirror that serves other bytes: passed by, sent no token; the server's file taken",
+    async () => {
+      await scenario("mirror-wrong-bytes", async (server) => {
+        const dest = join(folder, "mirror.nsp");
+        const c = client(server);
+        const app = (await c.apps()).items[0];
+        assert.ok(app?.mirrors?.length);
+        const sources: string[] = [];
+        await c.downloadAppTo(app, dest, { mirrors: true, onSource: (s) => sources.push(s) });
+        assert.deepEqual(sources, ["server"]);
+        assert.equal(createHash("sha256").update(readFileSync(dest)).digest("hex"), app.sha256);
+        await c.close();
+        await until(() => requestsOf(server.log).some((r) => r.path.startsWith("/mirror/")));
+        const mirror = requestsOf(server.log).filter((r) => r.path.startsWith("/mirror/"));
+        assert.ok(mirror.length > 0 && mirror.every((r) => r.authorization === null));
+      });
+    },
+  );
+
+  when("static-newer-schema", "a static library of a newer schema: absent, never an error", async () => {
+    await scenario("static-newer-schema", async (server) => {
+      await assert.rejects(StaticLibrary.open(new URL("/static/", server.info.url).toString()), Newer);
+    });
+  });
+
+  test("every scenario the server lists is tested", () => {
+    const untested = SCENARIOS.filter((s) => !TESTED.has(s.name)).map(
+      (s) => `${s.name}: ${s.what ?? ""} A client must: ${s.expect ?? ""}`,
+    );
+    assert.deepEqual(untested, []);
   });
 });

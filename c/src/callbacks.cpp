@@ -148,8 +148,11 @@ void lantern_deprecation_log::deprecated(
     callbacks().deprecated(callbacks().user, str(u), str(d), str(s));
 }
 
-lantern::Result<void> lantern_download_sink::write(std::span<const std::byte> bytes)
+lantern::Result<void> CallbackDownloadSink::write(std::span<const std::byte> bytes)
 {
+    // Nothing to hand on: the app's write() never sees an empty chunk
+    if (bytes.empty())
+        return {};
     const lantern_status status = callbacks().write(
         callbacks().user, reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
     if (status != LANTERN_OK)
@@ -158,7 +161,7 @@ lantern::Result<void> lantern_download_sink::write(std::span<const std::byte> by
     return {};
 }
 
-lantern::Result<void> lantern_download_sink::restart()
+lantern::Result<void> CallbackDownloadSink::restart()
 {
     const lantern_status status = callbacks().restart(callbacks().user);
     if (status != LANTERN_OK)
@@ -167,7 +170,7 @@ lantern::Result<void> lantern_download_sink::restart()
     return {};
 }
 
-lantern::Result<void> lantern_upload_source::read(std::uint64_t offset, std::span<std::byte> out)
+lantern::Result<void> CallbackUploadSource::read(std::uint64_t offset, std::span<std::byte> out)
 {
     const lantern_status status
         = callbacks().read(callbacks().user, offset, reinterpret_cast<std::uint8_t*>(out.data()), out.size());
@@ -370,27 +373,74 @@ LANTERN_API void lantern_deprecation_log_free(lantern_deprecation_log* log)
 LANTERN_API lantern_status lantern_download_sink_create(const lantern_download_callbacks* callbacks,
     const lantern_allocator* allocator, lantern_download_sink** out, lantern_error* error)
 {
-    return make_callbacks(
+    CallbackDownloadSink* made  = nullptr;
+    const lantern_status status = make_callbacks(
         callbacks, allocator,
-        [](const lantern_download_callbacks& c) { return c.write != nullptr && c.restart != nullptr; }, out,
+        [](const lantern_download_callbacks& c) { return c.write != nullptr && c.restart != nullptr; }, &made,
         error);
+    if (status != LANTERN_OK || made == nullptr)
+    {
+        if (out != nullptr)
+            *out = nullptr;
+        return status;
+    }
+    *out = give_sink(made->resource(), made, nullptr);
+    return LANTERN_OK;
 }
 
 LANTERN_API void lantern_download_sink_free(lantern_download_sink* sink)
 {
+    if (sink == nullptr)
+        return;
+    if (sink->destroy != nullptr)
+        sink->destroy(sink->object);
     unbox(sink);
+}
+
+LANTERN_API lantern_status lantern_download_sink_write(
+    lantern_download_sink* sink, const uint8_t* bytes, size_t size, lantern_error* error)
+{
+    if (sink == nullptr || (bytes == nullptr && size != 0))
+        return usage(error, "a NULL argument");
+    const auto written = sink->impl->write(std::as_bytes(std::span(bytes, bytes == nullptr ? 0 : size)));
+    if (!written)
+        return fail(error, written.error());
+    return ok(error);
+}
+
+LANTERN_API lantern_status lantern_download_sink_restart(lantern_download_sink* sink, lantern_error* error)
+{
+    if (sink == nullptr)
+        return usage(error, "sink is NULL");
+    const auto restarted = sink->impl->restart();
+    if (!restarted)
+        return fail(error, restarted.error());
+    return ok(error);
 }
 
 LANTERN_API lantern_status lantern_upload_source_create(const lantern_upload_callbacks* callbacks,
     const lantern_allocator* allocator, lantern_upload_source** out, lantern_error* error)
 {
-    return make_callbacks(
-        callbacks, allocator, [](const lantern_upload_callbacks& c) { return c.read != nullptr; }, out,
+    CallbackUploadSource* made  = nullptr;
+    const lantern_status status = make_callbacks(
+        callbacks, allocator, [](const lantern_upload_callbacks& c) { return c.read != nullptr; }, &made,
         error);
+    if (status != LANTERN_OK || made == nullptr)
+    {
+        if (out != nullptr)
+            *out = nullptr;
+        return status;
+    }
+    *out = give_source(made->resource(), made, nullptr);
+    return LANTERN_OK;
 }
 
 LANTERN_API void lantern_upload_source_free(lantern_upload_source* source)
 {
+    if (source == nullptr)
+        return;
+    if (source->destroy != nullptr)
+        source->destroy(source->object);
     unbox(source);
 }
 
@@ -429,7 +479,7 @@ LANTERN_API lantern_status lantern_transport_create(const lantern_transport_call
     const lantern_status status = make_callbacks(
         callbacks, allocator, [](const lantern_transport_callbacks& c) { return c.send != nullptr; }, &made,
         error);
-    if (status != LANTERN_OK)
+    if (status != LANTERN_OK || made == nullptr)
     {
         if (out != nullptr)
             *out = nullptr;

@@ -15,7 +15,10 @@ a token. Two ways:
   device key DEMO_KEY: every request it carries is signed.
 
 `python tests/demo.py` serves the second, and `--key-file` writes DEMO_KEY's
-seed (base64) where the conformance suite's `--key` reads it.
+seed (base64) where the conformance suite's `--key` reads it. Both stream
+events (a heartbeat of 5 s), give grants (GRANT_SEED) and keep sync data in
+memory. `--static OUT` writes the demo's library as a static library
+(lantern.static), for the suite's `--static`, and exits.
 """
 
 from __future__ import annotations
@@ -55,6 +58,7 @@ from lantern.models import (
 )
 from lantern.server import Account, LanternApp, MemoryLibrary, ServerRequest, make_package
 from lantern.server.accounts import MemoryAccounts, User
+from lantern.server.sync import MemorySync
 from lantern.signatures import DeviceKey
 
 UID = "3d5c7e1a-0b2f-4c6d-9e8a-1f2b3c4d5e6f"
@@ -62,8 +66,10 @@ DEMO_TOKEN = "et_demo-0123456789abcdef0123456789abcdef"
 #: The demo device's key, made from a fixed phrase: for the demo only, never a real device's.
 DEMO_KEY = DeviceKey(hashlib.sha256(b"Mira's fictional console key").digest())
 #: Every scope the demo serves: its admin's.
-EVERY_SCOPE = ("library", "cheats", "admin")
+EVERY_SCOPE = ("library", "cheats", "admin", "sync.read", "sync.write")
 SEED = hashlib.sha256(b"Mira's fictional signing key").digest()  # for the demo only
+#: The demo server's grant key (SPEC.md § 19.3), made from a fixed phrase: for the demo only.
+GRANT_SEED = hashlib.sha256(b"Demo shelf's fictional grant key").digest()
 BASE = "/api/lantern"
 
 
@@ -136,6 +142,7 @@ def build_library() -> MemoryLibrary:
         name="Lumen Drift",
         format="apk",
         added="2026-10-20T12:00:00Z",
+        mirrors=["https://mirror.example.org/lumen-drift-1.2.0.apk"],
     )
     lib.add_title(
         Title(
@@ -404,8 +411,13 @@ def demo_accounts() -> MemoryAccounts:
 
 
 def make_lantern(library: MemoryLibrary | None = None, **options: Any) -> LanternApp:
+    """The demo: its library, events (a heartbeat of 5 s, the shortest, for quick runs), grants with
+    GRANT_SEED, and sync held in memory."""
     if "accounts" not in options:
         options["authenticate"] = authenticate
+    options.setdefault("heartbeat", 5)
+    options.setdefault("grant_seed", GRANT_SEED)
+    options.setdefault("sync", MemorySync())
     return LanternApp(
         library or build_library(),
         uid=UID,
@@ -457,6 +469,7 @@ def serve(framework: str, lantern: LanternApp | None = None, port: int = 0) -> I
         try:
             yield f"http://127.0.0.1:{port}/"
         finally:
+            lantern.shutdown()  # the event streams get shutdown, and end
             server.shutdown()
             thread.join(5)
     elif framework == "fastapi":
@@ -473,6 +486,7 @@ def serve(framework: str, lantern: LanternApp | None = None, port: int = 0) -> I
         try:
             yield f"http://127.0.0.1:{port}/"
         finally:
+            lantern.shutdown()
             userver.should_exit = True
             thread.join(5)
     else:
@@ -484,7 +498,14 @@ def main() -> int:
     parser.add_argument("--framework", choices=("flask", "fastapi"), default="flask")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--key-file", type=Path, help="write the demo token's device key here (its seed, base64)")
+    parser.add_argument("--static", type=Path, help="write the demo's library as a static library there, and exit")
     args = parser.parse_args()
+    if args.static:
+        from lantern.static import export
+
+        done = export(build_library(), args.static, uid=UID, name="Demo shelf", page_size=3)
+        print(f"demo: a static library in {args.static}: {done}", flush=True)
+        return 0
     if args.key_file:
         args.key_file.write_text(DEMO_KEY.seed_b64() + "\n", encoding="ascii")
     with serve(args.framework, make_lantern(accounts=demo_accounts()), port=args.port) as url:

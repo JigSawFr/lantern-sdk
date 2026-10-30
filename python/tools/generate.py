@@ -56,6 +56,9 @@ NAMES = {
     "homebrew-updates-request/installed[]": "InstalledHomebrew",
     "cheats": "CheatSets",
     "requests": "TitleRequests",
+    "sync/collections{}": "SyncSummary",
+    "handshake/peers": "HandshakePeers",
+    "handshake/static": "HandshakeStatic",
 }
 # Fields a reader takes even when a writer must give them (SPEC.md § 8.1: a
 # kind it does not know, or none, is an app).
@@ -244,7 +247,7 @@ class Generator:
             if "$ref" in node:
                 _, target = self.ref(node["$ref"])
                 self.documents[name] = self.model(self.ref(node["$ref"])[0], target)
-            elif "allOf" in node:
+            elif "allOf" in node and "properties" not in node:
                 # A document is a definition of common.json (a $ref) or an object of its own, and then the
                 # part that adds its `schema`.
                 parts = [p for p in node["allOf"] if isinstance(p, dict)]
@@ -336,6 +339,11 @@ class Generator:
                 annotation = f.type.annotation if f.nullable else f"{f.type.annotation} | None"
                 out.append(f"    {f.attr}: {annotation} = None")
         out.append("    extra: JSONObject = field(default_factory=dict)")
+        # An optional field that may be null (a static page's `next`): whether it was given as null, so that
+        # to_json() writes it back as it came.
+        nullables = [f for f in model.fields if not f.required and f.nullable]
+        if nullables:
+            out.append("    nulls: frozenset[str] = frozenset()")
         keys = ", ".join(f'"{f.key}"' for f in model.fields)
         out += ["", f"    KEYS: ClassVar[frozenset[str]] = frozenset({{{keys}}})", ""]
         out += [
@@ -347,12 +355,21 @@ class Generator:
         for f in model.fields:
             fn = "req" if f.required else "opt"
             out.append(f'            {f.attr}=_m.{fn}(o, "{f.key}", where, {f.type.reader}),')
-        out += ["            extra=_m.extras(o, cls.KEYS),", "        )", ""]
+        out.append("            extra=_m.extras(o, cls.KEYS),")
+        if nullables:
+            names = ", ".join(f'"{f.key}"' for f in nullables)
+            out.append(f"            nulls=_m.nulls(o, ({names},)),")
+        out += ["        )", ""]
         out += ["    def to_json(self) -> JSONObject:", "        out: JSONObject = {}"]
         for f in model.fields:
             value = f.type.write(f"self.{f.attr}")
             if f.required:
                 out.append(f'        out["{f.key}"] = {value}')
+            elif f.nullable:
+                out += [
+                    f'        if self.{f.attr} is not None or "{f.key}" in self.nulls:',
+                    f'            out["{f.key}"] = {value}',
+                ]
             else:
                 out += [f"        if self.{f.attr} is not None:", f'            out["{f.key}"] = {value}']
         out += ["        out.update(self.extra)", "        return out"]

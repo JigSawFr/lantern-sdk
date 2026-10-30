@@ -8,7 +8,7 @@ import Foundation
 public enum Lantern {
     /// lantern_version(): the C API version the library was built with.
     public static var version: UInt32 { lantern_version() }
-    /// The specification's draft the library follows ("0.4").
+    /// The specification's draft the library follows ("0.5").
     public static var specDraft: String { String(cString: lantern_spec_draft()) }
 
     /// The SHA-256 of `bytes`.

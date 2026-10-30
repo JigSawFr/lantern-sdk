@@ -144,6 +144,8 @@ void copy_text(std::string_view text, char* out, std::size_t size) noexcept;
 // Errors.
 [[nodiscard]] lantern_status status_of(lantern::Category category) noexcept;
 [[nodiscard]] lantern::Category category_of(lantern_status status) noexcept;
+// A code of the C++ library's as the C API numbers it.
+[[nodiscard]] lantern_code code_of(lantern::Code code) noexcept;
 // Fills `error` (when given) and returns its status.
 lantern_status fail(lantern_error* error, const lantern::Error& what) noexcept;
 lantern_status fail(lantern_error* error, lantern::Category category, std::string_view detail) noexcept;

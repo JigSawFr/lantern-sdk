@@ -21,7 +21,7 @@ final class ExampleServer: Transport {
 final class LanternTests: XCTestCase {
     func testVersion() {
         XCTAssertGreaterThanOrEqual(Lantern.version, 1)
-        XCTAssertEqual(Lantern.specDraft, "0.4")
+        XCTAssertEqual(Lantern.specDraft, "0.5")
     }
 
     func testShortForm() {
@@ -30,7 +30,7 @@ final class LanternTests: XCTestCase {
 
     func testHandshake() throws {
         let server = ExampleServer()
-        let client = try Client(origin: "https://shelf.example.org", userAgent: "LanternSwift/0.4",
+        let client = try Client(origin: "https://shelf.example.org", userAgent: "LanternSwift/0.5",
                                 platform: "switch", transport: server)
         let shake = try XCTUnwrap(client.handshake())
         XCTAssertEqual(shake.name, "Living room shelf")
@@ -40,7 +40,7 @@ final class LanternTests: XCTestCase {
     }
 
     func testErrors() {
-        XCTAssertThrowsError(try Client(origin: "http://shelf.example.org", userAgent: "LanternSwift/0.4",
+        XCTAssertThrowsError(try Client(origin: "http://shelf.example.org", userAgent: "LanternSwift/0.5",
                                         transport: ExampleServer())) { error in
             XCTAssertEqual((error as? LanternError)?.status, lantern_status(LANTERN_ERROR_USAGE))
         }

@@ -60,7 +60,7 @@ int main(int argc, char** argv)
     lantern::posix::SystemRandom random;
     lantern::ClientConfig config;
     config.origin     = argv[1];
-    config.user_agent = "PairDevice/0.4";
+    config.user_agent = "PairDevice/0.5";
     config.platform   = "switch";
     config.random     = &random;
     auto client       = lantern::Client::create(transport, config);

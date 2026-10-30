@@ -1,5 +1,5 @@
 /**
- * The client of one Lantern server: every route of draft 0.4, in a browser and
+ * The client of one Lantern server: every route of draft 0.5, in a browser and
  * in Node, over a Transport (fetch() by default).
  *
  *     const client = new LanternClient("https://shelf.example.org/", { platform: "switch", userAgent: "MyShelf/1.0" });
@@ -16,9 +16,13 @@ import { DocumentError, LanternError, SCHEMA } from "../base.ts";
 import { utf8Length } from "../bytes.ts";
 import { contentDigest } from "../digest.ts";
 import { schemaOf } from "../documents.ts";
+import { type EncryptedBackup, encryptionHeader } from "../e2e.ts";
 import {
+  BadRequest,
+  Conflict,
   Gone,
   InsecureTransport,
+  IntegrityError,
   NewerSchema,
   problemError,
   SignatureExpired,
@@ -27,6 +31,7 @@ import {
   UnexpectedResponse,
   Unsupported,
 } from "../errors.ts";
+import { EVENT_TYPES, type ServerEvent } from "../events.ts";
 import type {
   AdminDevice,
   AdminDevices,
@@ -39,6 +44,8 @@ import type {
   Changes,
   CheatSet,
   CheatSets,
+  Encryption,
+  Grant,
   Handshake,
   Homebrew,
   HomebrewPage,
@@ -51,6 +58,9 @@ import type {
   Save,
   Saves,
   Sections,
+  Sync,
+  SyncCollection,
+  SyncItem,
   Title,
   TitleChanges,
   TitleRequest,
@@ -62,11 +72,22 @@ import * as models from "../generated/models.ts";
 import { JSON_TYPE, mediaType, origin, PLATFORM_HEADER, plainHttpAllowed, quote } from "../http.ts";
 import { CHEAT_SET, JSON_DOCUMENT, loadJson, NOTE, PROFILE, printable, TITLES_AT_ONCE } from "../limits.ts";
 import type { Check } from "../model.ts";
+import { blobUrl, GRANT_HEADER, type GrantPayload, grantKey, type Peer, usableMirrors, verifyGrant } from "../peers.ts";
 import type { ServerRecord, ServerStore } from "../pinning.ts";
 import { type Hasher, type HasherFactory, sha256Factory } from "../sha256.ts";
 import { DeviceKey, SKEW } from "../signatures.ts";
+import {
+  COLLECTIONS,
+  ConsentRequired,
+  GenerationChanged,
+  readSyncState,
+  type SyncState,
+  ifMatch as syncIfMatch,
+  WRITE_LIMIT,
+} from "../sync.ts";
 import { BUILD_ID, CORE_ID, FAMILIES, HOMEBREW_ID, isPlatform } from "../vocabulary.ts";
 import { type DownloadSink, MemorySink, type UploadSource, Verifier } from "./download.ts";
+import { EventStream, type EventStreamOptions } from "./events.ts";
 import { checkPairingCode, invitationLink, Pairing } from "./pairing.ts";
 import {
   BearerToken,
@@ -128,6 +149,12 @@ export interface ClientOptions {
   extractableKeys?: boolean;
   /** Called once per deprecation a server announces (SPEC.md § 3.4); console.warn by default. */
   onDeprecation?: (deprecation: Deprecation) => void;
+  /**
+   * The transport of mirrors and peers (SPEC.md § 19), never the server's
+   * pinned one: FetchTransport by default; the `node` entry's gives a
+   * NodeTransport, which also reaches a peer's HTTPS that nobody pins.
+   */
+  elsewhere?: (options: { verify: boolean }) => Transport;
 }
 
 /** One request below <base>/v1 (or the handshake, or an address a document gave), and how its answer reads. */
@@ -147,6 +174,8 @@ interface Call<T> {
   empty?: (status: number, headers: Headers) => T;
   anonymous?: boolean;
   signer?: RequestSigner;
+  /** Seconds to wait for the answer, when not the client's (a long poll). */
+  timeout?: number;
 }
 
 export interface ListOptions {
@@ -177,12 +206,24 @@ export interface DownloadOptions {
 }
 
 export interface SaveOptions {
+  /** A backup encrypted on the device (SPEC.md § 9.4): its scheme and key id, sent in clear. */
+  encryption?: Encryption;
   kind?: string;
   slot?: string;
   gameVersionCode?: number;
   profile?: string;
   note?: string;
   platform?: string;
+}
+
+/** Where else a file may come from (SPEC.md § 19): its mirrors, peers that hold it; the server last. */
+export interface SourceOptions {
+  /** Try the file's mirrors first (false by default). */
+  mirrors?: boolean;
+  /** Peers to ask first, with a grant of the server (at most 2 are read from). */
+  peers?: readonly Peer[];
+  /** Told where the file came from, and why each source before it was passed by. */
+  onSource?: (source: "peer" | "mirror" | "server", url: string, passed: { url: string; error: unknown }[]) => void;
 }
 
 export interface UploadOptions extends SaveOptions {
@@ -276,6 +317,8 @@ export class LanternClient {
   /** The address of the last upload left unfinished, to resume (uploadSave(…, { resume })). */
   lastUpload: string | undefined;
   readonly pipeline: Pipeline;
+  readonly #elsewhere: (options: { verify: boolean }) => Transport;
+  #sync: SyncState | undefined;
   readonly #extractable: boolean;
   readonly #onDeprecation: (d: Deprecation) => void;
   #key: DeviceKey | undefined;
@@ -323,6 +366,7 @@ export class LanternClient {
         verify: options.verify ?? true,
       });
     } else this.transport = options.transportFactory?.({ verify: true }) ?? new FetchTransport();
+    this.#elsewhere = options.elsewhere ?? (() => new FetchTransport());
     const credentials = options.token !== undefined ? new BearerToken(options.token) : options.credentials;
     this.pipeline = new Pipeline(origin(full), credentials, options.signer);
     if (options.key !== undefined) this.setToken(options.token, options.key);
@@ -515,7 +559,7 @@ export class LanternClient {
       if (call.anonymous) options.anonymous = true;
       if (call.signer !== undefined) options.signer = call.signer;
       const request = await this.prepare(call.method, url, options);
-      const response = await this.transport.send(request, { timeout: this.timeout });
+      const response = await this.transport.send(request, { timeout: call.timeout ?? this.timeout });
       this.lastSpki = response.spki;
       try {
         return await this.#finish(call, response.status, response.headers, async (ok) => {
@@ -1002,9 +1046,10 @@ export class LanternClient {
   save(titleId: string, data: Uint8Array, options: SaveOptions = {}): Promise<Save> {
     this.#needsPlatform(options.platform, "writing a save");
     const headers: Record<string, string> = {
-      "Content-Type": "application/zip",
+      "Content-Type": options.encryption !== undefined ? "application/octet-stream" : "application/zip",
       "Content-Digest": contentDigest(data),
     };
+    if (options.encryption !== undefined) headers["Lantern-Save-Encryption"] = encryptionHeader(options.encryption);
     if (options.kind !== undefined) headers["Lantern-Save-Kind"] = asciiWord(options.kind, "kind");
     if (options.slot !== undefined) headers["Lantern-Save-Slot"] = asciiWord(options.slot, "slot");
     if (options.gameVersionCode !== undefined) {
@@ -1070,6 +1115,10 @@ export class LanternClient {
       if (options.gameVersionCode !== undefined) body["game_version_code"] = options.gameVersionCode;
       if (options.profile !== undefined) body["profile"] = options.profile;
       if (options.note !== undefined) body["note"] = options.note;
+      if (options.encryption !== undefined) {
+        encryptionHeader(options.encryption); // of this scheme, or a RangeError
+        body["encryption"] = { scheme: options.encryption.scheme, key_id: options.encryption.key_id };
+      }
       const upload = await this.#send<Upload>({
         method: "POST",
         path: `${this.#savePath(titleId)}/uploads`,
@@ -1303,6 +1352,18 @@ export class LanternClient {
     });
   }
 
+  /**
+   * Deletes an account (SPEC.md § 5.7), at once and whole: its devices,
+   * invitations, waiting pairings, backups, requests and sync data. `confirm`
+   * repeats its name, as its user typed it (a slip of the finger deletes
+   * nothing); it cannot be undone.
+   */
+  async deleteUser(name: string, confirm: string): Promise<void> {
+    if (confirm !== name) throw new RangeError("confirm repeats the account's name, as typed by the user");
+    await this.#ensureBase();
+    await this.#delete(this.v1(`/admin/users/${segment(name)}?confirm=${quote(confirm)}`), "account");
+  }
+
   #adminDevices(o: ListOptions & { user?: string }): Call<AdminDevices> {
     return {
       method: "GET",
@@ -1419,6 +1480,436 @@ export class LanternClient {
     await this.#delete(this.v1(`/admin/invitations/${segment(invitationId)}`), "invitation");
   }
 
+  // End-to-end encrypted saves (SPEC.md § 9.4).
+
+  /**
+   * An encrypted backup (an EncryptedBackup made with the user's save key),
+   * by resumable upload: its bytes are encrypted again chunk by chunk as the
+   * upload reads them, the same each time, never kept (L-9.4-3). Its
+   * `encryption` (scheme and key id) goes in clear; nothing of the key does.
+   * Wipe the backup once this resolves or is given up.
+   */
+  uploadEncryptedSave(titleId: string, backup: EncryptedBackup, options: UploadOptions = {}): Promise<Save> {
+    return this.uploadSave(titleId, backup, { ...options, encryption: backup.encryption });
+  }
+
+  /** An encrypted backup's bytes, checked against its sha256, in memory: decrypt them with e2e.decryptBytes(). */
+  async fetchSave(save: Save): Promise<Uint8Array> {
+    const sink = new MemorySink();
+    await this.downloadSave(save, sink, { resume: false });
+    return sink.bytes();
+  }
+
+  // Events (SPEC.md § 18).
+
+  #heartbeat(): number {
+    const beat = this.hello?.limits?.heartbeat;
+    return typeof beat === "number" && beat >= 5 && beat <= 60 ? beat : 60;
+  }
+
+  /**
+   * The event stream (SPEC.md § 18.1), read over this client's transport
+   * (fetch() in a browser: EventSource cannot send a token nor a signature),
+   * opened again as it ends, after `retry`, with Last-Event-ID. Iterate it;
+   * keep `stream.lastId` to resume after a restart (`since`). A Gone means
+   * the id is too old: read the library again, then open one without `since`.
+   */
+  async events(options: EventStreamOptions & { platform?: string } = {}): Promise<EventStream> {
+    await this.#ensureBase();
+    if (this.hello === undefined) await this.handshake();
+    const query = platformQuery(options.platform);
+    const url =
+      this.v1("/events") + (query.length > 0 ? `?${query.map(([k, v]) => `${k}=${quote(v)}`).join("&")}` : "");
+    const connect = async (lastId: string | undefined) => {
+      for (let attempt = 0; ; attempt++) {
+        const headers: Record<string, string> = { Accept: "text/event-stream", "Cache-Control": "no-store" };
+        if (lastId !== undefined) headers["Last-Event-ID"] = lastId;
+        const request = await this.prepare("GET", url, { headers });
+        // Nothing for twice limits.heartbeat: the stream is dead, connect again (§ 18.1).
+        const response = await this.transport.send(request, { timeout: 2 * this.#heartbeat() + 1 });
+        this.lastSpki = response.spki;
+        const type = mediaType(response.headers.get("Content-Type"));
+        if (response.status === 200 && type === "text/event-stream") {
+          if (response.headers.get("Content-Encoding")) {
+            await response.cancel();
+            throw new UnexpectedResponse("events: a stream with a Content-Encoding (SPEC.md § 18.1)", 200);
+          }
+          return response;
+        }
+        let body: Uint8Array = new Uint8Array();
+        try {
+          body = await readBody(response, ERROR_BODY, "events");
+        } catch (e) {
+          if (!(e instanceof DocumentError)) throw e;
+        } finally {
+          await response.cancel();
+        }
+        const error = this.#error("events", response.status, response.headers, body);
+        if (attempt === 0 && error instanceof SignatureExpired && this.adjustClock(error.headers)) continue;
+        if (attempt === 0 && error instanceof SignatureReplayed) continue;
+        throw error;
+      }
+    };
+    const streamOptions: EventStreamOptions = {};
+    if (options.since !== undefined) streamOptions.since = options.since;
+    if (options.tries !== undefined) streamOptions.tries = options.tries;
+    if (options.onReconnect !== undefined) streamOptions.onReconnect = options.onReconnect;
+    return new EventStream(connect, streamOptions);
+  }
+
+  /**
+   * A long poll (SPEC.md § 18.3): the changes and events after `since`, as
+   * soon as one comes, or `wait` seconds later (lowered to limits.wait by the
+   * server). Events of a type or schema this library does not read are left
+   * out. Ask again at once with the answer's `since`.
+   */
+  async poll(
+    since: string,
+    wait: number,
+    options: { platform?: string } = {},
+  ): Promise<Omit<Changes, "events"> & { events: ServerEvent[] }> {
+    if (!Number.isInteger(wait) || wait < 0) throw new RangeError("wait is a whole number of seconds, from 0");
+    const query: [string, string][] = [...platformQuery(options.platform), ["since", since], ["wait", String(wait)]];
+    const doc = await this.#send({
+      method: "GET",
+      path: "/changes",
+      what: "changes",
+      query,
+      read: models.readChanges,
+      timeout: this.timeout + wait,
+    });
+    const events: ServerEvent[] = [];
+    for (const e of doc.events ?? []) {
+      if (!(EVENT_TYPES as readonly string[]).includes(e.event)) continue;
+      if (e.data.schema > SCHEMA) continue;
+      events.push(e as unknown as ServerEvent);
+    }
+    return { ...doc, events };
+  }
+
+  // Grants, mirrors and peers (SPEC.md § 19).
+
+  /**
+   * A grant for the file whose SHA-256 is `sha256` (SPEC.md § 19.3), checked
+   * before it goes to any peer: it names that file and this server's uid, it
+   * is not expired, and it verifies by the handshake's `peers.key`. One that
+   * does not throws IntegrityError: a peer would refuse it too.
+   */
+  async grant(sha256: string): Promise<Grant & { payload: GrantPayload }> {
+    if (!/^[0-9a-f]{64}$/.test(sha256)) throw new RangeError("sha256 is 64 lower-case hex digits");
+    const hello = this.hello ?? (await this.handshake());
+    const key = grantKey(hello.peers);
+    if (key === undefined) throw new Unsupported("this server gives no grants (no peers.key in its handshake)");
+    const doc = await this.#send({
+      method: "GET",
+      path: `/grants/sha256/${sha256}`,
+      what: "grant",
+      read: models.readGrant,
+    });
+    const payload = await verifyGrant(doc.grant, { [hello.uid]: key }, this.now());
+    if (payload === undefined || payload.sha256 !== sha256 || doc.sha256 !== sha256 || payload.size !== doc.size) {
+      throw new IntegrityError(
+        `grant for ${sha256.slice(0, 12)}…: it does not verify by peers.key, names another file or server, or expired`,
+      );
+    }
+    return { ...doc, payload };
+  }
+
+  /**
+   * Whether a peer holds a file (SPEC.md § 19.5): HEAD with its grant; a hint,
+   * as any answer of a peer. No credential of the server goes to it (L-19.1-2).
+   */
+  async peerHolds(peer: Peer, sha256: string, grant: string): Promise<boolean> {
+    const transport = this.#elsewhere({ verify: false });
+    const request = this.#elsewhereRequest("HEAD", blobUrl(peer.url, sha256), { [GRANT_HEADER]: grant });
+    const response = await transport.send(request, { timeout: Math.min(this.timeout, 10) });
+    try {
+      return response.status === 200;
+    } finally {
+      await response.cancel();
+      await transport.close?.();
+    }
+  }
+
+  /** A request to a mirror or a peer: nothing of the server's, no credential, no signature. */
+  #elsewhereRequest(method: string, url: string, extra: Record<string, string> = {}): TransportRequest {
+    const headers = new Headers({ "User-Agent": this.userAgent, Accept: "*/*", "Accept-Encoding": "identity" });
+    for (const [k, v] of Object.entries(extra)) headers.set(k, v);
+    return { method, url, headers };
+  }
+
+  /**
+   * A file from a mirror or a peer into `sink`, checked as from the server:
+   * more bytes than its size stop the reading (L-19.1-3), and nothing it says
+   * decides anything; IntegrityError (and the sink emptied) when it is not the file.
+   */
+  async #downloadElsewhere(
+    url: string,
+    sink: DownloadSink,
+    file: { sha256: string; size: number },
+    options: { verify: boolean; headers?: Record<string, string>; progress?: DownloadOptions["progress"] },
+  ): Promise<void> {
+    const verifier = new Verifier(file.sha256, file.size, url);
+    await sink.reset();
+    const transport = this.#elsewhere({ verify: options.verify });
+    try {
+      const response = await transport.send(this.#elsewhereRequest("GET", url, options.headers), {
+        timeout: this.timeout,
+      });
+      try {
+        if (response.status !== 200) throw new UnexpectedResponse(`${url}: status ${response.status}`, response.status);
+        verifier.start(200, response.headers, 0);
+        const hasher = this.hash();
+        for await (const chunk of response.body()) {
+          verifier.feed(hasher, chunk);
+          await sink.append(chunk);
+          options.progress?.(hasher.size, file.size);
+        }
+        verifier.finish(hasher);
+      } finally {
+        await response.cancel();
+      }
+    } catch (e) {
+      await sink.reset();
+      throw e;
+    } finally {
+      await transport.close?.();
+    }
+    await sink.commit();
+  }
+
+  /**
+   * A file of the library (an app's, a package's) into `sink`: from peers
+   * holding it (with a grant), then its mirrors, then the server, each checked
+   * by the file's size and SHA-256 before anything is kept (SPEC.md § 19.1);
+   * a source that fails is passed by, and the server is the last.
+   */
+  async downloadFile(
+    file: { file: string; sha256: string; size: number; mirrors?: readonly { url: string }[] | undefined },
+    sink: DownloadSink,
+    options: Omit<DownloadOptions, "sha256" | "size"> & SourceOptions = {},
+  ): Promise<void> {
+    const passed: { url: string; error: unknown }[] = [];
+    const progress = options.progress !== undefined ? { progress: options.progress } : {};
+    if (options.peers !== undefined && options.peers.length > 0) {
+      const hello = this.hello ?? (await this.handshake());
+      const asked = options.peers.filter((p) => p.servers.includes(hello.uid)).slice(0, 2);
+      if (asked.length > 0) {
+        let granted: string | undefined;
+        try {
+          granted = (await this.grant(file.sha256)).grant;
+        } catch (e) {
+          // No grant, or one that does not verify (IntegrityError): it goes to no peer; the server serves the file.
+          if (!(e instanceof LanternError)) throw e;
+          passed.push({ url: this.v1(`/grants/sha256/${file.sha256}`), error: e });
+        }
+        for (const peer of granted !== undefined ? asked : []) {
+          const url = blobUrl(peer.url, file.sha256);
+          try {
+            await this.#downloadElsewhere(url, sink, file, {
+              verify: false,
+              headers: { [GRANT_HEADER]: granted as string },
+              ...progress,
+            });
+            options.onSource?.("peer", url, passed);
+            return;
+          } catch (e) {
+            if (!(e instanceof LanternError)) throw e;
+            passed.push({ url, error: e });
+          }
+        }
+      }
+    }
+    if (options.mirrors) {
+      for (const url of usableMirrors(file)) {
+        try {
+          await this.#downloadElsewhere(url, sink, file, { verify: true, ...progress });
+          options.onSource?.("mirror", url, passed);
+          return;
+        } catch (e) {
+          if (!(e instanceof LanternError)) throw e;
+          passed.push({ url, error: e });
+        }
+      }
+    }
+    if (passed.length > 0) await sink.reset();
+    const { peers: _p, mirrors: _m, onSource: _o, ...rest } = options;
+    await this.download(file.file, sink, { ...rest, sha256: file.sha256, size: file.size });
+    options.onSource?.("server", this.url(file.file), passed);
+  }
+
+  // Sync (SPEC.md § 20).
+
+  /**
+   * What the user agreed to (SPEC.md § 20.1): the app asks its user, saying
+   * which collections go to which server, then sets it here. Nothing of
+   * `<base>/v1/sync` is read or written before, nor any collection the user
+   * did not agree to by name (L-20.1-2). `undefined` (or no collection) turns
+   * sync off: nothing more is sent (L-20.1-3). The state is the app's to keep
+   * (`syncState`), per console profile and per server.
+   */
+  setSyncConsent(state: SyncState | undefined): void {
+    if (state !== undefined && readSyncState(state) === undefined) throw new RangeError("not a sync state");
+    this.#sync = state;
+  }
+
+  /** The sync state as it stands (revisions read, generation kept), to keep for the next run. */
+  get syncState(): SyncState | undefined {
+    return this.#sync;
+  }
+
+  #consent(collection?: string): SyncState {
+    const state = this.#sync;
+    if (state === undefined || state.consent.length === 0)
+      throw new ConsentRequired(collection ?? "", "sync is off: ask the user first (SPEC.md § 20.1)");
+    if (collection !== undefined && !state.consent.includes(collection))
+      throw new ConsentRequired(collection, `the user did not agree to sync ${collection} (SPEC.md § 20.1)`);
+    return state;
+  }
+
+  /** A generation other than the one kept: drop the copy, turn sync off, and say so (L-20.3-2). */
+  #generation(state: SyncState, generation: string): void {
+    if (state.generation === undefined) {
+      state.generation = generation;
+      return;
+    }
+    if (state.generation === generation) return;
+    const kept = state.generation;
+    state.consent = [];
+    state.revs = {};
+    delete state.generation;
+    throw new GenerationChanged(kept, generation);
+  }
+
+  /** GET <base>/v1/sync: the account's collections, and this device's id (its key in `installed`). */
+  async syncOverview(): Promise<Sync> {
+    const state = this.#consent();
+    const doc = await this.#send({ method: "GET", path: "/sync", what: "sync", read: models.readSync });
+    this.#generation(state, doc.generation);
+    return doc;
+  }
+
+  /**
+   * A collection's items (SPEC.md § 20.3): those changed since the revision
+   * last read, deletions included, or the whole collection the first time,
+   * and after a 410 (deletions dropped that far back). The revision is kept.
+   */
+  async syncPull(collection: string, options: { whole?: boolean } = {}): Promise<SyncCollection> {
+    const state = this.#consent(collection);
+    const since = options.whole ? undefined : state.revs[collection];
+    const read = async (from: number | undefined): Promise<SyncCollection> => {
+      const items: SyncItem[] = [];
+      let first: SyncCollection | undefined;
+      let cursor: string | undefined;
+      const seen = new Set<string>();
+      for (;;) {
+        const query: [string, string][] = [];
+        if (from !== undefined) query.push(["since", String(from)]);
+        if (cursor !== undefined) query.push(["cursor", cursor]);
+        const page = await this.#send({
+          method: "GET",
+          path: `/sync/${segment(collection)}`,
+          what: "sync collection",
+          query,
+          read: models.readSyncCollection,
+        });
+        this.#generation(state, page.generation);
+        first ??= page;
+        items.push(...page.items);
+        if (page.next === null || page.next === undefined) break;
+        if (seen.has(page.next)) throw new UnexpectedResponse("sync: the server gave the same cursor twice");
+        seen.add(page.next);
+        cursor = page.next;
+      }
+      return { ...(first as SyncCollection), items, next: null };
+    };
+    let doc: SyncCollection;
+    try {
+      doc = await read(since);
+    } catch (e) {
+      // 410: deletions dropped that far back; 400: a revision of another generation. Read it whole.
+      if (!(e instanceof Gone || e instanceof BadRequest) || since === undefined) throw e;
+      doc = await read(undefined);
+    }
+    state.revs[collection] = Math.max(doc.rev, ...doc.items.map((i) => i.rev ?? 0));
+    return doc;
+  }
+
+  /**
+   * Items written (SPEC.md § 20.4), each as the server then keeps it. With
+   * `whole` (items written from the whole collection as last read), the write
+   * is all or nothing: If-Match, and PreconditionFailed (412) when the
+   * collection changed since; else the server merges item by item. A
+   * Conflict (409) means the data was deleted since: sync goes off.
+   */
+  async syncPush(
+    collection: string,
+    items: readonly SyncItem[],
+    options: { whole?: boolean } = {},
+  ): Promise<SyncCollection> {
+    const state = this.#consent(collection);
+    if (items.length === 0 || items.length > WRITE_LIMIT)
+      throw new RangeError(`a write holds 1 to ${WRITE_LIMIT} items (SPEC.md § 13)`);
+    if (state.generation === undefined) await this.syncOverview();
+    const generation = state.generation as string;
+    const headers: Record<string, string> = {};
+    if (options.whole) {
+      const rev = state.revs[collection];
+      if (rev === undefined) throw new RangeError("a write of the whole collection follows a read of it");
+      headers["If-Match"] = syncIfMatch(generation, rev);
+    }
+    const sent = items.map((i) => {
+      const out: Record<string, unknown> = { key: i.key, updated: i.updated };
+      if (i.deleted === true) out["deleted"] = true;
+      else out["value"] = i.value;
+      return out;
+    });
+    let doc: SyncCollection;
+    try {
+      doc = await this.#send({
+        method: "PATCH",
+        path: `/sync/${segment(collection)}`,
+        what: "sync write",
+        body: { schema: SCHEMA, generation, items: sent },
+        headers,
+        read: models.readSyncCollection,
+      });
+    } catch (e) {
+      if (e instanceof Conflict) {
+        state.consent = [];
+        state.revs = {};
+        delete state.generation;
+        throw new GenerationChanged(generation, "?");
+      }
+      throw e;
+    }
+    this.#generation(state, doc.generation);
+    if (options.whole) state.revs[collection] = doc.rev;
+    return doc;
+  }
+
+  /**
+   * Deletes what the server keeps of a collection, or of every one (SPEC.md
+   * § 20.5): what a client offers when its user turns sync off. The server
+   * gives a new generation: the state forgets the one it kept.
+   */
+  async syncErase(collection?: string): Promise<void> {
+    const state = this.#sync;
+    if (state === undefined)
+      throw new ConsentRequired(collection ?? "", "no sync state: nothing of the user's to erase");
+    if (
+      collection !== undefined &&
+      !(COLLECTIONS as readonly string[]).includes(collection) &&
+      !/^[a-z][a-z0-9_]{0,31}$/.test(collection)
+    )
+      throw new RangeError("a collection is a lower-case word");
+    await this.#ensureBase();
+    await this.#delete(this.v1(collection !== undefined ? `/sync/${segment(collection)}` : "/sync"), "sync");
+    delete state.generation;
+    if (collection !== undefined) delete state.revs[collection];
+    else state.revs = {};
+  }
+
   // Files (SPEC.md § 6.6).
 
   /** A small file, whole in memory, checked against its SHA-256 and size. */
@@ -1503,16 +1994,20 @@ export class LanternClient {
   }
 
   /** An app's file, checked against its sha256 (SPEC.md § 6.1, § 6.6). */
-  downloadApp(app: App, sink: DownloadSink, options: Omit<DownloadOptions, "sha256" | "size"> = {}): Promise<void> {
-    return this.download(app.file, sink, { ...options, sha256: app.sha256, size: app.size });
+  downloadApp(
+    app: App,
+    sink: DownloadSink,
+    options: Omit<DownloadOptions, "sha256" | "size"> & SourceOptions = {},
+  ): Promise<void> {
+    return this.downloadFile(app, sink, options);
   }
 
   /** A homebrew package, checked against its sha256 (SPEC.md § 8.2). */
   downloadPackage(
     p: Package,
     sink: DownloadSink,
-    options: Omit<DownloadOptions, "sha256" | "size"> = {},
+    options: Omit<DownloadOptions, "sha256" | "size"> & SourceOptions = {},
   ): Promise<void> {
-    return this.download(p.file, sink, { ...options, sha256: p.sha256, size: p.size });
+    return this.downloadFile(p, sink, options);
   }
 }

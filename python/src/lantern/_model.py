@@ -74,6 +74,11 @@ def opt(o: JSONObject, key: str, where: str, read: Callable[[JSONValue, str], T]
     return None if value is None else read(value, f"{where}.{key}")
 
 
+def nulls(o: JSONObject, keys: tuple[str, ...]) -> frozenset[str]:
+    """The optional fields of `keys` given as null, so that they are written back as null."""
+    return frozenset(k for k in keys if k in o and o[k] is None)
+
+
 def extras(o: JSONObject, known: frozenset[str]) -> JSONObject:
     """The fields a model does not know, kept as they are."""
     return {k: v for k, v in o.items() if k not in known}

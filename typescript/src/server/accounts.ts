@@ -12,15 +12,25 @@
  */
 
 import { createHash, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
-import { toBase64Url } from "../bytes.ts";
+import { toBase64Url, toHex } from "../bytes.ts";
 import type { RatingCap } from "../generated/models.ts";
 
-/** The pairing alphabet (SPEC.md § 5.2): no 0, O, 1 or I. */
-export const CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+import { CODE_ALPHABET } from "../vocabulary.ts";
+
+export { CODE_ALPHABET };
 /** An account's name (SPEC.md § 5.7). */
 export const ACCOUNT_NAME = /^[A-Za-z0-9._-]{1,64}$/;
 /** The scopes, in the order the handshake lists them (SPEC.md § 4.2). */
-export const SCOPES = ["library", "saves", "cheats", "cheats.write", "requests", "admin"] as const;
+export const SCOPES = [
+  "library",
+  "saves",
+  "cheats",
+  "cheats.write",
+  "requests",
+  "admin",
+  "sync.read",
+  "sync.write",
+] as const;
 const INVITATION_SYMBOLS = 16; // 80 bits (SPEC.md § 5.5)
 
 /** An RFC 3339 time, in UTC, to the second. */
@@ -47,6 +57,11 @@ export function newToken(): string {
 
 export function newId(prefix: string, bytes = 9): string {
   return `${prefix}${toBase64Url(randomBytes(bytes))}`;
+}
+
+/** A device's id (SPEC.md § 5.7): `d_` and 16 hex digits, its key in the sync collection `installed` (§ 20.2). */
+export function newDeviceId(): string {
+  return `d_${toHex(randomBytes(8))}`;
 }
 
 /** A code of the pairing alphabet, `symbols` long, in groups of 4 joined by `-` (SPEC.md § 5.2). */
@@ -153,6 +168,13 @@ export interface Accounts {
   createUser(name: string, scopes: readonly string[], state?: "active" | "frozen"): Maybe<User>;
   /** An account changed; AccountError 404 when there is none. Its devices' scopes are cut back with its own. */
   updateUser(name: string, change: { state?: "active" | "frozen"; scopes?: readonly string[] }): Maybe<User>;
+  /**
+   * Deletes an account, at once and whole (SPEC.md § 5.7): its devices (their
+   * tokens give 401 from their next request) and invitations; false when there
+   * is none. Optional: without it, a deletion answers 409 (the server's
+   * accounts are defined elsewhere). AccountError 409 to refuse one.
+   */
+  deleteUser?(name: string): Maybe<boolean>;
   /** The live device whose token is `token`, or undefined (unknown, revoked or expired). */
   deviceOf(token: string): Maybe<Device | undefined>;
   /** A new token for a device, and the device as kept (its hash only). */
@@ -226,6 +248,13 @@ export class MemoryAccounts implements Accounts {
     return user;
   }
 
+  deleteUser(name: string): boolean {
+    if (!this.#users.delete(name)) return false;
+    for (const [h, d] of this.#devices) if (d.user === name) this.#devices.delete(h);
+    for (const [id, inv] of this.#invitations) if (inv.user === name) this.#invitations.delete(id);
+    return true;
+  }
+
   deviceOf(token: string): Device | undefined {
     const found = this.#devices.get(tokenHash(token));
     return found !== undefined && live(found) ? found : undefined;
@@ -242,7 +271,7 @@ export class MemoryAccounts implements Accounts {
 
   #record(token: string, user: string, device: string, scopes: readonly string[], options: IssueOptions): Device {
     const record: Device = {
-      id: newId("d_", 12),
+      id: newDeviceId(),
       tokenHash: tokenHash(token),
       user,
       device,

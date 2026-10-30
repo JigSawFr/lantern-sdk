@@ -17,7 +17,7 @@ import type { AddressInfo } from "node:net";
 import { Readable } from "node:stream";
 import type { TLSSocket } from "node:tls";
 import type { LanternApp } from "./app.ts";
-import { BODY_LIMIT, HttpProblem, problemResponse, ServerRequest, type ServerResponse } from "./http.ts";
+import { BODY_LIMIT, HttpProblem, isStream, problemResponse, ServerRequest, type ServerResponse } from "./http.ts";
 
 export interface AdapterOptions {
   /** The largest body read; above it the request is answered 413 (its body read and dropped). */
@@ -89,6 +89,27 @@ function send(res: http.ServerResponse, response: ServerResponse): void {
     res.end(body.length > 0 ? body : undefined);
     return;
   }
+  if (isStream(body)) {
+    // Each chunk at once (an event stream, SPEC.md § 18.1): no buffering, and its end when the client goes.
+    res.socket?.setNoDelay(true);
+    res.flushHeaders();
+    let gone = false;
+    res.on("close", () => {
+      gone = true;
+      body.cancel();
+    });
+    (async () => {
+      try {
+        for await (const chunk of body.stream) {
+          if (gone) break;
+          if (!res.write(chunk)) await new Promise((r) => res.once("drain", r));
+        }
+      } finally {
+        res.end();
+      }
+    })().catch(() => res.destroy());
+    return;
+  }
   const stream = createReadStream(body.path, { start: body.start, end: body.start + body.length - 1 });
   stream.on("error", () => res.destroy());
   stream.pipe(res);
@@ -157,6 +178,25 @@ export function fetchHandler(
         out.length > 0 && response.status !== 204 && response.status !== 304 ? (out as BodyInit) : null,
         init,
       );
+    }
+    if (isStream(out)) {
+      const iterator = out.stream[Symbol.asyncIterator]();
+      const stream = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          try {
+            const next = await iterator.next();
+            if (next.done) controller.close();
+            else controller.enqueue(next.value);
+          } catch (e) {
+            controller.error(e);
+          }
+        },
+        cancel() {
+          out.cancel();
+          void iterator.return?.();
+        },
+      });
+      return new Response(stream, { status: response.status, headers: response.headers });
     }
     const stream = Readable.toWeb(
       createReadStream(out.path, { start: out.start, end: out.start + out.length - 1 }),

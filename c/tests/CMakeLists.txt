@@ -33,7 +33,8 @@ set(LANTERN_C_UNIT_SOURCES
     unit/crypto_tests.c
     unit/discovery_tests.c
     unit/documents_tests.c
-    unit/homebrew_tests.c)
+    unit/homebrew_tests.c
+    unit/v05_tests.c)
 
 # Against the shared library (what it exports is enough) and the static one
 set(LANTERN_C_UNIT_VARIANTS static)

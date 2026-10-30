@@ -26,6 +26,10 @@ export const FAMILIES = [
   "pairing",
   "signatures",
   "admin",
+  "events",
+  "peers",
+  "sync",
+  "encrypted_saves",
 ] as const;
 export type Family = (typeof FAMILIES)[number];
 /** A platform's name (SPEC.md § 4.3). */
@@ -38,6 +42,8 @@ export const HOMEBREW_ID = /^(?=.{1,128}$)[a-z][a-z0-9_-]*(?:\.[a-z0-9][a-z0-9_-
 export const WORD = /^[a-z][a-z0-9_]{0,31}$/;
 /** A cheat set's build id, the core's form (SPEC.md § 10). */
 export const BUILD_ID = /^[A-Za-z0-9._-]{1,64}$/;
+/** The pairing alphabet (SPEC.md § 5.2), also a save key's (§ 9.4): 5 bits a symbol, no 0, O, 1 or I. */
+export const CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 /** A SHA-256, lower-case hex. */
 export const SHA256_HEX = /^[0-9a-f]{64}$/;
 

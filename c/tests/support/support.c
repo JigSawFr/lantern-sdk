@@ -240,6 +240,8 @@ const char* fake_last_header(fake_server* server, const char* name, char* out, s
 static lantern_status sink_write(void* user, const uint8_t* bytes, size_t size)
 {
     memory_sink* sink = user;
+    if (size == 0)
+        return LANTERN_OK;
     if (sink->size + size > sink->capacity)
     {
         size_t capacity = sink->capacity == 0 ? 4096 : sink->capacity;

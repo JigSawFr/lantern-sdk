@@ -34,8 +34,13 @@ dependencies = []
 httpx = ["httpx>=0.27"]
 flask = ["flask>=3.0"]
 fastapi = ["fastapi>=0.110"]
+# Ed25519 in constant time, and the XChaCha20-Poly1305 of encrypted saves (ChaCha20-Poly1305, SPEC.md § 9.4).
 crypto = ["cryptography>=42"]
 dnssd = ["zeroconf>=0.132"]
+
+[project.scripts]
+# The generator of static libraries (SPEC.md § 21): python -m lantern.static is the same.
+lantern-static = "lantern.static:main"
 
 [project.urls]
 Homepage = "https://github.com/JigSawFr/lantern-sdk"

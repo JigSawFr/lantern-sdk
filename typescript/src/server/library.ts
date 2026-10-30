@@ -26,6 +26,7 @@ import { CHEAT_SET } from "../limits.ts";
 import { profile, singleFilePath } from "../profiles.ts";
 import { definition } from "../schema.ts";
 import { utc } from "./accounts.ts";
+import type { LibraryChange } from "./events.ts";
 import { FileRef } from "./files.ts";
 import type { ServerRequest } from "./http.ts";
 import { readZip } from "./zip.ts";
@@ -89,6 +90,11 @@ export interface Library {
   cheatFile(cheatId: string): Maybe<FileRef | undefined>;
   /** The change journal, or undefined: the family `changes` is then not offered. */
   journal(): Journal | undefined;
+  /**
+   * Tells `listener` what changes, as it changes (the event `library`, SPEC.md
+   * § 18.2). Optional: without it, a server calls `app.libraryChanged()` itself.
+   */
+  subscribe?(listener: (changes: LibraryChange[]) => void): void;
 }
 
 function token(bytes: number): string {
@@ -176,11 +182,20 @@ export class MemoryLibrary implements Library, Journal {
   readonly #files = new Map<string, FileRef>();
   readonly #cheatFiles = new Map<string, FileRef>();
   readonly #journal: MemoryJournal | undefined;
+  readonly #listeners: ((changes: LibraryChange[]) => void)[] = [];
 
   constructor(options: { base?: string; families?: Iterable<string>; journal?: boolean } = {}) {
     this.base = (options.base ?? "/api/lantern").replace(/\/+$/, "");
     this.families = new Set(options.families ?? LIBRARY_FAMILIES);
     this.#journal = options.journal === false ? undefined : new MemoryJournal();
+  }
+
+  subscribe(listener: (changes: LibraryChange[]) => void): void {
+    this.#listeners.push(listener);
+  }
+
+  #changed(change: LibraryChange): void {
+    for (const l of this.#listeners) l([change]);
   }
 
   // Adding and removing.
@@ -207,6 +222,7 @@ export class MemoryLibrary implements Library, Journal {
     if (problems.length > 0) throw new RangeError(`app ${app.id}: ${problems.slice(0, 3).join("; ")}`);
     this.#apps.set(app.id, app);
     this.#journal?.record("added", app.id, app.platform);
+    this.#changed({ family: "apps", platform: app.platform, titleId: app.title_id });
     return app;
   }
 
@@ -230,6 +246,7 @@ export class MemoryLibrary implements Library, Journal {
     if (app === undefined) return;
     this.#apps.delete(appId);
     this.#journal?.record("removed", appId, app.platform);
+    this.#changed({ family: "apps", platform: app.platform, titleId: app.title_id });
   }
 
   addTitle(title: Title): Title {
@@ -239,12 +256,15 @@ export class MemoryLibrary implements Library, Journal {
       throw new RangeError(`title ${title.platform}/${title.title_id}: ${problems.slice(0, 3).join("; ")}`);
     this.#titles.set(`${title.platform}/${title.title_id}`, rest as Title);
     this.#journal?.record("title", `${title.platform}/${title.title_id}`, title.platform);
+    this.#changed({ family: "titles", platform: title.platform, titleId: title.title_id });
     return rest as Title;
   }
 
   removeTitle(platform: string, titleId: string): void {
-    if (this.#titles.delete(`${platform}/${titleId}`))
+    if (this.#titles.delete(`${platform}/${titleId}`)) {
       this.#journal?.record("title", `${platform}/${titleId}`, platform);
+      this.#changed({ family: "titles", platform, titleId });
+    }
   }
 
   /**
@@ -266,6 +286,7 @@ export class MemoryLibrary implements Library, Journal {
     if (problems.length > 0)
       throw new RangeError(`homebrew ${entry.platform}/${entry.id}: ${problems.slice(0, 3).join("; ")}`);
     this.#homebrew.set(`${entry.platform}/${entry.id}`, entry);
+    this.#changed({ family: "homebrew", platform: entry.platform, ratings: entry.ratings ?? [] });
     return entry;
   }
 
@@ -297,6 +318,7 @@ export class MemoryLibrary implements Library, Journal {
     if (problems.length > 0) throw new RangeError(`cheat set: ${problems.slice(0, 3).join("; ")}`);
     this.#cheats.set(cheat.id, cheat);
     this.#cheatFiles.set(cheat.id, file);
+    this.#changed({ family: "cheats", platform: cheat.platform, titleId: cheat.title_id });
     return cheat;
   }
 
