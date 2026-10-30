@@ -1,0 +1,91 @@
+# One version for the whole SDK (RELEASING.md). On every push to main,
+# release-please keeps a "chore(main): release X.Y.Z" pull request up to
+# date from the Conventional Commits: CHANGELOG.md, and the version in every
+# language (release-please-config.json's extra-files). This workflow then
+# brings the files made from those along on that pull request
+# (typescript/package-lock.json, c/abi/lantern.abi), so its checks pass.
+# Merging it creates the vX.Y.Z tag and the GitHub release, which starts
+# release.yml: the packages built, attested and published.
+name: release-please
+
+on:
+  push:
+    branches: [ main ]
+  # Again by hand, e.g. after a failure of GitHub's API
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      # A token of the release GitHub App, not GITHUB_TOKEN: the release it
+      # creates starts release.yml (one GITHUB_TOKEN creates starts nothing),
+      # and its pushes to the release pull request start the checks. Without
+      # the app (not set up yet: RELEASING.md), nothing is released.
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        id: app-token
+        if: vars.RELEASE_APP_ID != ''
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID || vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        id: release
+        if: vars.RELEASE_APP_ID != ''
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+      - name: Without the release app
+        if: vars.RELEASE_APP_ID == ''
+        run: echo "No RELEASE_APP_ID variable, so no release pull request (RELEASING.md says how to set it up)." >> "$GITHUB_STEP_SUMMARY"
+
+      # The release pull request, as release-please left it
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.release.outputs.pr
+        with:
+          ref: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+          persist-credentials: false
+      # What release-please cannot write: the lock file's copy of the
+      # version, and the C API's ABI dump, which records the header's
+      # version string. Committed through GitHub's API, as the app, so the
+      # commit is signed by GitHub and starts the checks.
+      - name: The files made from the version
+        if: steps.release.outputs.pr
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BRANCH: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+        run: |
+          version=$(jq -r .version typescript/package.json)
+          # The root package's two copies of the version, nothing else of the lock
+          jq --arg v "$version" '.version = $v | .packages[""].version = $v' typescript/package-lock.json \
+            > "$RUNNER_TEMP/package-lock.json"
+          mv "$RUNNER_TEMP/package-lock.json" typescript/package-lock.json
+          python3 c/tools/abi_dump.py --update
+          python3 tools/release_versions.py --expect "$version"
+          changed=$(git diff --name-only)
+          if [ -z "$changed" ]; then
+            echo "Nothing to bring along." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          additions=$(for file in $changed; do
+            jq -n --arg path "$file" --arg contents "$(base64 -w0 "$file")" '{path: $path, contents: $contents}'
+          done | jq -s .)
+          jq -n --arg repo "$GITHUB_REPOSITORY" --arg branch "$BRANCH" --arg head "$(git rev-parse HEAD)" \
+            --argjson additions "$additions" '{
+              query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }",
+              variables: { input: {
+                branch: { repositoryNameWithOwner: $repo, branchName: $branch },
+                expectedHeadOid: $head,
+                message: { headline: "chore(release): the lock file and the ABI dump at the new version" },
+                fileChanges: { additions: $additions }
+              } }
+            }' | gh api graphql --input - --jq .data.createCommitOnBranch.commit.oid
+          echo "Brought along: $changed" >> "$GITHUB_STEP_SUMMARY"

@@ -241,4 +241,8 @@ if (LANTERN_C_INSTALL)
         ${CMAKE_CURRENT_BINARY_DIR}/LanternCConfig.cmake
         ${CMAKE_CURRENT_BINARY_DIR}/LanternCConfigVersion.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/LanternC)
+    # The licence (the repository's, MIT); the C++ library's install brings
+    # its own and its vendored code's
+    install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../LICENSES/MIT.txt
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/lantern-c RENAME LICENSE)
 endif ()
