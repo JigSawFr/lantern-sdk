@@ -1,0 +1,3 @@
+# The shared library's exports on Apple's systems (ld -exported_symbols_list):
+# the C API alone.
+_lantern_*

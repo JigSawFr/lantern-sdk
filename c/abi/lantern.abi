@@ -1,0 +1,839 @@
+# The C API's ABI, from c/include/lantern (python3 c/tools/abi_dump.py --update).
+# Kept so that each change shows; c/README.md says what may change.
+callback lantern_discovery_handler: typedef bool(*lantern_discovery_handler)(void*user, const lantern_discovered_server*server);
+constant LANTERN_ABSENT: 1
+constant LANTERN_CODE_ACCOUNT_FROZEN: 9
+constant LANTERN_CODE_BAD_REQUEST: 1
+constant LANTERN_CODE_CONFLICT: 11
+constant LANTERN_CODE_DIGEST_MISMATCH: 15
+constant LANTERN_CODE_FORBIDDEN: 8
+constant LANTERN_CODE_GONE: 12
+constant LANTERN_CODE_INTERNAL: 17
+constant LANTERN_CODE_KEY_REQUIRED: 2
+constant LANTERN_CODE_NONE: 0
+constant LANTERN_CODE_NOT_FOUND: 10
+constant LANTERN_CODE_SIGNATURE_EXPIRED: 6
+constant LANTERN_CODE_SIGNATURE_INVALID: 5
+constant LANTERN_CODE_SIGNATURE_REPLAYED: 7
+constant LANTERN_CODE_SIGNATURE_REQUIRED: 4
+constant LANTERN_CODE_SLOW_DOWN: 16
+constant LANTERN_CODE_TOO_LARGE: 13
+constant LANTERN_CODE_UNAUTHORIZED: 3
+constant LANTERN_CODE_UNAVAILABLE: 18
+constant LANTERN_CODE_UNKNOWN: 19
+constant LANTERN_CODE_UNSUPPORTED_SCHEMA: 14
+constant LANTERN_CONDITION_FAILED: 1
+constant LANTERN_CONDITION_MET: 0
+constant LANTERN_CONDITION_UNREADABLE: 2
+constant LANTERN_DATA_MISSING: 0
+constant LANTERN_DATA_UNKNOWN_VERSION: 1
+constant LANTERN_DATA_WRONG_SIZE: 2
+constant LANTERN_DIGEST_FIELD_ABSENT: 1
+constant LANTERN_DIGEST_FIELD_MALFORMED: 2
+constant LANTERN_DIGEST_FIELD_SHA256: 0
+constant LANTERN_ERROR_INTEGRITY: -5
+constant LANTERN_ERROR_INVALID_RESPONSE: -3
+constant LANTERN_ERROR_LIMIT: -4
+constant LANTERN_ERROR_MEMORY: -11
+constant LANTERN_ERROR_PROTOCOL: -1
+constant LANTERN_ERROR_REFUSED: -7
+constant LANTERN_ERROR_SIGNATURE: -6
+constant LANTERN_ERROR_STORAGE: -10
+constant LANTERN_ERROR_TRANSPORT: -2
+constant LANTERN_ERROR_UNSUPPORTED: -8
+constant LANTERN_ERROR_USAGE: -9
+constant LANTERN_FAMILY_ADMIN: 10
+constant LANTERN_FAMILY_CHANGES: 2
+constant LANTERN_FAMILY_CHEATS: 6
+constant LANTERN_FAMILY_HOMEBREW: 4
+constant LANTERN_FAMILY_LIBRARY: 0
+constant LANTERN_FAMILY_PAIRING: 8
+constant LANTERN_FAMILY_REQUESTS: 7
+constant LANTERN_FAMILY_SAVES: 5
+constant LANTERN_FAMILY_SECTIONS: 3
+constant LANTERN_FAMILY_SIGNATURES: 9
+constant LANTERN_FAMILY_TITLES: 1
+constant LANTERN_METHOD_DELETE: 5
+constant LANTERN_METHOD_GET: 0
+constant LANTERN_METHOD_HEAD: 1
+constant LANTERN_METHOD_PATCH: 4
+constant LANTERN_METHOD_POST: 2
+constant LANTERN_METHOD_PUT: 3
+constant LANTERN_OFFER: 0
+constant LANTERN_OK: 0
+constant LANTERN_PATH_ABSOLUTE: 3
+constant LANTERN_PATH_BACKSLASH: 7
+constant LANTERN_PATH_COLON: 8
+constant LANTERN_PATH_CONTROL: 10
+constant LANTERN_PATH_DOT_PART: 6
+constant LANTERN_PATH_DRIVE_LETTER: 4
+constant LANTERN_PATH_EMPTY: 1
+constant LANTERN_PATH_EMPTY_PART: 5
+constant LANTERN_PATH_NOT_ABSOLUTE: 2
+constant LANTERN_PATH_NOT_A_FOLDER: 13
+constant LANTERN_PATH_OK: 0
+constant LANTERN_PATH_PART_TOO_LONG: 11
+constant LANTERN_PATH_QUOTE: 9
+constant LANTERN_PATH_TOO_LONG: 12
+constant LANTERN_PIN_FIRST_INSTALL: 0
+constant LANTERN_PIN_KEY_CHANGED: 3
+constant LANTERN_PIN_NEWLY_SIGNED: 2
+constant LANTERN_PIN_SAME: 1
+constant LANTERN_PIN_SIGNATURE_REMOVED: 4
+constant LANTERN_PLACEMENT_ARCHIVE: 1
+constant LANTERN_PLACEMENT_SINGLE_FILE: 0
+constant LANTERN_PLACEMENT_SYSTEM_INSTALLER: 2
+constant LANTERN_POLL_PAIRED: 1
+constant LANTERN_POLL_WAITING: 0
+constant LANTERN_REFUSE: 2
+constant LANTERN_ROOT_CONSENT: 2
+constant LANTERN_ROOT_FREE: 1
+constant LANTERN_ROOT_NO_PROFILE: 3
+constant LANTERN_ROOT_OUTSIDE: 0
+constant LANTERN_TRANSPORT_CURL: 1
+constant LANTERN_TRANSPORT_MBEDTLS: 2
+constant LANTERN_TRUST_CA: 0
+constant LANTERN_TRUST_PINNED: 1
+constant LANTERN_TRUST_UNVERIFIED: 2
+constant LANTERN_WARN: 1
+define LANTERN_C_ABI_VERSION: 1
+define LANTERN_C_API_VERSION: 1
+define LANTERN_KNOWN_SCHEMA: 1
+define LANTERN_SPEC_DRAFT: "0.4"
+define LANTERN_VERSION_STRING: "0.4.0"
+function lantern_accepted_version_get_label: lantern_str lantern_accepted_version_get_label(const lantern_accepted_version*value)
+function lantern_accepted_version_get_md5: lantern_str lantern_accepted_version_get_md5(const lantern_accepted_version*value)
+function lantern_accepted_version_get_sha1: lantern_str lantern_accepted_version_get_sha1(const lantern_accepted_version*value)
+function lantern_accepted_version_get_sha256: bool lantern_accepted_version_get_sha256(const lantern_accepted_version*value, uint8_t out[32])
+function lantern_admin_device_get_bound: bool lantern_admin_device_get_bound(const lantern_admin_device*value, bool*out)
+function lantern_admin_device_get_created: lantern_str lantern_admin_device_get_created(const lantern_admin_device*value)
+function lantern_admin_device_get_device: lantern_str lantern_admin_device_get_device(const lantern_admin_device*value)
+function lantern_admin_device_get_expires: lantern_str lantern_admin_device_get_expires(const lantern_admin_device*value)
+function lantern_admin_device_get_id: lantern_str lantern_admin_device_get_id(const lantern_admin_device*value)
+function lantern_admin_device_get_invitation: lantern_str lantern_admin_device_get_invitation(const lantern_admin_device*value)
+function lantern_admin_device_get_key: lantern_str lantern_admin_device_get_key(const lantern_admin_device*value)
+function lantern_admin_device_get_last_used: lantern_str lantern_admin_device_get_last_used(const lantern_admin_device*value)
+function lantern_admin_device_get_rating_cap: const lantern_rating_cap*lantern_admin_device_get_rating_cap(const lantern_admin_device*value)
+function lantern_admin_device_get_scopes_at: lantern_str lantern_admin_device_get_scopes_at(const lantern_admin_device*value, size_t index)
+function lantern_admin_device_get_scopes_count: size_t lantern_admin_device_get_scopes_count(const lantern_admin_device*value)
+function lantern_admin_device_get_user: lantern_str lantern_admin_device_get_user(const lantern_admin_device*value)
+function lantern_admin_devices_free: void lantern_admin_devices_free(lantern_admin_devices*value)
+function lantern_admin_devices_get_items_at: const lantern_admin_device*lantern_admin_devices_get_items_at(const lantern_admin_devices*value, size_t index)
+function lantern_admin_devices_get_items_count: size_t lantern_admin_devices_get_items_count(const lantern_admin_devices*value)
+function lantern_admin_devices_get_next: lantern_str lantern_admin_devices_get_next(const lantern_admin_devices*value)
+function lantern_admin_devices_get_total: bool lantern_admin_devices_get_total(const lantern_admin_devices*value, uint64_t*out)
+function lantern_admin_pairing_get_code: lantern_str lantern_admin_pairing_get_code(const lantern_admin_pairing*value)
+function lantern_admin_pairing_get_created: lantern_str lantern_admin_pairing_get_created(const lantern_admin_pairing*value)
+function lantern_admin_pairing_get_device: lantern_str lantern_admin_pairing_get_device(const lantern_admin_pairing*value)
+function lantern_admin_pairing_get_expires: lantern_str lantern_admin_pairing_get_expires(const lantern_admin_pairing*value)
+function lantern_admin_pairing_get_id: lantern_str lantern_admin_pairing_get_id(const lantern_admin_pairing*value)
+function lantern_admin_pairing_get_key: lantern_str lantern_admin_pairing_get_key(const lantern_admin_pairing*value)
+function lantern_admin_pairing_get_scopes_at: lantern_str lantern_admin_pairing_get_scopes_at(const lantern_admin_pairing*value, size_t index)
+function lantern_admin_pairing_get_scopes_count: size_t lantern_admin_pairing_get_scopes_count(const lantern_admin_pairing*value)
+function lantern_admin_pairings_free: void lantern_admin_pairings_free(lantern_admin_pairings*value)
+function lantern_admin_pairings_get_items_at: const lantern_admin_pairing*lantern_admin_pairings_get_items_at(const lantern_admin_pairings*value, size_t index)
+function lantern_admin_pairings_get_items_count: size_t lantern_admin_pairings_get_items_count(const lantern_admin_pairings*value)
+function lantern_admin_pairings_get_next: lantern_str lantern_admin_pairings_get_next(const lantern_admin_pairings*value)
+function lantern_admin_pairings_get_total: bool lantern_admin_pairings_get_total(const lantern_admin_pairings*value, uint64_t*out)
+function lantern_admin_user_free: void lantern_admin_user_free(lantern_admin_user*value)
+function lantern_admin_user_get_created: lantern_str lantern_admin_user_get_created(const lantern_admin_user*value)
+function lantern_admin_user_get_devices: bool lantern_admin_user_get_devices(const lantern_admin_user*value, uint64_t*out)
+function lantern_admin_user_get_name: lantern_str lantern_admin_user_get_name(const lantern_admin_user*value)
+function lantern_admin_user_get_scopes_at: lantern_str lantern_admin_user_get_scopes_at(const lantern_admin_user*value, size_t index)
+function lantern_admin_user_get_scopes_count: size_t lantern_admin_user_get_scopes_count(const lantern_admin_user*value)
+function lantern_admin_user_get_state: lantern_str lantern_admin_user_get_state(const lantern_admin_user*value)
+function lantern_admin_users_free: void lantern_admin_users_free(lantern_admin_users*value)
+function lantern_admin_users_get_items_at: const lantern_admin_user*lantern_admin_users_get_items_at(const lantern_admin_users*value, size_t index)
+function lantern_admin_users_get_items_count: size_t lantern_admin_users_get_items_count(const lantern_admin_users*value)
+function lantern_admin_users_get_next: lantern_str lantern_admin_users_get_next(const lantern_admin_users*value)
+function lantern_admin_users_get_total: bool lantern_admin_users_get_total(const lantern_admin_users*value, uint64_t*out)
+function lantern_app_get_added: lantern_str lantern_app_get_added(const lantern_app*value)
+function lantern_app_get_app_id: lantern_str lantern_app_get_app_id(const lantern_app*value)
+function lantern_app_get_atlas: lantern_str lantern_app_get_atlas(const lantern_app*value)
+function lantern_app_get_file: lantern_str lantern_app_get_file(const lantern_app*value)
+function lantern_app_get_format: lantern_str lantern_app_get_format(const lantern_app*value)
+function lantern_app_get_id: lantern_str lantern_app_get_id(const lantern_app*value)
+function lantern_app_get_installed_size: bool lantern_app_get_installed_size(const lantern_app*value, uint64_t*out)
+function lantern_app_get_name: lantern_str lantern_app_get_name(const lantern_app*value)
+function lantern_app_get_platform: lantern_str lantern_app_get_platform(const lantern_app*value)
+function lantern_app_get_sha256: bool lantern_app_get_sha256(const lantern_app*value, uint8_t out[32])
+function lantern_app_get_size: bool lantern_app_get_size(const lantern_app*value, uint64_t*out)
+function lantern_app_get_title_id: lantern_str lantern_app_get_title_id(const lantern_app*value)
+function lantern_app_get_type: lantern_str lantern_app_get_type(const lantern_app*value)
+function lantern_app_get_version_code: bool lantern_app_get_version_code(const lantern_app*value, uint64_t*out)
+function lantern_app_get_version_name: lantern_str lantern_app_get_version_name(const lantern_app*value)
+function lantern_apps_page_free: void lantern_apps_page_free(lantern_apps_page*value)
+function lantern_apps_page_get_items_at: const lantern_app*lantern_apps_page_get_items_at(const lantern_apps_page*value, size_t index)
+function lantern_apps_page_get_items_count: size_t lantern_apps_page_get_items_count(const lantern_apps_page*value)
+function lantern_apps_page_get_next: lantern_str lantern_apps_page_get_next(const lantern_apps_page*value)
+function lantern_apps_page_get_total: bool lantern_apps_page_get_total(const lantern_apps_page*value, uint64_t*out)
+function lantern_changes_free: void lantern_changes_free(lantern_changes*value)
+function lantern_changes_get_added_at: const lantern_app*lantern_changes_get_added_at(const lantern_changes*value, size_t index)
+function lantern_changes_get_added_count: size_t lantern_changes_get_added_count(const lantern_changes*value)
+function lantern_changes_get_removed_at: lantern_str lantern_changes_get_removed_at(const lantern_changes*value, size_t index)
+function lantern_changes_get_removed_count: size_t lantern_changes_get_removed_count(const lantern_changes*value)
+function lantern_changes_get_since: lantern_str lantern_changes_get_since(const lantern_changes*value)
+function lantern_cheat_set_free: void lantern_cheat_set_free(lantern_cheat_set*value)
+function lantern_cheat_set_get_build_id: lantern_str lantern_cheat_set_get_build_id(const lantern_cheat_set*value)
+function lantern_cheat_set_get_id: lantern_str lantern_cheat_set_get_id(const lantern_cheat_set*value)
+function lantern_cheat_set_get_note: lantern_str lantern_cheat_set_get_note(const lantern_cheat_set*value)
+function lantern_cheat_set_get_platform: lantern_str lantern_cheat_set_get_platform(const lantern_cheat_set*value)
+function lantern_cheat_set_get_sha256: bool lantern_cheat_set_get_sha256(const lantern_cheat_set*value, uint8_t out[32])
+function lantern_cheat_set_get_size: bool lantern_cheat_set_get_size(const lantern_cheat_set*value, uint64_t*out)
+function lantern_cheat_set_get_source: lantern_str lantern_cheat_set_get_source(const lantern_cheat_set*value)
+function lantern_cheat_set_get_title_id: lantern_str lantern_cheat_set_get_title_id(const lantern_cheat_set*value)
+function lantern_cheat_set_get_updated: lantern_str lantern_cheat_set_get_updated(const lantern_cheat_set*value)
+function lantern_cheat_sets_free: void lantern_cheat_sets_free(lantern_cheat_sets*value)
+function lantern_cheat_sets_get_cheats_at: const lantern_cheat_set*lantern_cheat_sets_get_cheats_at(const lantern_cheat_sets*value, size_t index)
+function lantern_cheat_sets_get_cheats_count: size_t lantern_cheat_sets_get_cheats_count(const lantern_cheat_sets*value)
+function lantern_check_data_path: lantern_path_problem lantern_check_data_path(const char*path, size_t size)
+function lantern_check_data_root: lantern_path_problem lantern_check_data_root(const char*path, size_t size)
+function lantern_check_device_path: lantern_path_problem lantern_check_device_path(const char*path, size_t size)
+function lantern_check_pin: lantern_status lantern_check_pin(lantern_pin_store*store, const char*platform, const char*id, const lantern_package_signature*signature, lantern_pin_check*out, lantern_error*error)
+function lantern_check_port: lantern_status lantern_check_port(const lantern_homebrew*entry, lantern_error*error)
+function lantern_check_requires: lantern_status lantern_check_requires(const lantern_requires*requires_, const char*platform, const lantern_device_facts*device, const lantern_allocator*allocator, lantern_requires_check**out, lantern_error*error)
+function lantern_check_signature: lantern_status lantern_check_signature(const lantern_signature_check*check, lantern_signature_verdict*out, lantern_error*error)
+function lantern_check_system_id: lantern_status lantern_check_system_id(const lantern_homebrew*entry, const lantern_installed_system_id*installed, size_t count, lantern_error*error)
+function lantern_client_abandon_upload: lantern_status lantern_client_abandon_upload(lantern_client*client, const char*upload, lantern_error*error)
+function lantern_client_admin_create_invitation: lantern_status lantern_client_admin_create_invitation(lantern_client*client, const lantern_invitation_create*invitation, lantern_invitation**out, lantern_error*error)
+function lantern_client_admin_create_user: lantern_status lantern_client_admin_create_user(lantern_client*client, const lantern_admin_user_create*user, lantern_admin_user**out, lantern_error*error)
+function lantern_client_admin_decide_pairing: lantern_status lantern_client_admin_decide_pairing(lantern_client*client, const char*id, const lantern_admin_pairing_decision*decision, lantern_error*error)
+function lantern_client_admin_devices: lantern_status lantern_client_admin_devices(lantern_client*client, const char*user, const lantern_page_query*page, lantern_admin_devices**out, lantern_error*error)
+function lantern_client_admin_invitations: lantern_status lantern_client_admin_invitations(lantern_client*client, const lantern_page_query*page, lantern_invitations**out, lantern_error*error)
+function lantern_client_admin_pairings: lantern_status lantern_client_admin_pairings(lantern_client*client, const lantern_page_query*page, lantern_admin_pairings**out, lantern_error*error)
+function lantern_client_admin_revoke_device: lantern_status lantern_client_admin_revoke_device(lantern_client*client, const char*id, lantern_error*error)
+function lantern_client_admin_revoke_invitation: lantern_status lantern_client_admin_revoke_invitation(lantern_client*client, const char*id, lantern_error*error)
+function lantern_client_admin_update_user: lantern_status lantern_client_admin_update_user(lantern_client*client, const char*name, const lantern_admin_user_update*change, lantern_admin_user**out, lantern_error*error)
+function lantern_client_admin_users: lantern_status lantern_client_admin_users(lantern_client*client, const lantern_page_query*page, lantern_admin_users**out, lantern_error*error)
+function lantern_client_apps: lantern_status lantern_client_apps(lantern_client*client, const lantern_apps_query*query, lantern_apps_page**out, lantern_error*error)
+function lantern_client_changes: lantern_status lantern_client_changes(lantern_client*client, const char*since, lantern_changes**out, lantern_error*error)
+function lantern_client_cheat_text: lantern_status lantern_client_cheat_text(lantern_client*client, const lantern_cheat_set*set, lantern_string**out, lantern_error*error)
+function lantern_client_cheats: lantern_status lantern_client_cheats(lantern_client*client, const lantern_cheats_query*query, lantern_cheat_sets**out, lantern_error*error)
+function lantern_client_clear_token: void lantern_client_clear_token(lantern_client*client)
+function lantern_client_clock_offset: int64_t lantern_client_clock_offset(const lantern_client*client)
+function lantern_client_create: lantern_status lantern_client_create(const lantern_client_config*config, lantern_client**out, lantern_error*error)
+function lantern_client_create_cheat_set: lantern_status lantern_client_create_cheat_set(lantern_client*client, const lantern_cheat_write*set, lantern_cheat_set**out, lantern_error*error)
+function lantern_client_delete_cheat_set: lantern_status lantern_client_delete_cheat_set(lantern_client*client, const char*id, lantern_error*error)
+function lantern_client_delete_save: lantern_status lantern_client_delete_save(lantern_client*client, const lantern_save*save, lantern_error*error)
+function lantern_client_device_key: const lantern_device_key*lantern_client_device_key(const lantern_client*client)
+function lantern_client_download: lantern_status lantern_client_download(lantern_client*client, const lantern_download_target*target, lantern_download_state*state, lantern_download_sink*sink, lantern_error*error)
+function lantern_client_download_save: lantern_status lantern_client_download_save(lantern_client*client, const lantern_save*save, lantern_download_state*state, lantern_download_sink*sink, lantern_error*error)
+function lantern_client_forget: lantern_status lantern_client_forget(lantern_client*client, lantern_credential_store*store, lantern_error*error)
+function lantern_client_free: void lantern_client_free(lantern_client*client)
+function lantern_client_handshake: lantern_status lantern_client_handshake(lantern_client*client, lantern_handshake**out, lantern_error*error)
+function lantern_client_has_token: bool lantern_client_has_token(const lantern_client*client)
+function lantern_client_homebrew: lantern_status lantern_client_homebrew(lantern_client*client, const lantern_homebrew_query*query, lantern_homebrew_page**out, lantern_error*error)
+function lantern_client_homebrew_entry: lantern_status lantern_client_homebrew_entry(lantern_client*client, const char*id, lantern_homebrew**out, lantern_error*error)
+function lantern_client_homebrew_updates: lantern_status lantern_client_homebrew_updates(lantern_client*client, const lantern_homebrew_updates_request*request, const char*cursor, const char*platform, lantern_homebrew_page**out, lantern_error*error)
+function lantern_client_missing: lantern_status lantern_client_missing(lantern_client*client, const lantern_missing_request*request, const char*cursor, const char*platform, lantern_apps_page**out, lantern_error*error)
+function lantern_client_offers: uint64_t lantern_client_offers(const lantern_client*client, lantern_family family)
+function lantern_client_open_upload: lantern_status lantern_client_open_upload(lantern_client*client, const char*title_id, const lantern_upload_request*request, const char*platform, lantern_upload_session**out, lantern_error*error)
+function lantern_client_poll_pairing: lantern_status lantern_client_poll_pairing(lantern_client*client, lantern_pairing*pairing, lantern_credential_store*store, lantern_poll_state*state, lantern_error*error)
+function lantern_client_replace_cheat_set: lantern_status lantern_client_replace_cheat_set(lantern_client*client, const char*id, const lantern_cheat_write*set, lantern_error*error)
+function lantern_client_request_title: lantern_status lantern_client_request_title(lantern_client*client, const lantern_request_create*request, lantern_title_request**out, lantern_error*error)
+function lantern_client_requests: lantern_status lantern_client_requests(lantern_client*client, const char*platform, lantern_title_requests**out, lantern_error*error)
+function lantern_client_saves: lantern_status lantern_client_saves(lantern_client*client, const char*title_id, const char*platform, lantern_saves**out, lantern_error*error)
+function lantern_client_sections: lantern_status lantern_client_sections(lantern_client*client, lantern_sections**out, lantern_error*error)
+function lantern_client_server: const lantern_handshake*lantern_client_server(const lantern_client*client)
+function lantern_client_set_bearer_token: lantern_status lantern_client_set_bearer_token(lantern_client*client, const char*token, lantern_error*error)
+function lantern_client_set_credentials: lantern_status lantern_client_set_credentials(lantern_client*client, const char*token, const lantern_device_key*key, lantern_error*error)
+function lantern_client_sign_in: lantern_status lantern_client_sign_in(lantern_client*client, lantern_credential_store*store, bool*signed_in, lantern_error*error)
+function lantern_client_start_pairing: lantern_status lantern_client_start_pairing(lantern_client*client, const lantern_pairing_options*options, lantern_pairing**out, lantern_error*error)
+function lantern_client_title: lantern_status lantern_client_title(lantern_client*client, const char*title_id, lantern_title**out, lantern_error*error)
+function lantern_client_title_changes: lantern_status lantern_client_title_changes(lantern_client*client, const char*since, lantern_title_changes**out, lantern_error*error)
+function lantern_client_titles: lantern_status lantern_client_titles(lantern_client*client, const char*const*ids, size_t count, lantern_titles**out, lantern_error*error)
+function lantern_client_upload_chunk: lantern_status lantern_client_upload_chunk(lantern_client*client, const char*upload, uint64_t offset, const uint8_t*chunk, size_t size, uint64_t*new_offset, lantern_save**save, lantern_error*error)
+function lantern_client_upload_offset: lantern_status lantern_client_upload_offset(lantern_client*client, const char*upload, uint64_t*offset, lantern_error*error)
+function lantern_client_upload_resumable: lantern_status lantern_client_upload_resumable(lantern_client*client, const char*title_id, const lantern_upload_request*request, lantern_upload_source*source, lantern_upload_progress*progress, size_t max_chunk, const char*platform, lantern_save**out, lantern_error*error)
+function lantern_client_upload_save: lantern_status lantern_client_upload_save(lantern_client*client, const char*title_id, const uint8_t*archive, size_t size, const lantern_save_info*info, lantern_save**out, lantern_error*error)
+function lantern_client_withdraw_request: lantern_status lantern_client_withdraw_request(lantern_client*client, const char*id, lantern_error*error)
+function lantern_clock_create: lantern_status lantern_clock_create(const lantern_clock_callbacks*callbacks, const lantern_allocator*allocator, lantern_clock**out, lantern_error*error)
+function lantern_clock_free: void lantern_clock_free(lantern_clock*clock)
+function lantern_code_for_status: lantern_code lantern_code_for_status(uint16_t status)
+function lantern_code_from_name: lantern_code lantern_code_from_name(const char*name)
+function lantern_code_name: const char*lantern_code_name(lantern_code code)
+function lantern_commit_pin: lantern_status lantern_commit_pin(lantern_pin_store*store, const char*platform, const char*id, const lantern_pin_check*check, bool user_accepted_change, lantern_error*error)
+function lantern_credential_store_create: lantern_status lantern_credential_store_create(const lantern_credential_callbacks*callbacks, const lantern_allocator*allocator, lantern_credential_store**out, lantern_error*error)
+function lantern_credential_store_free: void lantern_credential_store_free(lantern_credential_store*store)
+function lantern_credentials_sink_set: lantern_status lantern_credentials_sink_set(lantern_credentials_sink*sink, const lantern_credentials*credentials)
+function lantern_curl_global_init: lantern_status lantern_curl_global_init(lantern_error*error)
+function lantern_data_probe_create: lantern_status lantern_data_probe_create(const lantern_data_probe_callbacks*callbacks, const lantern_allocator*allocator, lantern_data_probe**out, lantern_error*error)
+function lantern_data_probe_free: void lantern_data_probe_free(lantern_data_probe*probe)
+function lantern_dependency_get_id: lantern_str lantern_dependency_get_id(const lantern_dependency*value)
+function lantern_dependency_get_min_build: bool lantern_dependency_get_min_build(const lantern_dependency*value, uint64_t*out)
+function lantern_deprecation_log_create: lantern_status lantern_deprecation_log_create(const lantern_deprecation_callbacks*callbacks, const lantern_allocator*allocator, lantern_deprecation_log**out, lantern_error*error)
+function lantern_deprecation_log_free: void lantern_deprecation_log_free(lantern_deprecation_log*log)
+function lantern_device_key_fingerprint: void lantern_device_key_fingerprint(const lantern_device_key*key, char out[20])
+function lantern_device_key_free: void lantern_device_key_free(lantern_device_key*key)
+function lantern_device_key_from_seed: lantern_status lantern_device_key_from_seed(const uint8_t seed[32], const lantern_allocator*allocator, lantern_device_key**out, lantern_error*error)
+function lantern_device_key_generate: lantern_status lantern_device_key_generate(lantern_random*random, const lantern_allocator*allocator, lantern_device_key**out, lantern_error*error)
+function lantern_device_key_keyid: void lantern_device_key_keyid(const lantern_device_key*key, char out[44])
+function lantern_device_key_public_key: void lantern_device_key_public_key(const lantern_device_key*key, uint8_t out[32])
+function lantern_device_key_seed: void lantern_device_key_seed(const lantern_device_key*key, uint8_t out[32])
+function lantern_device_key_sign: void lantern_device_key_sign(const lantern_device_key*key, const uint8_t*message, size_t size, uint8_t out[64])
+function lantern_digest_from_hex: bool lantern_digest_from_hex(const char*hex, uint8_t out[32])
+function lantern_digest_to_hex: void lantern_digest_to_hex(const uint8_t digest[32], char out[65])
+function lantern_discover: lantern_status lantern_discover(lantern_udp_socket*socket, const lantern_discovery_options*options, lantern_discovery_handler handler, void*user, lantern_error*error)
+function lantern_discovered_origin: lantern_status lantern_discovered_origin(const char*address, uint16_t port, const lantern_allocator*allocator, lantern_string**out, lantern_error*error)
+function lantern_discovery_reply_free: void lantern_discovery_reply_free(lantern_discovery_reply*value)
+function lantern_discovery_reply_get_base: lantern_str lantern_discovery_reply_get_base(const lantern_discovery_reply*value)
+function lantern_discovery_reply_get_lantern: lantern_str lantern_discovery_reply_get_lantern(const lantern_discovery_reply*value)
+function lantern_discovery_reply_get_name: lantern_str lantern_discovery_reply_get_name(const lantern_discovery_reply*value)
+function lantern_discovery_reply_get_port: bool lantern_discovery_reply_get_port(const lantern_discovery_reply*value, uint64_t*out)
+function lantern_discovery_reply_get_uid: lantern_str lantern_discovery_reply_get_uid(const lantern_discovery_reply*value)
+function lantern_discovery_reply_get_versions_at: bool lantern_discovery_reply_get_versions_at(const lantern_discovery_reply*value, size_t index, uint64_t*out)
+function lantern_discovery_reply_get_versions_count: size_t lantern_discovery_reply_get_versions_count(const lantern_discovery_reply*value)
+function lantern_discovery_request: lantern_str lantern_discovery_request(void)
+function lantern_download_sink_create: lantern_status lantern_download_sink_create(const lantern_download_callbacks*callbacks, const lantern_allocator*allocator, lantern_download_sink**out, lantern_error*error)
+function lantern_download_sink_free: void lantern_download_sink_free(lantern_download_sink*sink)
+function lantern_download_state_create: lantern_status lantern_download_state_create(const lantern_allocator*allocator, lantern_download_state**out, lantern_error*error)
+function lantern_download_state_free: void lantern_download_state_free(lantern_download_state*state)
+function lantern_download_state_load: lantern_status lantern_download_state_load(lantern_download_state*state, const char*json, size_t size, lantern_error*error)
+function lantern_download_state_received: uint64_t lantern_download_state_received(const lantern_download_state*state)
+function lantern_download_state_reset: void lantern_download_state_reset(lantern_download_state*state)
+function lantern_download_state_save: lantern_status lantern_download_state_save(const lantern_download_state*state, lantern_string**out, lantern_error*error)
+function lantern_ed25519_verify: bool lantern_ed25519_verify(const uint8_t signature[64], const uint8_t public_key[32], const uint8_t*message, size_t size)
+function lantern_error_init: void lantern_error_init(lantern_error*error)
+function lantern_error_set: void lantern_error_set(lantern_error*error, lantern_status status, const char*detail)
+function lantern_files_to_remove: lantern_status lantern_files_to_remove(const lantern_package*old_package, const lantern_package*new_package, const lantern_allocator*allocator, lantern_strings**out, lantern_error*error)
+function lantern_format_digest_field: void lantern_format_digest_field(const uint8_t digest[32], char out[55])
+function lantern_handshake_account_get_bound: bool lantern_handshake_account_get_bound(const lantern_handshake_account*value, bool*out)
+function lantern_handshake_account_get_name: lantern_str lantern_handshake_account_get_name(const lantern_handshake_account*value)
+function lantern_handshake_account_get_rating_cap: const lantern_rating_cap*lantern_handshake_account_get_rating_cap(const lantern_handshake_account*value)
+function lantern_handshake_account_get_scopes_at: lantern_str lantern_handshake_account_get_scopes_at(const lantern_handshake_account*value, size_t index)
+function lantern_handshake_account_get_scopes_count: size_t lantern_handshake_account_get_scopes_count(const lantern_handshake_account*value)
+function lantern_handshake_account_get_state: lantern_str lantern_handshake_account_get_state(const lantern_handshake_account*value)
+function lantern_handshake_auth_get_bearer_only: bool lantern_handshake_auth_get_bearer_only(const lantern_handshake_auth*value, bool*out)
+function lantern_handshake_auth_get_skew: bool lantern_handshake_auth_get_skew(const lantern_handshake_auth*value, uint64_t*out)
+function lantern_handshake_features_get_admin: bool lantern_handshake_features_get_admin(const lantern_handshake_features*value, uint64_t*out)
+function lantern_handshake_features_get_changes: bool lantern_handshake_features_get_changes(const lantern_handshake_features*value, uint64_t*out)
+function lantern_handshake_features_get_cheats: bool lantern_handshake_features_get_cheats(const lantern_handshake_features*value, uint64_t*out)
+function lantern_handshake_features_get_extra_at: bool lantern_handshake_features_get_extra_at(const lantern_handshake_features*value, size_t index, lantern_str*key, lantern_str*json)
+function lantern_handshake_features_get_extra_count: size_t lantern_handshake_features_get_extra_count(const lantern_handshake_features*value)
+function lantern_handshake_features_get_homebrew: bool lantern_handshake_features_get_homebrew(const lantern_handshake_features*value, uint64_t*out)
+function lantern_handshake_features_get_library: bool lantern_handshake_features_get_library(const lantern_handshake_features*value, uint64_t*out)
+function lantern_handshake_features_get_pairing: bool lantern_handshake_features_get_pairing(const lantern_handshake_features*value, uint64_t*out)
+function lantern_handshake_features_get_requests: bool lantern_handshake_features_get_requests(const lantern_handshake_features*value, uint64_t*out)
+function lantern_handshake_features_get_saves: bool lantern_handshake_features_get_saves(const lantern_handshake_features*value, uint64_t*out)
+function lantern_handshake_features_get_sections: bool lantern_handshake_features_get_sections(const lantern_handshake_features*value, uint64_t*out)
+function lantern_handshake_features_get_signatures: bool lantern_handshake_features_get_signatures(const lantern_handshake_features*value, uint64_t*out)
+function lantern_handshake_features_get_titles: bool lantern_handshake_features_get_titles(const lantern_handshake_features*value, uint64_t*out)
+function lantern_handshake_free: void lantern_handshake_free(lantern_handshake*value)
+function lantern_handshake_get_account: const lantern_handshake_account*lantern_handshake_get_account(const lantern_handshake*value)
+function lantern_handshake_get_auth: const lantern_handshake_auth*lantern_handshake_get_auth(const lantern_handshake*value)
+function lantern_handshake_get_base: lantern_str lantern_handshake_get_base(const lantern_handshake*value)
+function lantern_handshake_get_features: const lantern_handshake_features*lantern_handshake_get_features(const lantern_handshake*value)
+function lantern_handshake_get_language: lantern_str lantern_handshake_get_language(const lantern_handshake*value)
+function lantern_handshake_get_limits: const lantern_handshake_limits*lantern_handshake_get_limits(const lantern_handshake*value)
+function lantern_handshake_get_motd: lantern_str lantern_handshake_get_motd(const lantern_handshake*value)
+function lantern_handshake_get_name: lantern_str lantern_handshake_get_name(const lantern_handshake*value)
+function lantern_handshake_get_platforms_at: lantern_str lantern_handshake_get_platforms_at(const lantern_handshake*value, size_t index)
+function lantern_handshake_get_platforms_count: size_t lantern_handshake_get_platforms_count(const lantern_handshake*value)
+function lantern_handshake_get_software: const lantern_handshake_software*lantern_handshake_get_software(const lantern_handshake*value)
+function lantern_handshake_get_uid: lantern_str lantern_handshake_get_uid(const lantern_handshake*value)
+function lantern_handshake_get_versions_at: bool lantern_handshake_get_versions_at(const lantern_handshake*value, size_t index, uint64_t*out)
+function lantern_handshake_get_versions_count: size_t lantern_handshake_get_versions_count(const lantern_handshake*value)
+function lantern_handshake_limits_get_page_size: bool lantern_handshake_limits_get_page_size(const lantern_handshake_limits*value, uint64_t*out)
+function lantern_handshake_limits_get_save_body: bool lantern_handshake_limits_get_save_body(const lantern_handshake_limits*value, uint64_t*out)
+function lantern_handshake_limits_get_save_size: bool lantern_handshake_limits_get_save_size(const lantern_handshake_limits*value, uint64_t*out)
+function lantern_handshake_limits_get_saves_kept_per_title: bool lantern_handshake_limits_get_saves_kept_per_title(const lantern_handshake_limits*value, uint64_t*out)
+function lantern_handshake_software_get_name: lantern_str lantern_handshake_software_get_name(const lantern_handshake_software*value)
+function lantern_handshake_software_get_version: lantern_str lantern_handshake_software_get_version(const lantern_handshake_software*value)
+function lantern_has_profile: bool lantern_has_profile(const char*platform)
+function lantern_has_transport: bool lantern_has_transport(lantern_transport_kind kind)
+function lantern_homebrew_free: void lantern_homebrew_free(lantern_homebrew*value)
+function lantern_homebrew_get_assets_license: lantern_str lantern_homebrew_get_assets_license(const lantern_homebrew*value)
+function lantern_homebrew_get_atlas: lantern_str lantern_homebrew_get_atlas(const lantern_homebrew*value)
+function lantern_homebrew_get_author: lantern_str lantern_homebrew_get_author(const lantern_homebrew*value)
+function lantern_homebrew_get_build: bool lantern_homebrew_get_build(const lantern_homebrew*value, uint64_t*out)
+function lantern_homebrew_get_description: lantern_str lantern_homebrew_get_description(const lantern_homebrew*value)
+function lantern_homebrew_get_genres_at: lantern_str lantern_homebrew_get_genres_at(const lantern_homebrew*value, size_t index)
+function lantern_homebrew_get_genres_count: size_t lantern_homebrew_get_genres_count(const lantern_homebrew*value)
+function lantern_homebrew_get_icon: const lantern_image*lantern_homebrew_get_icon(const lantern_homebrew*value)
+function lantern_homebrew_get_id: lantern_str lantern_homebrew_get_id(const lantern_homebrew*value)
+function lantern_homebrew_get_kind: lantern_str lantern_homebrew_get_kind(const lantern_homebrew*value)
+function lantern_homebrew_get_language: lantern_str lantern_homebrew_get_language(const lantern_homebrew*value)
+function lantern_homebrew_get_license: lantern_str lantern_homebrew_get_license(const lantern_homebrew*value)
+function lantern_homebrew_get_name: lantern_str lantern_homebrew_get_name(const lantern_homebrew*value)
+function lantern_homebrew_get_package: const lantern_package*lantern_homebrew_get_package(const lantern_homebrew*value)
+function lantern_homebrew_get_packages_at: const lantern_package*lantern_homebrew_get_packages_at(const lantern_homebrew*value, size_t index)
+function lantern_homebrew_get_packages_count: size_t lantern_homebrew_get_packages_count(const lantern_homebrew*value)
+function lantern_homebrew_get_platform: lantern_str lantern_homebrew_get_platform(const lantern_homebrew*value)
+function lantern_homebrew_get_port: const lantern_port*lantern_homebrew_get_port(const lantern_homebrew*value)
+function lantern_homebrew_get_ratings_at: const lantern_rating*lantern_homebrew_get_ratings_at(const lantern_homebrew*value, size_t index)
+function lantern_homebrew_get_ratings_count: size_t lantern_homebrew_get_ratings_count(const lantern_homebrew*value)
+function lantern_homebrew_get_requires: const lantern_requires*lantern_homebrew_get_requires(const lantern_homebrew*value)
+function lantern_homebrew_get_screenshots_at: const lantern_image*lantern_homebrew_get_screenshots_at(const lantern_homebrew*value, size_t index)
+function lantern_homebrew_get_screenshots_count: size_t lantern_homebrew_get_screenshots_count(const lantern_homebrew*value)
+function lantern_homebrew_get_signature: const lantern_signature*lantern_homebrew_get_signature(const lantern_homebrew*value)
+function lantern_homebrew_get_source: lantern_str lantern_homebrew_get_source(const lantern_homebrew*value)
+function lantern_homebrew_get_summary: lantern_str lantern_homebrew_get_summary(const lantern_homebrew*value)
+function lantern_homebrew_get_system_id: lantern_str lantern_homebrew_get_system_id(const lantern_homebrew*value)
+function lantern_homebrew_get_tags_at: lantern_str lantern_homebrew_get_tags_at(const lantern_homebrew*value, size_t index)
+function lantern_homebrew_get_tags_count: size_t lantern_homebrew_get_tags_count(const lantern_homebrew*value)
+function lantern_homebrew_get_updated: lantern_str lantern_homebrew_get_updated(const lantern_homebrew*value)
+function lantern_homebrew_get_version: lantern_str lantern_homebrew_get_version(const lantern_homebrew*value)
+function lantern_homebrew_page_free: void lantern_homebrew_page_free(lantern_homebrew_page*value)
+function lantern_homebrew_page_get_items_at: const lantern_homebrew*lantern_homebrew_page_get_items_at(const lantern_homebrew_page*value, size_t index)
+function lantern_homebrew_page_get_items_count: size_t lantern_homebrew_page_get_items_count(const lantern_homebrew_page*value)
+function lantern_homebrew_page_get_next: lantern_str lantern_homebrew_page_get_next(const lantern_homebrew_page*value)
+function lantern_homebrew_page_get_total: bool lantern_homebrew_page_get_total(const lantern_homebrew_page*value, uint64_t*out)
+function lantern_image_get_external: bool lantern_image_get_external(const lantern_image*value, bool*out)
+function lantern_image_get_height: bool lantern_image_get_height(const lantern_image*value, uint64_t*out)
+function lantern_image_get_sha256: bool lantern_image_get_sha256(const lantern_image*value, uint8_t out[32])
+function lantern_image_get_url: lantern_str lantern_image_get_url(const lantern_image*value)
+function lantern_image_get_width: bool lantern_image_get_width(const lantern_image*value, uint64_t*out)
+function lantern_install_plan_free: void lantern_install_plan_free(lantern_install_plan*plan)
+function lantern_install_plan_get_ask_before_installer: bool lantern_install_plan_get_ask_before_installer(const lantern_install_plan*plan)
+function lantern_install_plan_get_consent_count: size_t lantern_install_plan_get_consent_count(const lantern_install_plan*plan)
+function lantern_install_plan_get_file: bool lantern_install_plan_get_file(const lantern_install_plan*plan, size_t index, lantern_planned_file*out)
+function lantern_install_plan_get_file_count: size_t lantern_install_plan_get_file_count(const lantern_install_plan*plan)
+function lantern_install_plan_get_placement: lantern_placement lantern_install_plan_get_placement(const lantern_install_plan*plan)
+function lantern_invitation_free: void lantern_invitation_free(lantern_invitation*value)
+function lantern_invitation_get_code: lantern_str lantern_invitation_get_code(const lantern_invitation*value)
+function lantern_invitation_get_created: lantern_str lantern_invitation_get_created(const lantern_invitation*value)
+function lantern_invitation_get_devices: bool lantern_invitation_get_devices(const lantern_invitation*value, uint64_t*out)
+function lantern_invitation_get_expires: lantern_str lantern_invitation_get_expires(const lantern_invitation*value)
+function lantern_invitation_get_id: lantern_str lantern_invitation_get_id(const lantern_invitation*value)
+function lantern_invitation_get_link: lantern_str lantern_invitation_get_link(const lantern_invitation*value)
+function lantern_invitation_get_note: lantern_str lantern_invitation_get_note(const lantern_invitation*value)
+function lantern_invitation_get_rating_cap: const lantern_rating_cap*lantern_invitation_get_rating_cap(const lantern_invitation*value)
+function lantern_invitation_get_scopes_at: lantern_str lantern_invitation_get_scopes_at(const lantern_invitation*value, size_t index)
+function lantern_invitation_get_scopes_count: size_t lantern_invitation_get_scopes_count(const lantern_invitation*value)
+function lantern_invitation_get_used: bool lantern_invitation_get_used(const lantern_invitation*value, uint64_t*out)
+function lantern_invitation_get_user: lantern_str lantern_invitation_get_user(const lantern_invitation*value)
+function lantern_invitations_free: void lantern_invitations_free(lantern_invitations*value)
+function lantern_invitations_get_items_at: const lantern_invitation*lantern_invitations_get_items_at(const lantern_invitations*value, size_t index)
+function lantern_invitations_get_items_count: size_t lantern_invitations_get_items_count(const lantern_invitations*value)
+function lantern_invitations_get_next: lantern_str lantern_invitations_get_next(const lantern_invitations*value)
+function lantern_invitations_get_total: bool lantern_invitations_get_total(const lantern_invitations*value, uint64_t*out)
+function lantern_is_homebrew_id: bool lantern_is_homebrew_id(const char*id)
+function lantern_is_invitation_code: bool lantern_is_invitation_code(const char*code)
+function lantern_is_pairing_code: bool lantern_is_pairing_code(const char*code)
+function lantern_is_platform_name: bool lantern_is_platform_name(const char*name)
+function lantern_launch_check_free: void lantern_launch_check_free(lantern_launch_check*check)
+function lantern_launch_check_get_issue: bool lantern_launch_check_get_issue(const lantern_launch_check*check, size_t index, lantern_launch_issue*out)
+function lantern_launch_check_get_issue_count: size_t lantern_launch_check_get_issue_count(const lantern_launch_check*check)
+function lantern_launch_check_get_ready: bool lantern_launch_check_get_ready(const lantern_launch_check*check)
+function lantern_launch_check_get_unverified: bool lantern_launch_check_get_unverified(const lantern_launch_check*check)
+function lantern_launch_check_run: lantern_status lantern_launch_check_run(const lantern_port*port, lantern_data_probe*probe, const lantern_allocator*allocator, lantern_launch_check**out, lantern_error*error)
+function lantern_manifest_digest: void lantern_manifest_digest(const lantern_package*package, uint8_t out[32])
+function lantern_manifest_entry_get_path: lantern_str lantern_manifest_entry_get_path(const lantern_manifest_entry*value)
+function lantern_manifest_entry_get_sha256: bool lantern_manifest_entry_get_sha256(const lantern_manifest_entry*value, uint8_t out[32])
+function lantern_manifest_entry_get_size: bool lantern_manifest_entry_get_size(const lantern_manifest_entry*value, uint64_t*out)
+function lantern_match_roots: lantern_root_match lantern_match_roots(const char*platform, const char*homebrew_id, const char*path)
+function lantern_package_get_arch_at: lantern_str lantern_package_get_arch_at(const lantern_package*value, size_t index)
+function lantern_package_get_arch_count: size_t lantern_package_get_arch_count(const lantern_package*value)
+function lantern_package_get_file: lantern_str lantern_package_get_file(const lantern_package*value)
+function lantern_package_get_format: lantern_str lantern_package_get_format(const lantern_package*value)
+function lantern_package_get_installed_size: bool lantern_package_get_installed_size(const lantern_package*value, uint64_t*out)
+function lantern_package_get_manifest_at: const lantern_manifest_entry*lantern_package_get_manifest_at(const lantern_package*value, size_t index)
+function lantern_package_get_manifest_count: size_t lantern_package_get_manifest_count(const lantern_package*value)
+function lantern_package_get_manifest_sha256: bool lantern_package_get_manifest_sha256(const lantern_package*value, uint8_t out[32])
+function lantern_package_get_path: lantern_str lantern_package_get_path(const lantern_package*value)
+function lantern_package_get_sha256: bool lantern_package_get_sha256(const lantern_package*value, uint8_t out[32])
+function lantern_package_get_signature: const lantern_signature*lantern_package_get_signature(const lantern_package*value)
+function lantern_package_get_signer_sha256: bool lantern_package_get_signer_sha256(const lantern_package*value, uint8_t out[32])
+function lantern_package_get_size: bool lantern_package_get_size(const lantern_package*value, uint64_t*out)
+function lantern_pairing_code_free: void lantern_pairing_code_free(lantern_pairing_code*value)
+function lantern_pairing_code_get_code: lantern_str lantern_pairing_code_get_code(const lantern_pairing_code*value)
+function lantern_pairing_code_get_expires: bool lantern_pairing_code_get_expires(const lantern_pairing_code*value, uint64_t*out)
+function lantern_pairing_code_get_interval: bool lantern_pairing_code_get_interval(const lantern_pairing_code*value, uint64_t*out)
+function lantern_pairing_code_get_poll: lantern_str lantern_pairing_code_get_poll(const lantern_pairing_code*value)
+function lantern_pairing_code_get_verify: lantern_str lantern_pairing_code_get_verify(const lantern_pairing_code*value)
+function lantern_pairing_code_get_verify_complete: lantern_str lantern_pairing_code_get_verify_complete(const lantern_pairing_code*value)
+function lantern_pairing_free: void lantern_pairing_free(lantern_pairing*pairing)
+function lantern_pairing_get_code: const lantern_pairing_code*lantern_pairing_get_code(const lantern_pairing*pairing)
+function lantern_pairing_get_fingerprint: lantern_str lantern_pairing_get_fingerprint(const lantern_pairing*pairing)
+function lantern_pairing_get_key: const lantern_device_key*lantern_pairing_get_key(const lantern_pairing*pairing)
+function lantern_pairing_get_spki: bool lantern_pairing_get_spki(const lantern_pairing*pairing, uint8_t out[32])
+function lantern_pairing_get_wait: uint32_t lantern_pairing_get_wait(const lantern_pairing*pairing)
+function lantern_pairing_token_free: void lantern_pairing_token_free(lantern_pairing_token*value)
+function lantern_pairing_token_get_bound: bool lantern_pairing_token_get_bound(const lantern_pairing_token*value, bool*out)
+function lantern_pairing_token_get_expires: bool lantern_pairing_token_get_expires(const lantern_pairing_token*value, uint64_t*out)
+function lantern_pairing_token_get_rating_cap: const lantern_rating_cap*lantern_pairing_token_get_rating_cap(const lantern_pairing_token*value)
+function lantern_pairing_token_get_scopes_at: lantern_str lantern_pairing_token_get_scopes_at(const lantern_pairing_token*value, size_t index)
+function lantern_pairing_token_get_scopes_count: size_t lantern_pairing_token_get_scopes_count(const lantern_pairing_token*value)
+function lantern_pairing_token_get_token: lantern_str lantern_pairing_token_get_token(const lantern_pairing_token*value)
+function lantern_parse_digest_field: lantern_digest_field lantern_parse_digest_field(const char*value, uint8_t out[32])
+function lantern_parse_http_date: bool lantern_parse_http_date(const char*text, int64_t*out)
+function lantern_parse_invitation_link: lantern_status lantern_parse_invitation_link(const char*link, lantern_invitation_link*out, lantern_error*error)
+function lantern_path_problem_text: const char*lantern_path_problem_text(lantern_path_problem problem)
+function lantern_pick_package: lantern_status lantern_pick_package(const lantern_homebrew*entry, const char*device_arch, const lantern_package**out, lantern_error*error)
+function lantern_pin_store_create: lantern_status lantern_pin_store_create(const lantern_pin_callbacks*callbacks, const lantern_allocator*allocator, lantern_pin_store**out, lantern_error*error)
+function lantern_pin_store_free: void lantern_pin_store_free(lantern_pin_store*store)
+function lantern_plan_install: lantern_status lantern_plan_install(const lantern_homebrew*entry, const lantern_package*package, const lantern_allocator*allocator, lantern_install_plan**out, lantern_error*error)
+function lantern_port_engine_get_license: lantern_str lantern_port_engine_get_license(const lantern_port_engine*value)
+function lantern_port_engine_get_name: lantern_str lantern_port_engine_get_name(const lantern_port_engine*value)
+function lantern_port_engine_get_source: lantern_str lantern_port_engine_get_source(const lantern_port_engine*value)
+function lantern_port_engine_get_version: lantern_str lantern_port_engine_get_version(const lantern_port_engine*value)
+function lantern_port_get_assets: lantern_str lantern_port_get_assets(const lantern_port*value)
+function lantern_port_get_data_root: lantern_str lantern_port_get_data_root(const lantern_port*value)
+function lantern_port_get_engine: const lantern_port_engine*lantern_port_get_engine(const lantern_port*value)
+function lantern_port_get_original: const lantern_port_original*lantern_port_get_original(const lantern_port*value)
+function lantern_port_get_requires_data_at: const lantern_required_data*lantern_port_get_requires_data_at(const lantern_port*value, size_t index)
+function lantern_port_get_requires_data_count: size_t lantern_port_get_requires_data_count(const lantern_port*value)
+function lantern_port_original_get_developer: lantern_str lantern_port_original_get_developer(const lantern_port_original*value)
+function lantern_port_original_get_name: lantern_str lantern_port_original_get_name(const lantern_port_original*value)
+function lantern_port_original_get_stores_at: const lantern_store*lantern_port_original_get_stores_at(const lantern_port_original*value, size_t index)
+function lantern_port_original_get_stores_count: size_t lantern_port_original_get_stores_count(const lantern_port_original*value)
+function lantern_port_original_get_title: const lantern_port_original_title*lantern_port_original_get_title(const lantern_port_original*value)
+function lantern_port_original_get_year: bool lantern_port_original_get_year(const lantern_port_original*value, uint64_t*out)
+function lantern_port_original_title_get_platform: lantern_str lantern_port_original_title_get_platform(const lantern_port_original_title*value)
+function lantern_port_original_title_get_title_id: lantern_str lantern_port_original_title_get_title_id(const lantern_port_original_title*value)
+function lantern_problem_free: void lantern_problem_free(lantern_problem*value)
+function lantern_problem_get_code: lantern_str lantern_problem_get_code(const lantern_problem*value)
+function lantern_problem_get_detail: lantern_str lantern_problem_get_detail(const lantern_problem*value)
+function lantern_problem_get_language: lantern_str lantern_problem_get_language(const lantern_problem*value)
+function lantern_problem_get_status: bool lantern_problem_get_status(const lantern_problem*value, uint64_t*out)
+function lantern_problem_get_title: lantern_str lantern_problem_get_title(const lantern_problem*value)
+function lantern_problem_get_type: lantern_str lantern_problem_get_type(const lantern_problem*value)
+function lantern_random_create: lantern_status lantern_random_create(const lantern_random_callbacks*callbacks, const lantern_allocator*allocator, lantern_random**out, lantern_error*error)
+function lantern_random_create_system: lantern_status lantern_random_create_system(const lantern_allocator*allocator, lantern_random**out, lantern_error*error)
+function lantern_random_free: void lantern_random_free(lantern_random*random)
+function lantern_rating_cap_get_age: bool lantern_rating_cap_get_age(const lantern_rating_cap*value, uint64_t*out)
+function lantern_rating_cap_get_rating: lantern_str lantern_rating_cap_get_rating(const lantern_rating_cap*value)
+function lantern_rating_cap_get_system: lantern_str lantern_rating_cap_get_system(const lantern_rating_cap*value)
+function lantern_rating_cap_get_unrated: lantern_str lantern_rating_cap_get_unrated(const lantern_rating_cap*value)
+function lantern_rating_get_rating: lantern_str lantern_rating_get_rating(const lantern_rating*value)
+function lantern_rating_get_system: lantern_str lantern_rating_get_system(const lantern_rating*value)
+function lantern_read_admin_devices: lantern_status lantern_read_admin_devices(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_admin_devices**out, lantern_error*error)
+function lantern_read_admin_pairings: lantern_status lantern_read_admin_pairings(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_admin_pairings**out, lantern_error*error)
+function lantern_read_admin_user: lantern_status lantern_read_admin_user(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_admin_user**out, lantern_error*error)
+function lantern_read_admin_users: lantern_status lantern_read_admin_users(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_admin_users**out, lantern_error*error)
+function lantern_read_apps_page: lantern_status lantern_read_apps_page(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_apps_page**out, lantern_error*error)
+function lantern_read_changes: lantern_status lantern_read_changes(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_changes**out, lantern_error*error)
+function lantern_read_cheat_set: lantern_status lantern_read_cheat_set(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_cheat_set**out, lantern_error*error)
+function lantern_read_cheat_sets: lantern_status lantern_read_cheat_sets(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_cheat_sets**out, lantern_error*error)
+function lantern_read_discovery_datagram: lantern_status lantern_read_discovery_datagram(const uint8_t*bytes, size_t size, const lantern_allocator*allocator, lantern_discovery_reply**out, lantern_error*error)
+function lantern_read_discovery_reply: lantern_status lantern_read_discovery_reply(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_discovery_reply**out, lantern_error*error)
+function lantern_read_handshake: lantern_status lantern_read_handshake(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_handshake**out, lantern_error*error)
+function lantern_read_homebrew: lantern_status lantern_read_homebrew(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_homebrew**out, lantern_error*error)
+function lantern_read_homebrew_page: lantern_status lantern_read_homebrew_page(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_homebrew_page**out, lantern_error*error)
+function lantern_read_invitation: lantern_status lantern_read_invitation(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_invitation**out, lantern_error*error)
+function lantern_read_invitations: lantern_status lantern_read_invitations(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_invitations**out, lantern_error*error)
+function lantern_read_pairing_code: lantern_status lantern_read_pairing_code(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_pairing_code**out, lantern_error*error)
+function lantern_read_pairing_token: lantern_status lantern_read_pairing_token(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_pairing_token**out, lantern_error*error)
+function lantern_read_problem: lantern_status lantern_read_problem(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_problem**out, lantern_error*error)
+function lantern_read_save: lantern_status lantern_read_save(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_save**out, lantern_error*error)
+function lantern_read_saves: lantern_status lantern_read_saves(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_saves**out, lantern_error*error)
+function lantern_read_sections: lantern_status lantern_read_sections(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_sections**out, lantern_error*error)
+function lantern_read_title: lantern_status lantern_read_title(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_title**out, lantern_error*error)
+function lantern_read_title_changes: lantern_status lantern_read_title_changes(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_title_changes**out, lantern_error*error)
+function lantern_read_title_request: lantern_status lantern_read_title_request(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_title_request**out, lantern_error*error)
+function lantern_read_title_requests: lantern_status lantern_read_title_requests(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_title_requests**out, lantern_error*error)
+function lantern_read_titles: lantern_status lantern_read_titles(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_titles**out, lantern_error*error)
+function lantern_read_upload_session: lantern_status lantern_read_upload_session(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_upload_session**out, lantern_error*error)
+function lantern_removed_title_get_platform: lantern_str lantern_removed_title_get_platform(const lantern_removed_title*value)
+function lantern_removed_title_get_title_id: lantern_str lantern_removed_title_get_title_id(const lantern_removed_title*value)
+function lantern_required_data_get_accept_at: const lantern_accepted_version*lantern_required_data_get_accept_at(const lantern_required_data*value, size_t index)
+function lantern_required_data_get_accept_count: size_t lantern_required_data_get_accept_count(const lantern_required_data*value)
+function lantern_required_data_get_hint: lantern_str lantern_required_data_get_hint(const lantern_required_data*value)
+function lantern_required_data_get_one_of_at: const lantern_required_file*lantern_required_data_get_one_of_at(const lantern_required_data*value, size_t index, size_t item)
+function lantern_required_data_get_one_of_count: size_t lantern_required_data_get_one_of_count(const lantern_required_data*value)
+function lantern_required_data_get_one_of_size: size_t lantern_required_data_get_one_of_size(const lantern_required_data*value, size_t index)
+function lantern_required_data_get_optional: bool lantern_required_data_get_optional(const lantern_required_data*value, bool*out)
+function lantern_required_data_get_path: lantern_str lantern_required_data_get_path(const lantern_required_data*value)
+function lantern_required_data_get_size: bool lantern_required_data_get_size(const lantern_required_data*value, uint64_t*out)
+function lantern_required_file_get_accept_at: const lantern_accepted_version*lantern_required_file_get_accept_at(const lantern_required_file*value, size_t index)
+function lantern_required_file_get_accept_count: size_t lantern_required_file_get_accept_count(const lantern_required_file*value)
+function lantern_required_file_get_hint: lantern_str lantern_required_file_get_hint(const lantern_required_file*value)
+function lantern_required_file_get_optional: bool lantern_required_file_get_optional(const lantern_required_file*value, bool*out)
+function lantern_required_file_get_path: lantern_str lantern_required_file_get_path(const lantern_required_file*value)
+function lantern_required_file_get_size: bool lantern_required_file_get_size(const lantern_required_file*value, uint64_t*out)
+function lantern_requires_check_free: void lantern_requires_check_free(lantern_requires_check*check)
+function lantern_requires_check_get_condition: bool lantern_requires_check_get_condition(const lantern_requires_check*check, size_t index, lantern_condition*out)
+function lantern_requires_check_get_condition_count: size_t lantern_requires_check_get_condition_count(const lantern_requires_check*check)
+function lantern_requires_check_get_offer: lantern_offer lantern_requires_check_get_offer(const lantern_requires_check*check)
+function lantern_requires_get_extra_at: bool lantern_requires_get_extra_at(const lantern_requires*value, size_t index, lantern_str*key, lantern_str*json)
+function lantern_requires_get_extra_count: size_t lantern_requires_get_extra_count(const lantern_requires*value)
+function lantern_requires_get_gpu_at: lantern_str lantern_requires_get_gpu_at(const lantern_requires*value, size_t index)
+function lantern_requires_get_gpu_count: size_t lantern_requires_get_gpu_count(const lantern_requires*value)
+function lantern_requires_get_homebrew_at: const lantern_dependency*lantern_requires_get_homebrew_at(const lantern_requires*value, size_t index)
+function lantern_requires_get_homebrew_count: size_t lantern_requires_get_homebrew_count(const lantern_requires*value)
+function lantern_requires_get_min: const lantern_requires_min*lantern_requires_get_min(const lantern_requires*value)
+function lantern_requires_get_text: lantern_str lantern_requires_get_text(const lantern_requires*value)
+function lantern_requires_min_get_members_at: bool lantern_requires_min_get_members_at(const lantern_requires_min*value, size_t index, lantern_str*key, lantern_str*json)
+function lantern_requires_min_get_members_count: size_t lantern_requires_min_get_members_count(const lantern_requires_min*value)
+function lantern_response_body: bool lantern_response_body(lantern_response*response, const uint8_t*bytes, size_t size)
+function lantern_response_header: bool lantern_response_header(lantern_response*response, const char*name, size_t name_size, const char*value, size_t value_size)
+function lantern_response_status: bool lantern_response_status(lantern_response*response, uint16_t status)
+function lantern_save_free: void lantern_save_free(lantern_save*value)
+function lantern_save_get_created: lantern_str lantern_save_get_created(const lantern_save*value)
+function lantern_save_get_device: lantern_str lantern_save_get_device(const lantern_save*value)
+function lantern_save_get_game_version_code: bool lantern_save_get_game_version_code(const lantern_save*value, uint64_t*out)
+function lantern_save_get_kind: lantern_str lantern_save_get_kind(const lantern_save*value)
+function lantern_save_get_note: lantern_str lantern_save_get_note(const lantern_save*value)
+function lantern_save_get_platform: lantern_str lantern_save_get_platform(const lantern_save*value)
+function lantern_save_get_profile: lantern_str lantern_save_get_profile(const lantern_save*value)
+function lantern_save_get_save_id: lantern_str lantern_save_get_save_id(const lantern_save*value)
+function lantern_save_get_sha256: bool lantern_save_get_sha256(const lantern_save*value, uint8_t out[32])
+function lantern_save_get_size: bool lantern_save_get_size(const lantern_save*value, uint64_t*out)
+function lantern_save_get_slot: lantern_str lantern_save_get_slot(const lantern_save*value)
+function lantern_save_get_title_id: lantern_str lantern_save_get_title_id(const lantern_save*value)
+function lantern_saves_free: void lantern_saves_free(lantern_saves*value)
+function lantern_saves_get_saves_at: const lantern_save*lantern_saves_get_saves_at(const lantern_saves*value, size_t index)
+function lantern_saves_get_saves_count: size_t lantern_saves_get_saves_count(const lantern_saves*value)
+function lantern_section_get_apps_at: lantern_str lantern_section_get_apps_at(const lantern_section*value, size_t index)
+function lantern_section_get_apps_count: size_t lantern_section_get_apps_count(const lantern_section*value)
+function lantern_section_get_id: lantern_str lantern_section_get_id(const lantern_section*value)
+function lantern_section_get_title: lantern_str lantern_section_get_title(const lantern_section*value)
+function lantern_sections_free: void lantern_sections_free(lantern_sections*value)
+function lantern_sections_get_sections_at: const lantern_section*lantern_sections_get_sections_at(const lantern_sections*value, size_t index)
+function lantern_sections_get_sections_count: size_t lantern_sections_get_sections_count(const lantern_sections*value)
+function lantern_sha256: void lantern_sha256(const uint8_t*bytes, size_t size, uint8_t out[32])
+function lantern_short_form: void lantern_short_form(const uint8_t digest[32], char out[20])
+function lantern_sign_components: lantern_status lantern_sign_components(const lantern_device_key*key, const lantern_signed_components*components, int64_t created, const char*nonce, const lantern_allocator*allocator, lantern_string**signature_input, lantern_string**signature, lantern_error*error)
+function lantern_signature_base: lantern_status lantern_signature_base(const lantern_signed_components*components, int64_t created, const char*nonce, const char*keyid, const lantern_allocator*allocator, lantern_string**out, lantern_error*error)
+function lantern_signature_get_alg: lantern_str lantern_signature_get_alg(const lantern_signature*value)
+function lantern_signature_get_public_key: lantern_str lantern_signature_get_public_key(const lantern_signature*value)
+function lantern_signature_get_value: lantern_str lantern_signature_get_value(const lantern_signature*value)
+function lantern_spec_draft: const char*lantern_spec_draft(void)
+function lantern_spki_sha256: lantern_status lantern_spki_sha256(const uint8_t*certificate_der, size_t size, uint8_t out[32], lantern_error*error)
+function lantern_spki_sha256_pem: lantern_status lantern_spki_sha256_pem(const char*pem, uint8_t out[32], lantern_error*error)
+function lantern_status_name: const char*lantern_status_name(lantern_status status)
+function lantern_store_get_id: lantern_str lantern_store_get_id(const lantern_store*value)
+function lantern_store_get_store: lantern_str lantern_store_get_store(const lantern_store*value)
+function lantern_store_get_url: lantern_str lantern_store_get_url(const lantern_store*value)
+function lantern_string_free: void lantern_string_free(lantern_string*string)
+function lantern_string_view: lantern_str lantern_string_view(const lantern_string*string)
+function lantern_strings_at: lantern_str lantern_strings_at(const lantern_strings*strings, size_t index)
+function lantern_strings_count: size_t lantern_strings_count(const lantern_strings*strings)
+function lantern_strings_free: void lantern_strings_free(lantern_strings*strings)
+function lantern_target_uri: lantern_status lantern_target_uri(const char*url, const lantern_allocator*allocator, lantern_string**out, lantern_error*error)
+function lantern_title_changes_free: void lantern_title_changes_free(lantern_title_changes*value)
+function lantern_title_changes_get_more: bool lantern_title_changes_get_more(const lantern_title_changes*value, bool*out)
+function lantern_title_changes_get_removed_at: const lantern_removed_title*lantern_title_changes_get_removed_at(const lantern_title_changes*value, size_t index)
+function lantern_title_changes_get_removed_count: size_t lantern_title_changes_get_removed_count(const lantern_title_changes*value)
+function lantern_title_changes_get_since: lantern_str lantern_title_changes_get_since(const lantern_title_changes*value)
+function lantern_title_changes_get_titles_at: const lantern_title*lantern_title_changes_get_titles_at(const lantern_title_changes*value, size_t index)
+function lantern_title_changes_get_titles_count: size_t lantern_title_changes_get_titles_count(const lantern_title_changes*value)
+function lantern_title_free: void lantern_title_free(lantern_title*value)
+function lantern_title_get_atlas: lantern_str lantern_title_get_atlas(const lantern_title*value)
+function lantern_title_get_banner: const lantern_image*lantern_title_get_banner(const lantern_title*value)
+function lantern_title_get_description: lantern_str lantern_title_get_description(const lantern_title*value)
+function lantern_title_get_developer: lantern_str lantern_title_get_developer(const lantern_title*value)
+function lantern_title_get_genres_at: lantern_str lantern_title_get_genres_at(const lantern_title*value, size_t index)
+function lantern_title_get_genres_count: size_t lantern_title_get_genres_count(const lantern_title*value)
+function lantern_title_get_icon: const lantern_image*lantern_title_get_icon(const lantern_title*value)
+function lantern_title_get_language: lantern_str lantern_title_get_language(const lantern_title*value)
+function lantern_title_get_languages_at: lantern_str lantern_title_get_languages_at(const lantern_title*value, size_t index)
+function lantern_title_get_languages_count: size_t lantern_title_get_languages_count(const lantern_title*value)
+function lantern_title_get_name: lantern_str lantern_title_get_name(const lantern_title*value)
+function lantern_title_get_platform: lantern_str lantern_title_get_platform(const lantern_title*value)
+function lantern_title_get_players: const lantern_title_players*lantern_title_get_players(const lantern_title*value)
+function lantern_title_get_publisher: lantern_str lantern_title_get_publisher(const lantern_title*value)
+function lantern_title_get_ratings_at: const lantern_rating*lantern_title_get_ratings_at(const lantern_title*value, size_t index)
+function lantern_title_get_ratings_count: size_t lantern_title_get_ratings_count(const lantern_title*value)
+function lantern_title_get_release: lantern_str lantern_title_get_release(const lantern_title*value)
+function lantern_title_get_screenshots_at: const lantern_image*lantern_title_get_screenshots_at(const lantern_title*value, size_t index)
+function lantern_title_get_screenshots_count: size_t lantern_title_get_screenshots_count(const lantern_title*value)
+function lantern_title_get_summary: lantern_str lantern_title_get_summary(const lantern_title*value)
+function lantern_title_get_tags_at: lantern_str lantern_title_get_tags_at(const lantern_title*value, size_t index)
+function lantern_title_get_tags_count: size_t lantern_title_get_tags_count(const lantern_title*value)
+function lantern_title_get_title_id: lantern_str lantern_title_get_title_id(const lantern_title*value)
+function lantern_title_get_updated: lantern_str lantern_title_get_updated(const lantern_title*value)
+function lantern_title_get_video: const lantern_title_video*lantern_title_get_video(const lantern_title*value)
+function lantern_title_players_get_max: bool lantern_title_players_get_max(const lantern_title_players*value, uint64_t*out)
+function lantern_title_players_get_min: bool lantern_title_players_get_min(const lantern_title_players*value, uint64_t*out)
+function lantern_title_players_get_online: bool lantern_title_players_get_online(const lantern_title_players*value, bool*out)
+function lantern_title_players_get_online_max: bool lantern_title_players_get_online_max(const lantern_title_players*value, uint64_t*out)
+function lantern_title_request_free: void lantern_title_request_free(lantern_title_request*value)
+function lantern_title_request_get_created: lantern_str lantern_title_request_get_created(const lantern_title_request*value)
+function lantern_title_request_get_id: lantern_str lantern_title_request_get_id(const lantern_title_request*value)
+function lantern_title_request_get_name: lantern_str lantern_title_request_get_name(const lantern_title_request*value)
+function lantern_title_request_get_platform: lantern_str lantern_title_request_get_platform(const lantern_title_request*value)
+function lantern_title_request_get_status: lantern_str lantern_title_request_get_status(const lantern_title_request*value)
+function lantern_title_request_get_title_id: lantern_str lantern_title_request_get_title_id(const lantern_title_request*value)
+function lantern_title_requests_free: void lantern_title_requests_free(lantern_title_requests*value)
+function lantern_title_requests_get_requests_at: const lantern_title_request*lantern_title_requests_get_requests_at(const lantern_title_requests*value, size_t index)
+function lantern_title_requests_get_requests_count: size_t lantern_title_requests_get_requests_count(const lantern_title_requests*value)
+function lantern_title_video_get_external: bool lantern_title_video_get_external(const lantern_title_video*value, bool*out)
+function lantern_title_video_get_url: lantern_str lantern_title_video_get_url(const lantern_title_video*value)
+function lantern_titles_free: void lantern_titles_free(lantern_titles*value)
+function lantern_titles_get_titles_at: const lantern_title*lantern_titles_get_titles_at(const lantern_titles*value, size_t index)
+function lantern_titles_get_titles_count: size_t lantern_titles_get_titles_count(const lantern_titles*value)
+function lantern_titles_get_unknown_at: lantern_str lantern_titles_get_unknown_at(const lantern_titles*value, size_t index)
+function lantern_titles_get_unknown_count: size_t lantern_titles_get_unknown_count(const lantern_titles*value)
+function lantern_transport_create: lantern_status lantern_transport_create(const lantern_transport_callbacks*callbacks, const lantern_allocator*allocator, lantern_transport**out, lantern_error*error)
+function lantern_transport_create_curl: lantern_status lantern_transport_create_curl(const lantern_curl_options*options, const lantern_allocator*allocator, lantern_transport**out, lantern_error*error)
+function lantern_transport_create_mbedtls: lantern_status lantern_transport_create_mbedtls(const lantern_mbedtls_options*options, const lantern_allocator*allocator, lantern_transport**out, lantern_error*error)
+function lantern_transport_free: void lantern_transport_free(lantern_transport*transport)
+function lantern_trust_accept: bool lantern_trust_accept(lantern_trust*trust, const uint8_t*spki_der, size_t size, bool ca_verified)
+function lantern_trust_accept_certificate: bool lantern_trust_accept_certificate(lantern_trust*trust, const uint8_t*certificate_der, size_t size, bool ca_verified)
+function lantern_trust_allow_unverified: void lantern_trust_allow_unverified(lantern_trust*trust)
+function lantern_trust_create: lantern_status lantern_trust_create(const lantern_allocator*allocator, lantern_trust**out, lantern_error*error)
+function lantern_trust_free: void lantern_trust_free(lantern_trust*trust)
+function lantern_trust_get_generation: uint32_t lantern_trust_get_generation(const lantern_trust*trust)
+function lantern_trust_get_mode: lantern_trust_mode lantern_trust_get_mode(const lantern_trust*trust)
+function lantern_trust_get_pin: bool lantern_trust_get_pin(const lantern_trust*trust, uint8_t out[32])
+function lantern_trust_get_seen: bool lantern_trust_get_seen(const lantern_trust*trust, uint8_t out[32])
+function lantern_trust_pin: void lantern_trust_pin(lantern_trust*trust, const uint8_t spki_sha256[32])
+function lantern_trust_require_ca: void lantern_trust_require_ca(lantern_trust*trust)
+function lantern_udp_socket_create: lantern_status lantern_udp_socket_create(const lantern_udp_callbacks*callbacks, const lantern_allocator*allocator, lantern_udp_socket**out, lantern_error*error)
+function lantern_udp_socket_free: void lantern_udp_socket_free(lantern_udp_socket*socket)
+function lantern_upload_progress_create: lantern_status lantern_upload_progress_create(const lantern_allocator*allocator, lantern_upload_progress**out, lantern_error*error)
+function lantern_upload_progress_free: void lantern_upload_progress_free(lantern_upload_progress*progress)
+function lantern_upload_progress_load: lantern_status lantern_upload_progress_load(lantern_upload_progress*progress, const char*json, size_t size, lantern_error*error)
+function lantern_upload_progress_offset: uint64_t lantern_upload_progress_offset(const lantern_upload_progress*progress)
+function lantern_upload_progress_reset: void lantern_upload_progress_reset(lantern_upload_progress*progress)
+function lantern_upload_progress_save: lantern_status lantern_upload_progress_save(const lantern_upload_progress*progress, lantern_string**out, lantern_error*error)
+function lantern_upload_progress_url: lantern_str lantern_upload_progress_url(const lantern_upload_progress*progress)
+function lantern_upload_session_free: void lantern_upload_session_free(lantern_upload_session*value)
+function lantern_upload_session_get_chunk_size: bool lantern_upload_session_get_chunk_size(const lantern_upload_session*value, uint64_t*out)
+function lantern_upload_session_get_expires: lantern_str lantern_upload_session_get_expires(const lantern_upload_session*value)
+function lantern_upload_session_get_offset: bool lantern_upload_session_get_offset(const lantern_upload_session*value, uint64_t*out)
+function lantern_upload_session_get_upload: lantern_str lantern_upload_session_get_upload(const lantern_upload_session*value)
+function lantern_upload_source_create: lantern_status lantern_upload_source_create(const lantern_upload_callbacks*callbacks, const lantern_allocator*allocator, lantern_upload_source**out, lantern_error*error)
+function lantern_upload_source_free: void lantern_upload_source_free(lantern_upload_source*source)
+function lantern_verify_package_signature: lantern_status lantern_verify_package_signature(const lantern_homebrew*entry, const lantern_package*package, lantern_package_signature*out, lantern_error*error)
+function lantern_version: uint32_t lantern_version(void)
+function lantern_version_string: const char*lantern_version_string(void)
+opaque lantern_accepted_version
+opaque lantern_admin_device
+opaque lantern_admin_devices
+opaque lantern_admin_pairing
+opaque lantern_admin_pairings
+opaque lantern_admin_user
+opaque lantern_admin_users
+opaque lantern_app
+opaque lantern_apps_page
+opaque lantern_changes
+opaque lantern_cheat_set
+opaque lantern_cheat_sets
+opaque lantern_client
+opaque lantern_clock
+opaque lantern_credential_store
+opaque lantern_credentials_sink
+opaque lantern_data_probe
+opaque lantern_dependency
+opaque lantern_deprecation_log
+opaque lantern_device_key
+opaque lantern_discovery_reply
+opaque lantern_download_sink
+opaque lantern_download_state
+opaque lantern_handshake
+opaque lantern_handshake_account
+opaque lantern_handshake_auth
+opaque lantern_handshake_features
+opaque lantern_handshake_limits
+opaque lantern_handshake_software
+opaque lantern_homebrew
+opaque lantern_homebrew_page
+opaque lantern_image
+opaque lantern_install_plan
+opaque lantern_invitation
+opaque lantern_invitations
+opaque lantern_launch_check
+opaque lantern_manifest_entry
+opaque lantern_package
+opaque lantern_pairing
+opaque lantern_pairing_code
+opaque lantern_pairing_token
+opaque lantern_pin_store
+opaque lantern_port
+opaque lantern_port_engine
+opaque lantern_port_original
+opaque lantern_port_original_title
+opaque lantern_problem
+opaque lantern_random
+opaque lantern_rating
+opaque lantern_rating_cap
+opaque lantern_removed_title
+opaque lantern_required_data
+opaque lantern_required_file
+opaque lantern_requires
+opaque lantern_requires_check
+opaque lantern_requires_min
+opaque lantern_response
+opaque lantern_save
+opaque lantern_saves
+opaque lantern_section
+opaque lantern_sections
+opaque lantern_signature
+opaque lantern_store
+opaque lantern_string
+opaque lantern_strings
+opaque lantern_title
+opaque lantern_title_changes
+opaque lantern_title_players
+opaque lantern_title_request
+opaque lantern_title_requests
+opaque lantern_title_video
+opaque lantern_titles
+opaque lantern_transport
+opaque lantern_trust
+opaque lantern_udp_socket
+opaque lantern_upload_progress
+opaque lantern_upload_session
+opaque lantern_upload_source
+struct lantern_admin_pairing_decision: size_t struct_size; const char*decision; const char*user; const char*const*scopes; size_t scope_count; const lantern_rating_cap_input*rating_cap
+struct lantern_admin_user_create: size_t struct_size; const char*name; const char*const*scopes; size_t scope_count; const char*state
+struct lantern_admin_user_update: size_t struct_size; const char*state; const char*const*scopes; size_t scope_count
+struct lantern_allocator: size_t struct_size; void*user; void*(*allocate)(void*user, size_t size, size_t alignment); void(*deallocate)(void*user, void*pointer, size_t size, size_t alignment)
+struct lantern_apps_query: size_t struct_size; const char*platform; const char*type; const char*title_id; const char*q; const char*sort; uint32_t page_size; const char*cursor
+struct lantern_cheat_write: size_t struct_size; const char*platform; const char*title_id; const char*build_id; const char*source; const char*note; const char*text
+struct lantern_cheats_query: size_t struct_size; const char*platform; const char*title_id; const char*build_id
+struct lantern_client_config: size_t struct_size; const char*origin; const char*user_agent; const char*platform; const char*accept_language; lantern_transport*transport; lantern_random*random; lantern_clock*clock; lantern_trust*trust; lantern_deprecation_log*deprecations; const lantern_allocator*allocator; const lantern_limits*limits; size_t max_error_body
+struct lantern_clock_callbacks: size_t struct_size; void*user; int64_t(*unix_seconds)(void*user); void(*release)(void*user)
+struct lantern_condition: size_t struct_size; lantern_str key; lantern_str detail; lantern_condition_state state
+struct lantern_credential_callbacks: size_t struct_size; void*user; lantern_status(*load)(void*user, lantern_str uid, lantern_credentials_sink*sink); lantern_status(*store)(void*user, lantern_str uid, const lantern_credentials*credentials); lantern_status(*erase)(void*user, lantern_str uid); void(*release)(void*user)
+struct lantern_credentials: size_t struct_size; lantern_str token; bool has_key; uint8_t key_seed[32]; bool has_spki; uint8_t spki[32]
+struct lantern_curl_options: size_t struct_size; lantern_trust*trust; const char*ca_file; uint32_t connect_timeout_ms; uint32_t stall_timeout_s
+struct lantern_data_probe_callbacks: size_t struct_size; void*user; lantern_status(*size)(void*user, lantern_str path, uint64_t*size, bool*present); lantern_status(*sha256)(void*user, lantern_str path, uint8_t out[32]); void(*release)(void*user)
+struct lantern_datagram: size_t size; char address[64]; uint16_t port
+struct lantern_deprecation_callbacks: size_t struct_size; void*user; void(*deprecated)(void*user, lantern_str url, lantern_str deprecation, lantern_str sunset); void(*release)(void*user)
+struct lantern_device_facts: size_t struct_size; const lantern_version_fact*versions; size_t version_count; bool has_ram_mb; uint64_t ram_mb; bool has_screen; uint32_t screen_width; uint32_t screen_height; bool has_gpus; const char*const*gpus; size_t gpu_count
+struct lantern_discovered_server: size_t struct_size; lantern_str address; lantern_str origin; const lantern_discovery_reply*reply
+struct lantern_discovery_options: size_t struct_size; const char*address; uint16_t port; uint32_t wait_ms; uint32_t attempts; const lantern_limits*limits
+struct lantern_download_callbacks: size_t struct_size; void*user; lantern_status(*write)(void*user, const uint8_t*bytes, size_t size); lantern_status(*restart)(void*user); void(*release)(void*user)
+struct lantern_download_target: size_t struct_size; const char*url; uint64_t size; uint8_t sha256[32]
+struct lantern_error: size_t struct_size; lantern_status status; lantern_code code; lantern_code effective_code; uint16_t http_status; uint32_t retry_after; char code_text[33]; char title[97]; char detail[201]
+struct lantern_header: lantern_str name; lantern_str value
+struct lantern_homebrew_query: size_t struct_size; const char*platform; const char*q; const char*kind; const char*genre; uint32_t page_size; const char*cursor
+struct lantern_homebrew_updates_request: size_t struct_size; const lantern_installed_homebrew*installed; size_t installed_count
+struct lantern_installed_app: const char*app_id; uint64_t version_code
+struct lantern_installed_homebrew: const char*id; uint64_t build
+struct lantern_installed_system_id: const char*id; const char*system_id
+struct lantern_invitation_create: size_t struct_size; const char*user; const char*const*scopes; size_t scope_count; const char*expires; uint64_t devices; const lantern_rating_cap_input*rating_cap; const char*note
+struct lantern_invitation_link: size_t struct_size; char code[33]; bool has_spki; uint8_t spki[32]
+struct lantern_launch_issue: size_t struct_size; lantern_str path; lantern_str hint; lantern_data_issue issue; bool in_group
+struct lantern_limits: size_t struct_size; size_t max_document; size_t max_depth; size_t max_string; size_t max_memory
+struct lantern_mbedtls_options: size_t struct_size; lantern_random*random; lantern_trust*trust; const char*ca_pem; uint32_t timeout_ms
+struct lantern_missing_request: size_t struct_size; const lantern_installed_app*installed; size_t installed_count; const char*const*want; size_t want_count
+struct lantern_package_signature: size_t struct_size; bool is_signed; uint8_t public_key[32]
+struct lantern_page_query: size_t struct_size; uint32_t page_size; const char*cursor
+struct lantern_pairing_options: size_t struct_size; const char*device; const char*const*scopes; size_t scope_count; const char*invitation; bool bearer_only
+struct lantern_pin: bool is_signed; uint8_t public_key[32]
+struct lantern_pin_callbacks: size_t struct_size; void*user; lantern_status(*load)(void*user, lantern_str platform, lantern_str id, lantern_pin*out, bool*found); lantern_status(*store)(void*user, lantern_str platform, lantern_str id, const lantern_pin*pin); void(*release)(void*user)
+struct lantern_pin_check: size_t struct_size; lantern_pin_verdict verdict; bool has_pinned; lantern_pin pinned; lantern_pin offered; bool needs_consent
+struct lantern_planned_file: size_t struct_size; lantern_str path; uint64_t size; uint8_t sha256[32]; bool needs_consent
+struct lantern_random_callbacks: size_t struct_size; void*user; lantern_status(*fill)(void*user, uint8_t*out, size_t size); void(*release)(void*user)
+struct lantern_rating_cap_input: size_t struct_size; bool has_age; uint64_t age; const char*system; const char*rating; const char*unrated
+struct lantern_request: size_t struct_size; lantern_method method; lantern_str method_name; lantern_str url; const lantern_header*headers; size_t header_count; const uint8_t*body; size_t body_size
+struct lantern_request_create: size_t struct_size; const char*platform; const char*title_id
+struct lantern_save_info: size_t struct_size; const char*platform; const char*kind; const char*slot; bool has_game_version_code; uint64_t game_version_code; const char*profile; const char*note
+struct lantern_signature_check: size_t struct_size; const char*method; const char*target_uri; const char*authorization; const char*content_digest; bool has_body; const char*signature_input; const char*signature; uint8_t public_key[32]; int64_t now; uint32_t skew; bool has_body_sha256; uint8_t body_sha256[32]
+struct lantern_signature_verdict: size_t struct_size; lantern_code code; char nonce[65]; char keyid[65]
+struct lantern_signed_components: size_t struct_size; const char*method; const char*target_uri; const char*authorization; const char*content_digest
+struct lantern_str: const char*data; size_t size
+struct lantern_transport_callbacks: size_t struct_size; void*user; lantern_status(*send)(void*user, const lantern_request*request, lantern_response*response, lantern_error*error); void(*release)(void*user)
+struct lantern_udp_callbacks: size_t struct_size; void*user; lantern_status(*send_to)(void*user, const char*address, uint16_t port, const uint8_t*bytes, size_t size); lantern_status(*receive)(void*user, uint8_t*buffer, size_t capacity, uint32_t timeout_ms, lantern_datagram*out, bool*received); void(*release)(void*user)
+struct lantern_upload_callbacks: size_t struct_size; void*user; lantern_status(*read)(void*user, uint64_t offset, uint8_t*out, size_t size); void(*release)(void*user)
+struct lantern_upload_request: size_t struct_size; uint64_t size; uint8_t sha256[32]; const char*kind; const char*slot; bool has_game_version_code; uint64_t game_version_code; const char*profile; const char*note
+struct lantern_version_fact: const char*key; const char*value
+typedef lantern_code: int32_t
+typedef lantern_condition_state: int32_t
+typedef lantern_data_issue: int32_t
+typedef lantern_digest_field: int32_t
+typedef lantern_family: int32_t
+typedef lantern_method: int32_t
+typedef lantern_offer: int32_t
+typedef lantern_path_problem: int32_t
+typedef lantern_pin_verdict: int32_t
+typedef lantern_placement: int32_t
+typedef lantern_poll_state: int32_t
+typedef lantern_root_match: int32_t
+typedef lantern_status: int32_t
+typedef lantern_transport_kind: int32_t
+typedef lantern_trust_mode: int32_t
