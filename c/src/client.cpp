@@ -111,6 +111,12 @@ lantern::UploadRequest upload_request(const lantern_upload_request& r, lantern::
         out.game_version_code = r.game_version_code;
     out.profile = text(r.profile);
     out.note    = text(r.note);
+    if (r.encryption_scheme != nullptr || r.encryption_key_id != nullptr)
+    {
+        out.encryption.emplace(allocator);
+        out.encryption->scheme = text(r.encryption_scheme);
+        out.encryption->key_id = text(r.encryption_key_id);
+    }
     return out;
 }
 
@@ -192,7 +198,7 @@ LANTERN_API const lantern_handshake* lantern_client_server(const lantern_client*
 
 LANTERN_API uint64_t lantern_client_offers(const lantern_client* client, lantern_family family)
 {
-    if (client == nullptr || family < LANTERN_FAMILY_LIBRARY || family > LANTERN_FAMILY_ADMIN)
+    if (client == nullptr || family < LANTERN_FAMILY_LIBRARY || family > LANTERN_FAMILY_ENCRYPTED_SAVES)
         return 0;
     return client->client.offers(static_cast<lantern::Family>(family));
 }
@@ -425,7 +431,7 @@ LANTERN_API lantern_status lantern_client_download(lantern_client* client,
 {
     if (client == nullptr || target == nullptr || state == nullptr || sink == nullptr)
         return usage(error, "a NULL argument");
-    return done(client->client.download(target_of(copy_struct(target)), state->state, *sink), error);
+    return done(client->client.download(target_of(copy_struct(target)), state->state, *sink->impl), error);
 }
 
 LANTERN_API lantern_status lantern_client_homebrew(lantern_client* client,
@@ -543,7 +549,7 @@ LANTERN_API lantern_status lantern_client_download_save(lantern_client* client, 
 {
     if (client == nullptr || save == nullptr || state == nullptr || sink == nullptr)
         return usage(error, "a NULL argument");
-    return done(client->client.download_save(*as(save), state->state, *sink), error);
+    return done(client->client.download_save(*as(save), state->state, *sink->impl), error);
 }
 
 LANTERN_API lantern_status lantern_client_delete_save(
@@ -568,8 +574,9 @@ LANTERN_API lantern_status lantern_client_upload_save(lantern_client* client, co
     settings.slot     = text(i.slot);
     if (i.has_game_version_code)
         settings.game_version_code = i.game_version_code;
-    settings.profile = text(i.profile);
-    settings.note    = text(i.note);
+    settings.profile           = text(i.profile);
+    settings.note              = text(i.note);
+    settings.encryption_key_id = text(i.encryption_key_id);
     return give(client,
         client->client.upload_save(
             text(title_id), std::as_bytes(std::span(archive, archive == nullptr ? 0 : size)), settings),
@@ -635,7 +642,7 @@ LANTERN_API lantern_status lantern_client_upload_resumable(lantern_client* clien
     const lantern::UploadRequest settings
         = upload_request(copy_struct(request), lantern::Allocator(resource_of(client)));
     return give(client,
-        client->client.upload_resumable(text(title_id), settings, *source, progress->progress,
+        client->client.upload_resumable(text(title_id), settings, *source->impl, progress->progress,
             max_chunk == 0 ? std::size_t { 1024 } * 1024 : max_chunk, text(platform)),
         out, error);
 }
@@ -780,6 +787,14 @@ LANTERN_API lantern_status lantern_client_admin_revoke_invitation(
     if (client == nullptr)
         return usage(error, "client is NULL");
     return done(client->client.admin_revoke_invitation(text(id)), error);
+}
+
+LANTERN_API lantern_status lantern_client_admin_delete_user(
+    lantern_client* client, const char* name, const char* confirm, lantern_error* error)
+{
+    if (client == nullptr)
+        return usage(error, "client is NULL");
+    return done(client->client.admin_delete_user(text(name), text(confirm)), error);
 }
 
 } // extern "C"

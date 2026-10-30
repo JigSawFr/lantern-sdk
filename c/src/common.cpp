@@ -1,4 +1,5 @@
 // Versions, errors, memory and strings.
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -178,6 +179,45 @@ lantern_string* give_string(Resource* resource, std::string_view value)
 
 // Errors ------------------------------------------------------------------
 
+// The C API's codes, by their value: fixed, appended to, whatever order
+// the C++ library's enum takes (precondition_failed came in the middle of it)
+const std::array<std::string_view, 21> code_names { {
+    "",
+    "bad_request",
+    "key_required",
+    "unauthorized",
+    "signature_required",
+    "signature_invalid",
+    "signature_expired",
+    "signature_replayed",
+    "forbidden",
+    "account_frozen",
+    "not_found",
+    "conflict",
+    "gone",
+    "too_large",
+    "unsupported_schema",
+    "digest_mismatch",
+    "slow_down",
+    "internal",
+    "unavailable",
+    "unknown",
+    "precondition_failed",
+} };
+
+lantern_code code_of(lantern::Code code) noexcept
+{
+    if (code == lantern::Code::none)
+        return LANTERN_CODE_NONE;
+    const std::string_view name = lantern::code_name(code);
+    for (std::size_t i = 1; i < code_names.size(); ++i)
+    {
+        if (code_names[i] == name)
+            return static_cast<lantern_code>(i);
+    }
+    return LANTERN_CODE_UNKNOWN;
+}
+
 lantern_status status_of(lantern::Category category) noexcept
 {
     switch (category)
@@ -245,8 +285,8 @@ lantern_status fail(lantern_error* error, const lantern::Error& what) noexcept
     lantern_error out {};
     out.struct_size    = sizeof(lantern_error);
     out.status         = status;
-    out.code           = static_cast<lantern_code>(what.code());
-    out.effective_code = static_cast<lantern_code>(what.effective_code());
+    out.code           = code_of(what.code());
+    out.effective_code = code_of(what.effective_code());
     out.http_status    = what.status();
     out.retry_after    = what.retry_after();
     copy_text(what.code_text(), out.code_text, sizeof(out.code_text));
@@ -337,20 +377,19 @@ LANTERN_API const char* lantern_status_name(lantern_status status)
 
 LANTERN_API const char* lantern_code_name(lantern_code code)
 {
-    if (code < LANTERN_CODE_NONE || code > LANTERN_CODE_UNKNOWN)
+    if (code < LANTERN_CODE_NONE || static_cast<std::size_t>(code) >= code_names.size())
         return "";
-    const std::string_view name = lantern::code_name(static_cast<lantern::Code>(code));
-    return name.empty() ? "" : name.data();
+    return code_names[static_cast<std::size_t>(code)].data();
 }
 
 LANTERN_API lantern_code lantern_code_from_name(const char* name)
 {
-    return static_cast<lantern_code>(lantern::code_from_name(text(name)));
+    return code_of(lantern::code_from_name(text(name)));
 }
 
 LANTERN_API lantern_code lantern_code_for_status(uint16_t status)
 {
-    return static_cast<lantern_code>(lantern::code_for_status(status));
+    return code_of(lantern::code_for_status(status));
 }
 
 LANTERN_API void lantern_error_init(lantern_error* error)

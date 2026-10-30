@@ -6,14 +6,17 @@ client library: a thin, stable C ABI over the C++23 library of
 through JNI) and any language with a C FFI. One header,
 `include/lantern/lantern.h` (C11 or later, and C++), and one library,
 `Lantern::c` (shared) or `Lantern::c_static`. It follows the
-specification's **draft 0.4**.
+specification's **draft 0.5** (C API version 2).
 
-**Status: draft 0.4, the C++ client whole.** The handshake, pairing with a
+**Status: draft 0.5, the C++ client whole.** The handshake, pairing with a
 device key, signed requests, invitations, the library and its cursors,
 `missing`, `changes`, titles, homebrew (manifest and path checks, install
 plans, signatures and pins, ports' data, requirements), cheat sets, verified
-downloads, saves (single and resumable), requests, the administration API,
-LAN discovery, and the server key's fingerprint, each a C function.
+downloads, saves (single and resumable), requests, the administration API
+(deleting an account included), LAN discovery, and the server key's
+fingerprint; and since draft 0.5, events (a stream, or long polling),
+grants, mirrors and peers (a peer's gate included), sync with its consent,
+end-to-end encrypted saves, and static libraries: each a C function.
 
 ## Building
 
@@ -68,7 +71,7 @@ run-clang-tidy -config-file .clang-tidy -p build/dev 'c/src/[^g].*\.cpp$'   # cl
 ## In an app
 
 ```cmake
-add_subdirectory(library/lantern-sdk/c)            # or find_package(LanternC 0.4)
+add_subdirectory(library/lantern-sdk/c)            # or find_package(LanternC 0.5)
 target_link_libraries(my_app PRIVATE Lantern::c)   # or Lantern::c_static
 ```
 
@@ -288,7 +291,10 @@ where it is given a `lantern_error`.
 | `lantern_deprecation_log` | Each `Deprecation` a server sends (§ 3.4) |
 | `lantern_download_sink`, `lantern_upload_source` | Where a download goes, where an upload reads |
 | `lantern_data_probe` | What a port finds of its data on the device (§ 8.6) |
-| `lantern_udp_socket` | Discovery's datagrams (§ 4.1) |
+| `lantern_udp_socket` | Discovery's datagrams (§ 4.1), servers' and peers' |
+| `lantern_event_callbacks` | Each event of a stream (§ 18), for the call of `lantern_client_events()` only |
+| `lantern_held_files_callbacks` | What a console that shares holds whole, for its `lantern_peer_gate` (§ 19.4) |
+| `lantern_static_files` | A static library's files (§ 21): the app's own (a USB key, an SD card), pushed into the sink it is lent with `lantern_download_sink_write()`; or `lantern_static_files_create_http()` |
 
 The library's own transports, `lantern_transport_create_curl()` (libcurl
 and its TLS) and `lantern_transport_create_mbedtls()` (mbedTLS, for the
@@ -298,6 +304,55 @@ A transport of the app's that does TLS itself checks the server's key with
 `lantern_trust_accept_certificate(trust, leaf_der, size, ca_verified)` once
 per connection, and shows `lantern_pairing_get_fingerprint()` (or
 `lantern_short_form()` of a pinned SPKI) next to a pairing code.
+
+## Draft 0.5
+
+Each family maps onto the C++ client's, with the rules above:
+
+- **Events (§ 18).** `lantern_client_events()` reads the stream through
+  `lantern_event_callbacks` until the server ends it, a callback returns
+  false, or the transport is cut: the transport's read timeout is what
+  notices a silent stream, `lantern_client_event_silence_limit()` (twice the
+  heartbeat). A `lantern_event_stream_state` keeps the last id, the server's
+  `retry` and the failures in a row (`_reconnect_delay_ms()`); a 410 forgets
+  the position. `lantern_client_wait_changes()` is the long poll. Each
+  event's document is read with `lantern_read_<kind>_event()` and the schema
+  rule (`LANTERN_ABSENT`: ignore it).
+- **Grants, mirrors and peers (§ 19).** `lantern_client_grant()`, then
+  `lantern_client_peer_holds()` and `_download_from_peer()` with the grant
+  alone; `_download_from_mirror()` and `_download_with_mirrors()`, nothing
+  of the server's sent, every byte checked by the server's document. A
+  peer's own check is `lantern_verify_grant()`; a console that shares runs
+  a `lantern_peer_gate` (synchronous, no networking of its own: the app's
+  HTTP server asks it, then streams the file it names, and gives the slot
+  back). Discovery finds peers with `lantern_discovery_options.peers` and
+  `on_peer`.
+- **Sync (§ 20).** Nothing before `lantern_client_set_sync_consent()`, which
+  the app keeps per profile and server with `lantern_client_sync_generation()`;
+  `installed` only with its own consent; a generation that changed turns
+  sync off (`LANTERN_ERROR_REFUSED`). Items are written as
+  `lantern_sync_item_input`, their values made with `lantern_write_wish()`
+  and `lantern_write_installed()`, read back with `lantern_read_wish()` and
+  `lantern_read_installed()`; `lantern_sync_merge_items()` is § 20.4's rule
+  for an app that keeps a copy.
+- **Encrypted saves (§ 9.4).** A `lantern_save_key` (generated, or from its
+  recovery phrase or QR text; a secret, never sent), a header per backup
+  (`lantern_make_save_header()`, kept to resume), then
+  `lantern_encrypting_source_create()` as the upload source of
+  `lantern_client_upload_resumable()` (`_describe()` fills the request's
+  size, SHA-256 and `encryption`), and `lantern_decrypting_sink_create()` as
+  the download sink of `lantern_client_download_save()`: nothing is the
+  archive until `lantern_decrypting_sink_finish()` succeeds.
+- **Static libraries (§ 21).** `lantern_static_library_open()` over
+  `lantern_static_files`, then its pages, titles, homebrew, cheats and
+  files; `missing` and homebrew updates computed on the device
+  (`lantern_app_list`, `lantern_homebrew_list`).
+
+Version 2 of the API only added to version 1: functions, the families
+`LANTERN_FAMILY_EVENTS` to `_ENCRYPTED_SAVES`, `LANTERN_CODE_PRECONDITION_FAILED`
+(20: the C++ library put it among its codes, the C API's values do not
+move), and members appended to `lantern_save_info`, `lantern_upload_request`
+and `lantern_discovery_options` (`abi/lantern.abi` shows each).
 
 ## An example
 
@@ -480,7 +535,8 @@ the reference server.
   of functions, against a scripted server of callbacks serving the
   specification's examples; the `schema` rule for every document reader
   (absent, newer, an unknown member); `spec/vectors` (signatures byte for
-  byte, refused requests with their codes, SPKI fingerprints, paths) written
+  byte, refused requests with their codes, SPKI fingerprints, paths, and
+  draft 0.5's grants, sync-merge, static-layout and encrypted-saves) written
   as a C header by `tests/support/vectors.py`; an allocator that counts,
   back to zero; structs of an older header. Linked once against the shared
   library (what it exports is enough) and once against the static one.
@@ -489,7 +545,11 @@ the reference server.
   `cpp/tests/integration/run_server.py`, through a transport of callbacks:
   pairing approved by an admin, signed requests and the clock's
   correction, invitations, saves whole and resumable, cheat sets, requests,
-  downloads cut and resumed, homebrew, discovery.
+  downloads cut and resumed, homebrew, discovery; and draft 0.5's events and
+  long polling, a grant and the reference peer's file, a mirror, the peer's
+  discovery, sync, an encrypted backup sent resumably and opened back, an
+  account deleted, and the library as a static library over HTTP and from
+  its folder.
 - **The header** compiled alone as C11, C17 and C++23 with every warning,
   and **the ABI** (`tools/abi_dump.py --check`, with the library's exports).
 - ASan and UBSan builds (`asan`, `ubsan` presets), and clang-tidy with

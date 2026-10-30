@@ -18,6 +18,7 @@
 #include <lantern/device_key.hpp>
 #include <lantern/discovery.hpp>
 #include <lantern/download.hpp>
+#include <lantern/encrypted_save.hpp>
 #include <lantern/homebrew.hpp>
 #include <lantern/http_signature.hpp>
 #include <lantern/pinning.hpp>
@@ -94,15 +95,19 @@ struct lantern_deprecation_log final : lantern::DeprecationLog, CallbackHolder<l
     void deprecated(std::string_view url, std::string_view deprecation, std::string_view sunset) override;
 };
 
-struct lantern_download_sink final : lantern::DownloadSink, CallbackHolder<lantern_download_callbacks>
+class CallbackDownloadSink final : public lantern::DownloadSink,
+                                   public CallbackHolder<lantern_download_callbacks>
 {
+  public:
     using CallbackHolder::CallbackHolder;
     [[nodiscard]] lantern::Result<void> write(std::span<const std::byte> bytes) override;
     [[nodiscard]] lantern::Result<void> restart() override;
 };
 
-struct lantern_upload_source final : lantern::UploadSource, CallbackHolder<lantern_upload_callbacks>
+class CallbackUploadSource final : public lantern::UploadSource,
+                                   public CallbackHolder<lantern_upload_callbacks>
 {
+  public:
     using CallbackHolder::CallbackHolder;
     [[nodiscard]] lantern::Result<void> read(std::uint64_t offset, std::span<std::byte> out) override;
 };
@@ -139,6 +144,28 @@ struct lantern_transport
     lantern::Transport* impl;
     void* object;
     void (*destroy)(void* object) noexcept;
+};
+
+// Any download sink: the app's, or one of the library's (a decrypting
+// one, which `decrypting` names). `destroy` frees `object`, the box of
+// `impl`; null for a sink the library lends a callback.
+struct lantern_download_sink
+{
+    lantern::DownloadSink* impl;
+    void* object;
+    void (*destroy)(void* object) noexcept;
+    lantern::DecryptingSink* decrypting;
+};
+
+// Any upload source: the app's, or an encrypting one, which `encrypting`
+// names; `key_id` is the text describe() points the request to.
+struct lantern_upload_source
+{
+    lantern::UploadSource* impl;
+    void* object;
+    void (*destroy)(void* object) noexcept;
+    lantern::EncryptingSource* encrypting;
+    std::array<char, 17> key_id;
 };
 
 struct lantern_response
@@ -248,3 +275,26 @@ struct lantern_pairing
         std::copy_n(view.data(), std::min(view.size(), fingerprint.size() - 1), fingerprint.begin());
     }
 };
+
+namespace lantern_c
+{
+
+// The handle of a sink in its box, `impl` its own box (freed with it), or
+// null for one lent to a callback.
+template <class Impl>
+lantern_download_sink* give_sink(Resource* resource, Impl* impl, lantern::DecryptingSink* decrypting)
+{
+    return box_new<lantern_download_sink>(resource,
+        lantern_download_sink {
+            impl, impl, [](void* object) noexcept { unbox(static_cast<Impl*>(object)); }, decrypting });
+}
+
+template <class Impl>
+lantern_upload_source* give_source(Resource* resource, Impl* impl, lantern::EncryptingSource* encrypting)
+{
+    return box_new<lantern_upload_source>(resource,
+        lantern_upload_source {
+            impl, impl, [](void* object) noexcept { unbox(static_cast<Impl*>(object)); }, encrypting, {} });
+}
+
+} // namespace lantern_c

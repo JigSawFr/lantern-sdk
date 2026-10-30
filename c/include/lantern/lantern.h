@@ -1,7 +1,7 @@
 /*
  * Lantern's C API: a thin, stable C ABI over the C++23 client library
  * (cpp/), for Swift, Kotlin (through JNI) and any language with a C FFI.
- * It follows the specification's draft 0.4 (SPEC.md).
+ * It follows the specification's draft 0.5 (SPEC.md).
  *
  * C11 or later, and C++ (extern "C"). The rules every function keeps, which
  * c/README.md explains at length:
@@ -44,10 +44,10 @@
  * adds to the API (functions, members appended to a struct, constants);
  * nothing is ever removed or changed while LANTERN_C_ABI_VERSION, the
  * shared library's SONAME version, stays the same. */
-#define LANTERN_C_API_VERSION 1
+#define LANTERN_C_API_VERSION 2
 #define LANTERN_C_ABI_VERSION 1
-#define LANTERN_VERSION_STRING "0.4.0"
-#define LANTERN_SPEC_DRAFT "0.4"
+#define LANTERN_VERSION_STRING "0.5.0"
+#define LANTERN_SPEC_DRAFT "0.5"
 
 /* LANTERN_API marks what the library exports, and nothing else is. A
  * program that links the static library on Windows defines
@@ -86,7 +86,7 @@ extern "C" {
  * header of version N checks lantern_version() >= N before it calls what
  * version N added. */
 LANTERN_API uint32_t lantern_version(void);
-/* "0.4.0", and "0.4", the specification's draft it follows. */
+/* "0.5.0", and "0.5", the specification's draft it follows. */
 LANTERN_API const char* lantern_version_string(void);
 LANTERN_API const char* lantern_spec_draft(void);
 
@@ -157,7 +157,9 @@ enum
     LANTERN_CODE_INTERNAL           = 17,
     LANTERN_CODE_UNAVAILABLE        = 18,
     /* A code of a later version: act on effective_code. */
-    LANTERN_CODE_UNKNOWN = 19
+    LANTERN_CODE_UNKNOWN = 19,
+    /* 412: a sync write whose If-Match is not the collection's rev (§ 20.4); since API 2 */
+    LANTERN_CODE_PRECONDITION_FAILED = 20
 };
 /* The code's name as § 12 writes it ("account_frozen"); "" for none. */
 LANTERN_API const char* lantern_code_name(lantern_code code);
@@ -724,7 +726,12 @@ enum
     LANTERN_FAMILY_REQUESTS   = 7,
     LANTERN_FAMILY_PAIRING    = 8,
     LANTERN_FAMILY_SIGNATURES = 9,
-    LANTERN_FAMILY_ADMIN      = 10
+    LANTERN_FAMILY_ADMIN      = 10,
+    /* Since API 2 (draft 0.5) */
+    LANTERN_FAMILY_EVENTS          = 11,
+    LANTERN_FAMILY_PEERS           = 12,
+    LANTERN_FAMILY_SYNC            = 13,
+    LANTERN_FAMILY_ENCRYPTED_SAVES = 14
 };
 /* The schema the server writes for a family, 0 when it does not offer it
  * to this caller. */
@@ -1156,6 +1163,10 @@ typedef struct lantern_save_info
     uint64_t game_version_code;
     const char* profile; /* 64 bytes at most */
     const char* note; /* 120 bytes at most */
+    /* Since API 2: an archive encrypted on the device (§ 9.4), its save key's
+     * id (lantern_save_key_id_text()), sent as Lantern-Save-Encryption.
+     * Leave profile and note out unless the user wants them shown. */
+    const char* encryption_key_id;
 } lantern_save_info;
 /* § 9.2: at most limits.save_body bytes, in one request. */
 LANTERN_API lantern_status lantern_client_upload_save(lantern_client* client, const char* title_id,
@@ -1173,6 +1184,10 @@ typedef struct lantern_upload_request
     uint64_t game_version_code;
     const char* profile;
     const char* note;
+    /* Since API 2: an encrypted backup's `encryption` (§ 9.4), both or
+     * neither; lantern_encrypting_source_describe() sets them */
+    const char* encryption_scheme;
+    const char* encryption_key_id;
 } lantern_upload_request;
 /* § 9.3, a step at a time: open, HEAD, PATCH a chunk, DELETE. */
 LANTERN_API lantern_status lantern_client_open_upload(lantern_client* client, const char* title_id,
@@ -1335,6 +1350,27 @@ LANTERN_API lantern_status lantern_udp_socket_create(const lantern_udp_callbacks
     const lantern_allocator* allocator, lantern_udp_socket** out, lantern_error* error);
 LANTERN_API void lantern_udp_socket_free(lantern_udp_socket* socket);
 
+/* A peer (§ 19.4), where its discovery reply says it serves. */
+typedef struct lantern_peer_endpoint
+{
+    size_t struct_size;
+    const char* host; /* the reply's source address */
+    uint16_t port;
+    const char* base; /* "/lantern" */
+    bool tls;
+} lantern_peer_endpoint;
+
+/* A peer found (§ 19.5): a hint, as a server's reply is; borrowed for the call. */
+typedef struct lantern_discovered_peer
+{
+    size_t struct_size;
+    lantern_str address; /* the reply's source */
+    const lantern_peer_reply* reply;
+    lantern_peer_endpoint endpoint; /* its texts NUL-terminated, borrowed */
+} lantern_discovered_peer;
+/* Once per peer (by uid); false to stop. Since API 2. */
+typedef bool (*lantern_discovery_peer_handler)(void* user, const lantern_discovered_peer* peer);
+
 typedef struct lantern_discovered_server
 {
     size_t struct_size;
@@ -1352,10 +1388,519 @@ typedef struct lantern_discovery_options
     uint32_t wait_ms; /* how long to listen; 0: 1500 */
     uint32_t attempts; /* requests sent over the wait; 0: 2 */
     const lantern_limits* limits;
+    /* Since API 2: ask the peers too (§ 19.5), at most once a minute, each
+     * one found given to `on_peer` (with the same `user`) */
+    bool peers;
+    lantern_discovery_peer_handler on_peer;
 } lantern_discovery_options;
 LANTERN_API lantern_status lantern_discover(lantern_udp_socket* socket,
     const lantern_discovery_options* options, lantern_discovery_handler handler, void* user,
     lantern_error* error);
+
+/* ===================================================== Draft 0.5 (API 2) */
+
+/* ------------------------------------------------------- Events (§ 18) */
+
+typedef int32_t lantern_event_kind;
+enum
+{
+    LANTERN_EVENT_READY    = 0,
+    LANTERN_EVENT_LIBRARY  = 1,
+    LANTERN_EVENT_REQUEST  = 2,
+    LANTERN_EVENT_PAIRING  = 3,
+    LANTERN_EVENT_SAVE     = 4,
+    LANTERN_EVENT_SYNC     = 5,
+    LANTERN_EVENT_SHUTDOWN = 6
+};
+/* "ready", "library"…; "" for another value. */
+LANTERN_API const char* lantern_event_kind_name(lantern_event_kind kind);
+
+/* What the app keeps between streams: the last event's id (Last-Event-ID),
+ * the server's `retry`, the connections that failed in a row. */
+typedef struct lantern_event_stream_state lantern_event_stream_state;
+LANTERN_API lantern_status lantern_event_stream_state_create(
+    const lantern_allocator* allocator, lantern_event_stream_state** out, lantern_error* error);
+LANTERN_API void lantern_event_stream_state_free(lantern_event_stream_state* state);
+/* Empty: the stream starts from now (its `ready` gives where). */
+LANTERN_API lantern_str lantern_event_stream_state_last_id(const lantern_event_stream_state* state);
+/* An id the app kept (512 bytes at most): false, and nothing set, otherwise. */
+LANTERN_API bool lantern_event_stream_state_set_last_id(lantern_event_stream_state* state, const char* id);
+/* § 18.1's 410: read again what is shown, and connect without an id. */
+LANTERN_API void lantern_event_stream_state_forget_position(lantern_event_stream_state* state);
+LANTERN_API uint32_t lantern_event_stream_state_retry_ms(const lantern_event_stream_state* state);
+LANTERN_API uint32_t lantern_event_stream_state_failures(const lantern_event_stream_state* state);
+/* How long to wait before connecting again (L-18.1-9): `retry` at least,
+ * doubled per failure in a row, `jitter` (0 to 1) the app's, 5 min at most. */
+LANTERN_API uint32_t lantern_event_stream_state_reconnect_delay_ms(
+    const lantern_event_stream_state* state, double jitter);
+
+/* An event of § 18.2 the client reads, of a schema it reads; borrowed for
+ * the call. `data` is its JSON, for the lantern_read_*_event() functions. */
+typedef struct lantern_stream_event
+{
+    size_t struct_size;
+    lantern_event_kind kind;
+    lantern_str id;
+    lantern_str data;
+} lantern_stream_event;
+typedef struct lantern_event_callbacks
+{
+    size_t struct_size;
+    void* user;
+    /* Each event; false closes the stream. Required. */
+    bool (*on_event)(void* user, const lantern_stream_event* event);
+    /* A heartbeat: the stream is alive. Optional. */
+    bool (*on_heartbeat)(void* user);
+} lantern_event_callbacks;
+/* § 18.1: the stream from the state's last id on, until the server ends
+ * it, a callback stops it, or the transport is cut (its read timeout is
+ * what notices a silent stream: lantern_client_event_silence_limit()).
+ * `platform` NULL: the configuration's. A 410 forgets the position. */
+LANTERN_API lantern_status lantern_client_events(lantern_client* client, lantern_event_stream_state* state,
+    const lantern_event_callbacks* callbacks, const char* platform, lantern_error* error);
+/* § 18.3: the events after `since` (the changes' `events`), as soon as one
+ * comes or after `wait` seconds (lowered to limits.wait). */
+LANTERN_API lantern_status lantern_client_wait_changes(lantern_client* client, const char* since,
+    uint32_t wait, const char* platform, lantern_changes** out, lantern_error* error);
+/* Seconds: twice the server's heartbeat, after which a stream is dead. */
+LANTERN_API uint32_t lantern_client_event_silence_limit(const lantern_client* client);
+
+/* Each event's document, with the `schema` rule (LANTERN_ABSENT: ignore it). */
+typedef struct lantern_library_event lantern_library_event;
+typedef struct lantern_request_event lantern_request_event;
+typedef struct lantern_pairing_event lantern_pairing_event;
+typedef struct lantern_save_event lantern_save_event;
+typedef struct lantern_sync_event lantern_sync_event;
+typedef struct lantern_shutdown_event lantern_shutdown_event;
+LANTERN_API lantern_status lantern_read_library_event(const char* data, size_t size,
+    const lantern_allocator* allocator, lantern_library_event** out, lantern_error* error);
+LANTERN_API lantern_status lantern_read_request_event(const char* data, size_t size,
+    const lantern_allocator* allocator, lantern_request_event** out, lantern_error* error);
+LANTERN_API lantern_status lantern_read_pairing_event(const char* data, size_t size,
+    const lantern_allocator* allocator, lantern_pairing_event** out, lantern_error* error);
+LANTERN_API lantern_status lantern_read_save_event(const char* data, size_t size,
+    const lantern_allocator* allocator, lantern_save_event** out, lantern_error* error);
+LANTERN_API lantern_status lantern_read_sync_event(const char* data, size_t size,
+    const lantern_allocator* allocator, lantern_sync_event** out, lantern_error* error);
+LANTERN_API lantern_status lantern_read_shutdown_event(const char* data, size_t size,
+    const lantern_allocator* allocator, lantern_shutdown_event** out, lantern_error* error);
+LANTERN_API void lantern_library_event_free(lantern_library_event* event);
+LANTERN_API void lantern_request_event_free(lantern_request_event* event);
+LANTERN_API void lantern_pairing_event_free(lantern_pairing_event* event);
+LANTERN_API void lantern_save_event_free(lantern_save_event* event);
+LANTERN_API void lantern_sync_event_free(lantern_sync_event* event);
+LANTERN_API void lantern_shutdown_event_free(lantern_shutdown_event* event);
+LANTERN_API size_t lantern_library_event_get_families_count(const lantern_library_event* event);
+LANTERN_API lantern_str lantern_library_event_get_families_at(
+    const lantern_library_event* event, size_t index);
+LANTERN_API size_t lantern_library_event_get_platforms_count(const lantern_library_event* event);
+LANTERN_API lantern_str lantern_library_event_get_platforms_at(
+    const lantern_library_event* event, size_t index);
+LANTERN_API lantern_str lantern_request_event_get_id(const lantern_request_event* event);
+LANTERN_API lantern_str lantern_request_event_get_platform(const lantern_request_event* event);
+LANTERN_API lantern_str lantern_request_event_get_title_id(const lantern_request_event* event);
+/* Empty when deleted. */
+LANTERN_API lantern_str lantern_request_event_get_status(const lantern_request_event* event);
+LANTERN_API bool lantern_request_event_get_deleted(const lantern_request_event* event);
+LANTERN_API lantern_str lantern_pairing_event_get_id(const lantern_pairing_event* event);
+LANTERN_API lantern_str lantern_pairing_event_get_code(const lantern_pairing_event* event);
+LANTERN_API lantern_str lantern_pairing_event_get_device(const lantern_pairing_event* event);
+LANTERN_API lantern_str lantern_pairing_event_get_key(const lantern_pairing_event* event);
+LANTERN_API lantern_str lantern_pairing_event_get_expires(const lantern_pairing_event* event);
+LANTERN_API lantern_str lantern_save_event_get_platform(const lantern_save_event* event);
+LANTERN_API lantern_str lantern_save_event_get_title_id(const lantern_save_event* event);
+LANTERN_API lantern_str lantern_save_event_get_save_id(const lantern_save_event* event);
+LANTERN_API lantern_str lantern_save_event_get_created(const lantern_save_event* event);
+LANTERN_API lantern_str lantern_save_event_get_device(const lantern_save_event* event);
+LANTERN_API lantern_str lantern_sync_event_get_collection(const lantern_sync_event* event);
+LANTERN_API uint64_t lantern_sync_event_get_rev(const lantern_sync_event* event);
+/* Seconds before connecting again; false when the event gives none. */
+LANTERN_API bool lantern_shutdown_event_get_retry(const lantern_shutdown_event* event, uint64_t* out);
+
+/* ------------------------------------------- Mirrors and peers (§ 19) */
+
+/* A server whose grants a peer takes: its uid and its grant key (the
+ * handshake's peers.key, lantern_grant_key_of()). */
+typedef struct lantern_grant_key
+{
+    const char* uid;
+    uint8_t key[32];
+} lantern_grant_key;
+/* What a grant says, once it verified. */
+typedef struct lantern_grant_claims
+{
+    size_t struct_size;
+    int64_t exp;
+    uint8_t sha256[32];
+    uint64_t size;
+    char uid[37];
+} lantern_grant_claims;
+/* A server's grant key, from its handshake. */
+LANTERN_API lantern_status lantern_grant_key_of(
+    const lantern_handshake* handshake, uint8_t out[32], lantern_error* error);
+/* L-19.4-1, a peer's check: the grant verifies by the key of the server it
+ * names (one of `servers`), its `exp` is not past at `now` (Unix seconds),
+ * its file is `sha256`. Anything else is LANTERN_ERROR_REFUSED (403). */
+LANTERN_API lantern_status lantern_verify_grant(const char* grant, const uint8_t sha256[32], int64_t now,
+    const lantern_grant_key* servers, size_t server_count, lantern_grant_claims* out, lantern_error* error);
+/* § 19.3: a grant for a file the caller may read, for a peer. */
+LANTERN_API lantern_status lantern_client_grant(
+    lantern_client* client, const uint8_t sha256[32], lantern_grant** out, lantern_error* error);
+/* § 19.2: the file from a mirror (nothing of the server's sent to it),
+ * checked by `target`; or each mirror in turn, then the server. */
+LANTERN_API lantern_status lantern_client_download_from_mirror(lantern_client* client, const char* mirror,
+    const lantern_download_target* target, lantern_download_state* state, lantern_download_sink* sink,
+    lantern_error* error);
+LANTERN_API lantern_status lantern_client_download_with_mirrors(lantern_client* client,
+    const lantern_mirror* const* mirrors, size_t mirror_count, const lantern_download_target* target,
+    lantern_download_state* state, lantern_download_sink* sink, lantern_error* error);
+/* § 19.4: whether a peer holds the file (HEAD), and the file from it, with
+ * the grant alone. */
+LANTERN_API lantern_status lantern_client_peer_holds(lantern_client* client,
+    const lantern_peer_endpoint* peer, const lantern_grant* grant, bool* holds, lantern_error* error);
+LANTERN_API lantern_status lantern_client_download_from_peer(lantern_client* client,
+    const lantern_peer_endpoint* peer, const lantern_grant* grant, const lantern_download_target* target,
+    lantern_download_state* state, lantern_download_sink* sink, lantern_error* error);
+/* 10/8, 172.16/12, 192.168/16, fc00::/7 or fe80::/10, written as an address. */
+LANTERN_API bool lantern_is_private_host(const char* host);
+/* The discovery datagram asking for the peers too. */
+LANTERN_API lantern_str lantern_discovery_request_peers(void);
+LANTERN_API lantern_status lantern_read_peer_datagram(const uint8_t* bytes, size_t size,
+    const lantern_allocator* allocator, lantern_peer_reply** out, lantern_error* error);
+/* Whether a peer takes the grants of the server of `uid`. */
+LANTERN_API bool lantern_peer_serves(const lantern_peer_reply* reply, const char* uid);
+LANTERN_API lantern_status lantern_peer_blob_url(const lantern_peer_endpoint* peer, const uint8_t sha256[32],
+    const lantern_allocator* allocator, lantern_string** out, lantern_error* error);
+
+/* The peer's side: what a console that shares its files answers, without
+ * networking of its own. The app's HTTP server asks the gate, then streams
+ * the file the answer names. Not thread-safe: one call at a time. */
+typedef struct lantern_held_files_callbacks
+{
+    size_t struct_size;
+    void* user;
+    /* The size of the file of that SHA-256 the console holds whole (an app
+     * or a homebrew package, checked against its server's document, never
+     * a save); false when it holds none. Required. */
+    bool (*size_of)(void* user, const uint8_t sha256[32], uint64_t* size);
+    void (*release)(void* user);
+} lantern_held_files_callbacks;
+typedef struct lantern_peer_limits
+{
+    size_t struct_size;
+    uint32_t slots; /* downloads at once, 1 to 8; 0: 2 */
+    uint32_t per_second; /* requests per address; 0: 10 */
+    const char* base; /* NULL: "/lantern" */
+} lantern_peer_limits;
+typedef struct lantern_peer_request
+{
+    size_t struct_size;
+    const char* method; /* GET or HEAD */
+    const char* target; /* the path and query, as received */
+    const char* grant; /* Lantern-Grant */
+    const char* range;
+    const char* if_range;
+    const char* remote_address;
+} lantern_peer_request;
+typedef struct lantern_peer_gate lantern_peer_gate;
+typedef struct lantern_peer_answer lantern_peer_answer;
+/* `servers` (copied): those the console paired with. `clock` NULL: the
+ * system's. */
+LANTERN_API lantern_status lantern_peer_gate_create(const lantern_grant_key* servers, size_t server_count,
+    const lantern_held_files_callbacks* files, lantern_clock* clock, const lantern_peer_limits* limits,
+    const lantern_allocator* allocator, lantern_peer_gate** out, lantern_error* error);
+LANTERN_API void lantern_peer_gate_free(lantern_peer_gate* gate);
+/* While the user allows sharing: off, every request is 403. */
+LANTERN_API void lantern_peer_gate_set_enabled(lantern_peer_gate* gate, bool enabled);
+LANTERN_API uint32_t lantern_peer_gate_active(const lantern_peer_gate* gate);
+LANTERN_API lantern_status lantern_peer_gate_handle(lantern_peer_gate* gate,
+    const lantern_peer_request* request, lantern_peer_answer** out, lantern_error* error);
+/* A download ended (served, or cut): its slot back. */
+LANTERN_API void lantern_peer_gate_release(lantern_peer_gate* gate);
+LANTERN_API void lantern_peer_answer_free(lantern_peer_answer* answer);
+LANTERN_API uint16_t lantern_peer_answer_status(const lantern_peer_answer* answer);
+/* A problem document, or empty. */
+LANTERN_API lantern_str lantern_peer_answer_body(const lantern_peer_answer* answer);
+/* Whether to send the file's bytes [offset, offset + length) (never for HEAD). */
+LANTERN_API bool lantern_peer_answer_serve(const lantern_peer_answer* answer);
+LANTERN_API void lantern_peer_answer_sha256(const lantern_peer_answer* answer, uint8_t out[32]);
+LANTERN_API uint64_t lantern_peer_answer_offset(const lantern_peer_answer* answer);
+LANTERN_API uint64_t lantern_peer_answer_length(const lantern_peer_answer* answer);
+LANTERN_API uint64_t lantern_peer_answer_size(const lantern_peer_answer* answer);
+LANTERN_API uint32_t lantern_peer_answer_retry_after(const lantern_peer_answer* answer);
+/* A slot was taken: lantern_peer_gate_release() once the bytes are sent. */
+LANTERN_API bool lantern_peer_answer_slot(const lantern_peer_answer* answer);
+/* The headers to send (Content-Type, Content-Length, and for a file
+ * Accept-Ranges, ETag, Repr-Digest, Content-Range). */
+LANTERN_API size_t lantern_peer_answer_header_count(const lantern_peer_answer* answer);
+LANTERN_API bool lantern_peer_answer_header_at(
+    const lantern_peer_answer* answer, size_t index, lantern_header* out);
+
+/* --------------------------------------------------------- Sync (§ 20) */
+
+/* What the user agreed to, per console profile and server (§ 20.1): the
+ * app asks, keeps it with the generation, gives both back at start. */
+typedef struct lantern_sync_consent
+{
+    size_t struct_size;
+    bool sync; /* wishes, and reading the collections */
+    bool installed; /* what this console has installed may leave it */
+} lantern_sync_consent;
+LANTERN_API lantern_status lantern_client_set_sync_consent(lantern_client* client,
+    const lantern_sync_consent* consent, const char* generation, lantern_error* error);
+LANTERN_API void lantern_client_get_sync_consent(const lantern_client* client, lantern_sync_consent* out);
+/* The account's generation as the client last read it: kept with the consent. */
+LANTERN_API lantern_str lantern_client_sync_generation(const lantern_client* client);
+/* Nothing of sync before consent (LANTERN_ERROR_REFUSED); a generation
+ * other than the one kept turns sync off (REFUSED): ask the user again. */
+LANTERN_API lantern_status lantern_client_sync_state(
+    lantern_client* client, lantern_sync_state** out, lantern_error* error);
+/* With `has_since`, the items changed after that rev (410: read it whole). */
+LANTERN_API lantern_status lantern_client_sync_items(lantern_client* client, const char* collection,
+    bool has_since, uint64_t since, const lantern_page_query* page, lantern_sync_collection** out,
+    lantern_error* error);
+/* An item to write, or to merge (frozen). */
+typedef struct lantern_sync_item_input
+{
+    const char* key;
+    const char* value; /* its JSON; NULL for a deletion */
+    bool deleted;
+    const char* updated; /* a sync time, lantern_format_sync_time() */
+} lantern_sync_item_input;
+/* PATCH: merged by § 20.4's rule. With `has_if_match`, all or nothing:
+ * LANTERN_CODE_PRECONDITION_FAILED when the collection's rev changed. */
+LANTERN_API lantern_status lantern_client_sync_write(lantern_client* client, const char* collection,
+    const lantern_sync_item_input* items, size_t count, bool has_if_match, uint64_t if_match,
+    lantern_sync_collection** out, lantern_error* error);
+/* A collection, or every one with NULL. */
+LANTERN_API lantern_status lantern_client_sync_delete(
+    lantern_client* client, const char* collection, lantern_error* error);
+/* "wishes", "installed". */
+LANTERN_API bool lantern_is_sync_collection(const char* name);
+/* A sync time ("2026-10-30T09:12:03.250Z", or without milliseconds) in
+ * milliseconds since the Unix epoch; false for another form. */
+LANTERN_API bool lantern_parse_sync_time(const char* text, int64_t* milliseconds);
+/* Written to the millisecond, and a NUL. */
+LANTERN_API void lantern_format_sync_time(int64_t milliseconds, char out[32]);
+/* § 20.4's canonical JSON: keys sorted, no space. */
+LANTERN_API lantern_status lantern_canonical_json(const char* json, size_t size,
+    const lantern_allocator* allocator, lantern_string** out, lantern_error* error);
+typedef struct lantern_sync_merge
+{
+    size_t struct_size;
+    bool replaced; /* the item sent is the one kept */
+    int64_t updated; /* its `updated` as kept, milliseconds */
+} lantern_sync_merge;
+/* § 20.4's rule: `have` the item kept (NULL: none), `sent` the one sent,
+ * `now` the server's time (milliseconds), `skew` its auth.skew (seconds). */
+LANTERN_API lantern_status lantern_sync_merge_items(const lantern_sync_item_input* have,
+    const lantern_sync_item_input* sent, int64_t now, int64_t skew, lantern_sync_merge* out,
+    lantern_error* error);
+/* A wish's value, its key ("<platform>/<title_id>"), and one read back. */
+typedef struct lantern_wish_input
+{
+    size_t struct_size;
+    const char* platform;
+    const char* title_id;
+    const char* name;
+    const char* note;
+} lantern_wish_input;
+LANTERN_API lantern_status lantern_write_wish(const lantern_wish_input* wish,
+    const lantern_allocator* allocator, lantern_string** out, lantern_error* error);
+LANTERN_API lantern_status lantern_read_wish(const char* value, size_t size,
+    const lantern_allocator* allocator, lantern_wish** out, lantern_error* error);
+LANTERN_API lantern_status lantern_wish_key(const char* platform, const char* title_id,
+    const lantern_allocator* allocator, lantern_string** out, lantern_error* error);
+/* A device's `installed` value, written and read. */
+typedef struct lantern_installed_input
+{
+    size_t struct_size;
+    const char* device;
+    const char* platform;
+    const lantern_installed_app* apps;
+    size_t app_count;
+    const lantern_installed_homebrew* homebrew;
+    size_t homebrew_count;
+} lantern_installed_input;
+typedef struct lantern_installed_value lantern_installed_value;
+LANTERN_API lantern_status lantern_write_installed(const lantern_installed_input* installed,
+    const lantern_allocator* allocator, lantern_string** out, lantern_error* error);
+LANTERN_API lantern_status lantern_read_installed(const char* value, size_t size,
+    const lantern_allocator* allocator, lantern_installed_value** out, lantern_error* error);
+LANTERN_API void lantern_installed_value_free(lantern_installed_value* installed);
+LANTERN_API lantern_str lantern_installed_value_get_device(const lantern_installed_value* installed);
+LANTERN_API lantern_str lantern_installed_value_get_platform(const lantern_installed_value* installed);
+LANTERN_API size_t lantern_installed_value_get_app_count(const lantern_installed_value* installed);
+/* Its texts borrowed from `installed`. */
+LANTERN_API bool lantern_installed_value_get_app(
+    const lantern_installed_value* installed, size_t index, lantern_installed_app* out);
+LANTERN_API size_t lantern_installed_value_get_homebrew_count(const lantern_installed_value* installed);
+LANTERN_API bool lantern_installed_value_get_homebrew(
+    const lantern_installed_value* installed, size_t index, lantern_installed_homebrew* out);
+
+/* --------------------------- Encrypted save backups (§ 9.4, e2e-1) */
+
+#define LANTERN_SAVE_SCHEME "lantern-save-e2e-1"
+#define LANTERN_SAVE_HEADER_SIZE 88
+#define LANTERN_SAVE_CHUNK_SIZE 65536
+
+/* The user's save key: made once, carried to their other devices as a
+ * recovery phrase or a QR code, never sent to a server. A secret: keep its
+ * bytes where the system protects keys. Wiped when freed. */
+typedef struct lantern_save_key lantern_save_key;
+LANTERN_API lantern_status lantern_save_key_generate(
+    lantern_random* random, const lantern_allocator* allocator, lantern_save_key** out, lantern_error* error);
+LANTERN_API lantern_status lantern_save_key_from_bytes(const uint8_t bytes[32],
+    const lantern_allocator* allocator, lantern_save_key** out, lantern_error* error);
+/* As the user typed it (case, spaces, dashes ignored): REFUSED when its
+ * check does not match. */
+LANTERN_API lantern_status lantern_save_key_from_phrase(
+    const char* phrase, const lantern_allocator* allocator, lantern_save_key** out, lantern_error* error);
+/* A QR code's text, "LANTERN-SAVE-KEY-1:" and 56 symbols. */
+LANTERN_API lantern_status lantern_save_key_from_qr(
+    const char* text, const lantern_allocator* allocator, lantern_save_key** out, lantern_error* error);
+LANTERN_API void lantern_save_key_free(lantern_save_key* key);
+LANTERN_API void lantern_save_key_bytes(const lantern_save_key* key, uint8_t out[32]);
+/* 16 lower-case hex digits, and a NUL: the key id a backup names. */
+LANTERN_API void lantern_save_key_id_text(const lantern_save_key* key, char out[17]);
+/* "96PA-S67D-…" (69 characters and a NUL): shown only when asked. */
+LANTERN_API void lantern_save_key_phrase(const lantern_save_key* key, char out[70]);
+/* The QR code's text (75 characters and a NUL). */
+LANTERN_API void lantern_save_key_qr_text(const lantern_save_key* key, char out[76]);
+/* Chunks of an archive (1 at least), and its backup's size: 88 + n + 16 × chunks. */
+LANTERN_API uint64_t lantern_save_chunk_count(uint64_t archive_size);
+LANTERN_API uint64_t lantern_encrypted_save_size(uint64_t archive_size);
+/* A new backup's header (a new file key per backup): kept to resume. */
+LANTERN_API lantern_status lantern_make_save_header(const lantern_save_key* key, lantern_random* random,
+    uint8_t out[LANTERN_SAVE_HEADER_SIZE], lantern_error* error);
+/* The same, the file key and wrap nonce given: the test vectors' way. */
+LANTERN_API void lantern_make_save_header_with(const lantern_save_key* key, const uint8_t file_key[32],
+    const uint8_t wrap_nonce[24], uint8_t out[LANTERN_SAVE_HEADER_SIZE]);
+/* The key id a backup needs, from its first 16 bytes at least. */
+LANTERN_API lantern_status lantern_save_backup_key_id(
+    const uint8_t* backup, size_t size, char out[17], lantern_error* error);
+/* An archive's encrypted bytes, as an upload source for
+ * lantern_client_upload_resumable(); `archive` (the archive in clear,
+ * `archive_size` bytes) is borrowed and must outlive it; the key is copied. */
+LANTERN_API lantern_status lantern_encrypting_source_create(const lantern_save_key* key,
+    const uint8_t header[LANTERN_SAVE_HEADER_SIZE], lantern_upload_source* archive, uint64_t archive_size,
+    const lantern_allocator* allocator, lantern_upload_source** out, lantern_error* error);
+/* Size, SHA-256 (the archive read once) and `encryption` of the upload's
+ * request; its texts live as long as the source. USAGE for another source. */
+LANTERN_API lantern_status lantern_encrypting_source_describe(
+    lantern_upload_source* source, lantern_upload_request* request, lantern_error* error);
+/* Opens a backup as it downloads: `out` gets each chunk once it opened.
+ * `out` is borrowed; the key is copied. */
+LANTERN_API lantern_status lantern_decrypting_sink_create(const lantern_save_key* key,
+    lantern_download_sink* out, const lantern_allocator* allocator, lantern_download_sink** sink,
+    lantern_error* error);
+/* The end: only now, if it succeeds, is what `out` got the archive. */
+LANTERN_API lantern_status lantern_decrypting_sink_finish(lantern_download_sink* sink, lantern_error* error);
+LANTERN_API uint64_t lantern_decrypting_sink_archive_bytes(const lantern_download_sink* sink);
+/* A whole backup in memory, both ways (its bytes in a lantern_string). */
+LANTERN_API lantern_status lantern_encrypt_save(const lantern_save_key* key,
+    const uint8_t header[LANTERN_SAVE_HEADER_SIZE], const uint8_t* archive, size_t size,
+    const lantern_allocator* allocator, lantern_string** out, lantern_error* error);
+LANTERN_API lantern_status lantern_decrypt_save(const lantern_save_key* key, const uint8_t* backup,
+    size_t size, lantern_download_sink* out, lantern_error* error);
+/* The primitives, for the test vectors. */
+LANTERN_API bool lantern_hkdf_sha256(const uint8_t* salt, size_t salt_size, const uint8_t* ikm,
+    size_t ikm_size, const uint8_t* info, size_t info_size, uint8_t* out, size_t out_size);
+LANTERN_API void lantern_hchacha20(const uint8_t key[32], const uint8_t nonce[16], uint8_t out[32]);
+/* `sealed` gets size + 16 bytes; `plain` of open() sealed_size - 16. */
+LANTERN_API lantern_status lantern_xchacha20poly1305_seal(const uint8_t key[32], const uint8_t nonce[24],
+    const uint8_t* aad, size_t aad_size, const uint8_t* plain, size_t size, uint8_t* sealed,
+    lantern_error* error);
+LANTERN_API lantern_status lantern_xchacha20poly1305_open(const uint8_t key[32], const uint8_t nonce[24],
+    const uint8_t* aad, size_t aad_size, const uint8_t* sealed, size_t sealed_size, uint8_t* plain,
+    lantern_error* error);
+
+/* A sink's own functions, for a source that pushes into one (a static
+ * library's files, below). */
+LANTERN_API lantern_status lantern_download_sink_write(
+    lantern_download_sink* sink, const uint8_t* bytes, size_t size, lantern_error* error);
+LANTERN_API lantern_status lantern_download_sink_restart(lantern_download_sink* sink, lantern_error* error);
+
+/* ------------------------------------------- Static libraries (§ 21) */
+
+/* Where a static library's files come from: over HTTP, or the app's own
+ * files (a USB key, an SD card). */
+typedef struct lantern_static_files_callbacks
+{
+    size_t struct_size;
+    void* user;
+    /* Streams the file at `path` (relative to the root, checked) into
+     * `sink` from `offset` on (or calls lantern_download_sink_restart()
+     * and gives it whole); *found false when there is no such file. */
+    lantern_status (*read)(
+        void* user, lantern_str path, uint64_t offset, lantern_download_sink* sink, bool* found);
+    void (*release)(void* user);
+} lantern_static_files_callbacks;
+typedef struct lantern_static_files lantern_static_files;
+LANTERN_API lantern_status lantern_static_files_create(const lantern_static_files_callbacks* callbacks,
+    const lantern_allocator* allocator, lantern_static_files** out, lantern_error* error);
+/* `root`: "https://lea.example.org/library/" (HTTP on loopback only),
+ * through `transport` (borrowed): no token, no signature. */
+LANTERN_API lantern_status lantern_static_files_create_http(lantern_transport* transport, const char* root,
+    const char* user_agent, const lantern_allocator* allocator, lantern_static_files** out,
+    lantern_error* error);
+LANTERN_API void lantern_static_files_free(lantern_static_files* files);
+/* § 21.1: a path relative to the root. */
+LANTERN_API bool lantern_is_static_path(const char* path);
+
+/* A library of files, read as a server is (`files` borrowed). */
+typedef struct lantern_static_library lantern_static_library;
+/* Reads lantern.json: LANTERN_ABSENT for a newer schema. */
+LANTERN_API lantern_status lantern_static_library_open(lantern_static_files* files,
+    const lantern_limits* limits, const lantern_allocator* allocator, lantern_static_library** out,
+    lantern_error* error);
+LANTERN_API void lantern_static_library_free(lantern_static_library* library);
+/* Borrowed. */
+LANTERN_API const lantern_handshake* lantern_static_library_handshake(const lantern_static_library* library);
+/* A page, from the first (cursor NULL) or the previous page's `next`. */
+LANTERN_API lantern_status lantern_static_library_apps(lantern_static_library* library, const char* platform,
+    const char* cursor, lantern_apps_page** out, lantern_error* error);
+LANTERN_API lantern_status lantern_static_library_titles(lantern_static_library* library,
+    const char* platform, const char* cursor, lantern_titles** out, lantern_error* error);
+LANTERN_API lantern_status lantern_static_library_homebrew(lantern_static_library* library,
+    const char* platform, const char* cursor, lantern_homebrew_page** out, lantern_error* error);
+LANTERN_API lantern_status lantern_static_library_title(lantern_static_library* library, const char* platform,
+    const char* title_id, lantern_title** out, lantern_error* error);
+LANTERN_API lantern_status lantern_static_library_homebrew_entry(lantern_static_library* library,
+    const char* platform, const char* id, lantern_homebrew** out, lantern_error* error);
+/* None when the title has no file of them. */
+LANTERN_API lantern_status lantern_static_library_cheats(lantern_static_library* library,
+    const char* platform, const char* title_id, lantern_cheat_sets** out, lantern_error* error);
+LANTERN_API lantern_status lantern_static_library_cheat_text(lantern_static_library* library,
+    const lantern_cheat_set* set, lantern_string** out, lantern_error* error);
+/* A file (`target.url` the document's relative `file`), checked. */
+LANTERN_API lantern_status lantern_static_library_download(lantern_static_library* library,
+    const lantern_download_target* target, lantern_download_state* state, lantern_download_sink* sink,
+    lantern_error* error);
+/* Lists of documents a static library computes. */
+typedef struct lantern_app_list lantern_app_list;
+LANTERN_API size_t lantern_app_list_count(const lantern_app_list* list);
+LANTERN_API const lantern_app* lantern_app_list_at(const lantern_app_list* list, size_t index);
+LANTERN_API void lantern_app_list_free(lantern_app_list* list);
+typedef struct lantern_homebrew_list lantern_homebrew_list;
+LANTERN_API size_t lantern_homebrew_list_count(const lantern_homebrew_list* list);
+LANTERN_API const lantern_homebrew* lantern_homebrew_list_at(const lantern_homebrew_list* list, size_t index);
+LANTERN_API void lantern_homebrew_list_free(lantern_homebrew_list* list);
+/* § 6.3 over the whole listing of `platform`, on the device (L-21.3-2). */
+LANTERN_API lantern_status lantern_static_library_missing(lantern_static_library* library,
+    const char* platform, const lantern_missing_request* request, lantern_app_list** out,
+    lantern_error* error);
+/* § 8.5: the entries whose build is above the one installed. */
+LANTERN_API lantern_status lantern_static_library_homebrew_updates(lantern_static_library* library,
+    const char* platform, const lantern_homebrew_updates_request* request, lantern_homebrew_list** out,
+    lantern_error* error);
+
+/* ------------------------------------------ Deleting an account (§ 5.7) */
+
+/* Everything the account holds goes (L-5.7-7): `confirm` is its name as
+ * the user typed it again; the caller's own is refused (409). */
+LANTERN_API lantern_status lantern_client_admin_delete_user(
+    lantern_client* client, const char* name, const char* confirm, lantern_error* error);
 
 #ifdef __cplusplus
 }
