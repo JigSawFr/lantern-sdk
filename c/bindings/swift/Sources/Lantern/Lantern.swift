@@ -162,7 +162,8 @@ public final class Client {
             }
         }
         if status < 0 {
-            lantern_transport_free(self.transport)
+            // Every stored property is set, so deinit runs after this throw:
+            // it frees the transport (and a null client), once
             throw LanternError(error)
         }
     }
