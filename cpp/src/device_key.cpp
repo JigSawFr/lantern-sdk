@@ -73,14 +73,9 @@ KeySeed DeviceKey::seed() const noexcept
 std::array<char, 43> key_thumbprint(const PublicKey& public_key) noexcept
 {
     const Digest digest = Sha256::of(std::as_bytes(std::span(public_key)));
-    // 32 bytes are 43 characters of base64url without padding
-    std::array<char, 64> buffer {};
-    std::pmr::monotonic_buffer_resource arena(buffer.data(), buffer.size(), std::pmr::null_memory_resource());
-    String text(&arena);
-    text.reserve(44);
-    base64url_encode(digest, text);
+    // 32 bytes are 43 characters of base64url without padding: no allocation
     std::array<char, 43> out {};
-    std::copy_n(text.begin(), std::min(text.size(), out.size()), out.begin());
+    static_cast<void>(base64url_encode(digest, out));
     return out;
 }
 
