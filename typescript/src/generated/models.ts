@@ -35,6 +35,8 @@ export const SCOPES = [
   "cheats.write",
   "requests",
   "admin",
+  "sync.read",
+  "sync.write",
 ] as const;
 
 /** A save's kinds (SPEC.md § 9.1). */
@@ -68,6 +70,7 @@ export const ERROR_CODES = [
   "not_found",
   "conflict",
   "gone",
+  "precondition_failed",
   "too_large",
   "unsupported_schema",
   "digest_mismatch",
@@ -366,6 +369,7 @@ export interface App {
   file: string;
   atlas?: string;
   installed_size?: number;
+  mirrors?: Mirror[];
 }
 
 export function readApp(value: unknown, where = "App"): App {
@@ -385,11 +389,27 @@ export function readApp(value: unknown, where = "App"): App {
   m.req(o, "file", where, m.str);
   m.opt(o, "atlas", where, m.str);
   m.opt(o, "installed_size", where, m.int);
+  m.opt(o, "mirrors", where, m.list(readMirror));
   return o as unknown as App;
 }
 
 /**
- * GET <base>/v1/changes (SPEC.md § 6.4).
+ * Another address of a file's exact bytes (SPEC.md § 19.2): HTTPS, or HTTP at an address of a private network (10/8, 172.16/12, 192.168/16, fc00::/7, fe80::/10).
+ *
+ * From common.json#/$defs/mirror.
+ */
+export interface Mirror {
+  url: string;
+}
+
+export function readMirror(value: unknown, where = "Mirror"): Mirror {
+  const o = m.obj(value, where);
+  m.req(o, "url", where, m.str);
+  return o as unknown as Mirror;
+}
+
+/**
+ * GET <base>/v1/changes (SPEC.md § 6.4); with wait, a long poll, and its events (§ 18.3).
  *
  * From changes.
  */
@@ -398,6 +418,7 @@ export interface Changes {
   added: App[];
   removed: string[];
   since: string;
+  events?: Event[];
 }
 
 export function readChanges(value: unknown, where = "Changes"): Changes {
@@ -406,7 +427,42 @@ export function readChanges(value: unknown, where = "Changes"): Changes {
   m.req(o, "added", where, m.list(readApp));
   m.req(o, "removed", where, m.list(m.str));
   m.req(o, "since", where, m.str);
+  m.opt(o, "events", where, m.list(readEvent));
   return o as unknown as Changes;
+}
+
+/**
+ * An event (SPEC.md § 18): its id, a token of /v1/changes, its type and its document.
+ *
+ * From common.json#/$defs/event.
+ */
+export interface Event {
+  id: string;
+  event: string;
+  data: EventData;
+}
+
+export function readEvent(value: unknown, where = "Event"): Event {
+  const o = m.obj(value, where);
+  m.req(o, "id", where, m.str);
+  m.req(o, "event", where, m.str);
+  m.req(o, "data", where, readEventData);
+  return o as unknown as Event;
+}
+
+/**
+ * EventData.
+ *
+ * From common.json#/$defs/event/data.
+ */
+export interface EventData {
+  schema: number;
+}
+
+export function readEventData(value: unknown, where = "EventData"): EventData {
+  const o = m.obj(value, where);
+  m.req(o, "schema", where, m.int);
+  return o as unknown as EventData;
 }
 
 /**
@@ -514,6 +570,37 @@ export function readDiscovery(value: unknown, where = "Discovery"): Discovery {
 }
 
 /**
+ * A peer's answer, unicast, to a discovery request that asks for peers (SPEC.md § 19.5).
+ *
+ * From discovery-peer.
+ */
+export interface DiscoveryPeer {
+  schema: number;
+  lantern: string;
+  uid: string;
+  name: string;
+  port: number;
+  base: string;
+  tls: boolean;
+  slots: number;
+  servers: string[];
+}
+
+export function readDiscoveryPeer(value: unknown, where = "DiscoveryPeer"): DiscoveryPeer {
+  const o = m.obj(value, where);
+  m.req(o, "schema", where, m.int);
+  m.req(o, "lantern", where, m.str);
+  m.req(o, "uid", where, m.str);
+  m.req(o, "name", where, m.str);
+  m.req(o, "port", where, m.int);
+  m.req(o, "base", where, m.str);
+  m.req(o, "tls", where, m.bool);
+  m.req(o, "slots", where, m.int);
+  m.req(o, "servers", where, m.list(m.str));
+  return o as unknown as DiscoveryPeer;
+}
+
+/**
  * The datagram a client sends to UDP 47115, as a directed broadcast (SPEC.md § 4.1).
  *
  * From discovery-request.
@@ -521,13 +608,38 @@ export function readDiscovery(value: unknown, where = "Discovery"): Discovery {
 export interface DiscoveryRequest {
   schema: number;
   lantern: string;
+  peers?: boolean;
 }
 
 export function readDiscoveryRequest(value: unknown, where = "DiscoveryRequest"): DiscoveryRequest {
   const o = m.obj(value, where);
   m.req(o, "schema", where, m.int);
   m.req(o, "lantern", where, m.str);
+  m.opt(o, "peers", where, m.bool);
   return o as unknown as DiscoveryRequest;
+}
+
+/**
+ * GET <base>/v1/grants/sha256/{hex} (SPEC.md § 19.3): a statement signed by the server's grant key, which a peer checks before it serves the file.
+ *
+ * From grant.
+ */
+export interface Grant {
+  schema: number;
+  sha256: string;
+  size: number;
+  grant: string;
+  expires: string;
+}
+
+export function readGrant(value: unknown, where = "Grant"): Grant {
+  const o = m.obj(value, where);
+  m.req(o, "schema", where, m.int);
+  m.req(o, "sha256", where, m.str);
+  m.req(o, "size", where, m.int);
+  m.req(o, "grant", where, m.str);
+  m.req(o, "expires", where, m.str);
+  return o as unknown as Grant;
 }
 
 /**
@@ -549,6 +661,8 @@ export interface Handshake {
   limits?: Limits;
   language?: string;
   auth?: HandshakeAuth;
+  peers?: HandshakePeers;
+  static?: HandshakeStatic;
 }
 
 export function readHandshake(value: unknown, where = "Handshake"): Handshake {
@@ -566,6 +680,8 @@ export function readHandshake(value: unknown, where = "Handshake"): Handshake {
   m.opt(o, "limits", where, readLimits);
   m.opt(o, "language", where, m.str);
   m.opt(o, "auth", where, readHandshakeAuth);
+  m.opt(o, "peers", where, readHandshakePeers);
+  m.opt(o, "static", where, readHandshakeStatic);
   return o as unknown as Handshake;
 }
 
@@ -619,6 +735,10 @@ export interface Limits {
   save_body?: number;
   save_size?: number;
   saves_kept_per_title?: number;
+  heartbeat?: number;
+  event_streams?: number;
+  wait?: number;
+  sync_items?: number;
 }
 
 export function readLimits(value: unknown, where = "Limits"): Limits {
@@ -627,6 +747,10 @@ export function readLimits(value: unknown, where = "Limits"): Limits {
   m.opt(o, "save_body", where, m.int);
   m.opt(o, "save_size", where, m.int);
   m.opt(o, "saves_kept_per_title", where, m.int);
+  m.opt(o, "heartbeat", where, m.int);
+  m.opt(o, "event_streams", where, m.int);
+  m.opt(o, "wait", where, m.int);
+  m.opt(o, "sync_items", where, m.int);
   return o as unknown as Limits;
 }
 
@@ -645,6 +769,40 @@ export function readHandshakeAuth(value: unknown, where = "HandshakeAuth"): Hand
   m.req(o, "bearer_only", where, m.bool);
   m.req(o, "skew", where, m.int);
   return o as unknown as HandshakeAuth;
+}
+
+/**
+ * The server's grants (SPEC.md § 19.3): its grant key's public key, the same for every caller, and a grant's lifetime.
+ *
+ * From handshake/peers.
+ */
+export interface HandshakePeers {
+  key: string;
+  grant_lifetime: number;
+}
+
+export function readHandshakePeers(value: unknown, where = "HandshakePeers"): HandshakePeers {
+  const o = m.obj(value, where);
+  m.req(o, "key", where, m.str);
+  m.req(o, "grant_lifetime", where, m.int);
+  return o as unknown as HandshakePeers;
+}
+
+/**
+ * A static library's (SPEC.md § 21.2): when its files were written, and the size of its pages.
+ *
+ * From handshake/static.
+ */
+export interface HandshakeStatic {
+  generated: string;
+  page_size: number;
+}
+
+export function readHandshakeStatic(value: unknown, where = "HandshakeStatic"): HandshakeStatic {
+  const o = m.obj(value, where);
+  m.req(o, "generated", where, m.str);
+  m.req(o, "page_size", where, m.int);
+  return o as unknown as HandshakeStatic;
 }
 
 /**
@@ -792,6 +950,7 @@ export interface Package {
   signature?: Signature;
   signer_sha256?: string;
   installed_size?: number;
+  mirrors?: Mirror[];
 }
 
 export function readPackage(value: unknown, where = "Package"): Package {
@@ -807,6 +966,7 @@ export function readPackage(value: unknown, where = "Package"): Package {
   m.opt(o, "signature", where, readSignature);
   m.opt(o, "signer_sha256", where, m.str);
   m.opt(o, "installed_size", where, m.int);
+  m.opt(o, "mirrors", where, m.list(readMirror));
   return o as unknown as Package;
 }
 
@@ -1406,6 +1566,7 @@ export interface Save {
   profile?: string;
   note?: string;
   device?: string;
+  encryption?: Encryption;
 }
 
 export function readSave(value: unknown, where = "Save"): Save {
@@ -1423,7 +1584,25 @@ export function readSave(value: unknown, where = "Save"): Save {
   m.opt(o, "profile", where, m.str);
   m.opt(o, "note", where, m.str);
   m.opt(o, "device", where, m.str);
+  m.opt(o, "encryption", where, readEncryption);
   return o as unknown as Save;
+}
+
+/**
+ * An end-to-end encrypted backup's metadata (SPEC.md § 9.4): its scheme and key id, in clear.
+ *
+ * From common.json#/$defs/encryption.
+ */
+export interface Encryption {
+  scheme: string;
+  key_id: string;
+}
+
+export function readEncryption(value: unknown, where = "Encryption"): Encryption {
+  const o = m.obj(value, where);
+  m.req(o, "scheme", where, m.str);
+  m.req(o, "key_id", where, m.str);
+  return o as unknown as Encryption;
 }
 
 /**
@@ -1477,6 +1656,111 @@ export function readSection(value: unknown, where = "Section"): Section {
   m.req(o, "title", where, m.str);
   m.req(o, "apps", where, m.list(m.str));
   return o as unknown as Section;
+}
+
+/**
+ * GET <base>/v1/sync (SPEC.md § 20.3): what the account keeps, and the caller's device id.
+ *
+ * From sync.
+ */
+export interface Sync {
+  schema: number;
+  generation: string;
+  device?: string;
+  collections: Record<string, SyncCollectionState>;
+}
+
+export function readSync(value: unknown, where = "Sync"): Sync {
+  const o = m.obj(value, where);
+  m.req(o, "schema", where, m.int);
+  m.req(o, "generation", where, m.str);
+  m.opt(o, "device", where, m.str);
+  m.req(o, "collections", where, m.map(readSyncCollectionState));
+  return o as unknown as Sync;
+}
+
+/**
+ * SyncCollectionState.
+ *
+ * From sync/collections{}.
+ */
+export interface SyncCollectionState {
+  rev: number;
+  items: number;
+}
+
+export function readSyncCollectionState(value: unknown, where = "SyncCollectionState"): SyncCollectionState {
+  const o = m.obj(value, where);
+  m.req(o, "rev", where, m.int);
+  m.req(o, "items", where, m.int);
+  return o as unknown as SyncCollectionState;
+}
+
+/**
+ * GET <base>/v1/sync/{collection} and the answer to PATCH (SPEC.md § 20.3, § 20.4): items, a page at a time when read.
+ *
+ * From sync-collection.
+ */
+export interface SyncCollection {
+  schema: number;
+  collection: string;
+  generation: string;
+  rev: number;
+  items: SyncItem[];
+  next?: string | null;
+}
+
+export function readSyncCollection(value: unknown, where = "SyncCollection"): SyncCollection {
+  const o = m.obj(value, where);
+  m.req(o, "schema", where, m.int);
+  m.req(o, "collection", where, m.str);
+  m.req(o, "generation", where, m.str);
+  m.req(o, "rev", where, m.int);
+  m.req(o, "items", where, m.list(readSyncItem));
+  m.opt(o, "next", where, m.nullable(m.str));
+  return o as unknown as SyncCollection;
+}
+
+/**
+ * An item of a sync collection (SPEC.md § 20.2): a value, or a deletion.
+ *
+ * From common.json#/$defs/sync_item.
+ */
+export interface SyncItem {
+  key: string;
+  value?: unknown;
+  deleted?: boolean;
+  updated: string;
+  rev?: number;
+}
+
+export function readSyncItem(value: unknown, where = "SyncItem"): SyncItem {
+  const o = m.obj(value, where);
+  m.req(o, "key", where, m.str);
+  m.opt(o, "value", where, m.any);
+  m.opt(o, "deleted", where, m.bool);
+  m.req(o, "updated", where, m.str);
+  m.opt(o, "rev", where, m.int);
+  return o as unknown as SyncItem;
+}
+
+/**
+ * PATCH <base>/v1/sync/{collection} (SPEC.md § 20.4): items sent, merged by the rule of § 20.4.
+ *
+ * From sync-write.
+ */
+export interface SyncWrite {
+  schema: number;
+  generation: string;
+  items: SyncItem[];
+}
+
+export function readSyncWrite(value: unknown, where = "SyncWrite"): SyncWrite {
+  const o = m.obj(value, where);
+  m.req(o, "schema", where, m.int);
+  m.req(o, "generation", where, m.str);
+  m.req(o, "items", where, m.list(readSyncItem));
+  return o as unknown as SyncWrite;
 }
 
 /**
@@ -1613,7 +1897,7 @@ export function readRemovedTitle(value: unknown, where = "RemovedTitle"): Remove
 }
 
 /**
- * GET <base>/v1/titles?ids=… (SPEC.md § 7.2).
+ * GET <base>/v1/titles?ids=… (SPEC.md § 7.2); in a static library, a page of a platform's titles, with next (§ 21.1).
  *
  * From titles.
  */
@@ -1621,6 +1905,7 @@ export interface Titles {
   schema: number;
   titles: Title[];
   unknown: string[];
+  next?: string | null;
 }
 
 export function readTitles(value: unknown, where = "Titles"): Titles {
@@ -1628,6 +1913,7 @@ export function readTitles(value: unknown, where = "Titles"): Titles {
   m.req(o, "schema", where, m.int);
   m.req(o, "titles", where, m.list(readTitle));
   m.req(o, "unknown", where, m.list(m.str));
+  m.opt(o, "next", where, m.nullable(m.str));
   return o as unknown as Titles;
 }
 
@@ -1668,6 +1954,7 @@ export interface UploadRequest {
   game_version_code?: number;
   profile?: string;
   note?: string;
+  encryption?: Encryption;
 }
 
 export function readUploadRequest(value: unknown, where = "UploadRequest"): UploadRequest {
@@ -1680,6 +1967,7 @@ export function readUploadRequest(value: unknown, where = "UploadRequest"): Uplo
   m.opt(o, "game_version_code", where, m.int);
   m.opt(o, "profile", where, m.str);
   m.opt(o, "note", where, m.str);
+  m.opt(o, "encryption", where, readEncryption);
   return o as unknown as UploadRequest;
 }
 
@@ -1706,7 +1994,10 @@ export interface Documents {
   "cheat-write": CheatWrite;
   "cheats": CheatSets;
   "discovery": Discovery;
+  "discovery-peer": DiscoveryPeer;
   "discovery-request": DiscoveryRequest;
+  "event": Event;
+  "grant": Grant;
   "handshake": Handshake;
   "homebrew": Homebrew;
   "homebrew-page": HomebrewPage;
@@ -1725,6 +2016,9 @@ export interface Documents {
   "save": Save;
   "saves": Saves;
   "sections": Sections;
+  "sync": Sync;
+  "sync-collection": SyncCollection;
+  "sync-write": SyncWrite;
   "title": Title;
   "title-changes": TitleChanges;
   "titles": Titles;
@@ -1747,7 +2041,10 @@ export const DOCUMENTS: { readonly [K in keyof Documents]: m.Check<Documents[K]>
   "cheat-write": readCheatWrite,
   "cheats": readCheatSets,
   "discovery": readDiscovery,
+  "discovery-peer": readDiscoveryPeer,
   "discovery-request": readDiscoveryRequest,
+  "event": readEvent,
+  "grant": readGrant,
   "handshake": readHandshake,
   "homebrew": readHomebrew,
   "homebrew-page": readHomebrewPage,
@@ -1766,6 +2063,9 @@ export const DOCUMENTS: { readonly [K in keyof Documents]: m.Check<Documents[K]>
   "save": readSave,
   "saves": readSaves,
   "sections": readSections,
+  "sync": readSync,
+  "sync-collection": readSyncCollection,
+  "sync-write": readSyncWrite,
   "title": readTitle,
   "title-changes": readTitleChanges,
   "titles": readTitles,

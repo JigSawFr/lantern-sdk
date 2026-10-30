@@ -221,7 +221,7 @@ for (const adapter of ["node:http", "fetchHandler"]) {
           ["transport.https"],
           report,
         );
-        if (token) assert.ok(report.includes(`Levels reached (SPEC.md § 17, draft 0.4): ${LEVELS}`), report);
+        if (token) assert.ok(report.includes(`Levels reached (SPEC.md § 17, draft 0.5): ${LEVELS}`), report);
       });
     }
   });

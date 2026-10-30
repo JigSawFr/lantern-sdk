@@ -39,12 +39,24 @@ export function read<T>(
   return check(data, where);
 }
 
+/**
+ * Where a document carries its `schema` when not at its top: an event's is
+ * its `data`'s (SPEC.md § 18.1), the document the event names.
+ */
+const SCHEMA_AT: Partial<Record<keyof Documents, string>> = { event: "data" };
+
 /** A document of spec/schemas/v1 by its name (`homebrew`, `apps`…), read by the `schema` rule. */
 export function readNamed<K extends keyof Documents>(
   name: K,
   data: unknown,
   known: number = SCHEMA,
 ): Documents[K] | undefined {
+  const at = SCHEMA_AT[name];
+  if (at !== undefined) {
+    if (!isObject(data)) throw new DocumentError("not an object", name);
+    if (schemaOf(data[at], `${name}.${at}`) > known) return undefined;
+    return (DOCUMENTS[name] as Check<Documents[K]>)(data, name);
+  }
   return read(DOCUMENTS[name] as Check<Documents[K]>, data, { known, where: name });
 }
 

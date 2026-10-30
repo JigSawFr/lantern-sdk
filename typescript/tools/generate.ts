@@ -48,6 +48,7 @@ const NAMES: Record<string, string> = {
   "handshake/software": "Software",
   "handshake/account": "Account",
   "handshake/limits": "Limits",
+  "sync/collections{}": "SyncCollectionState",
   "sections/sections[]": "Section",
   "title-changes/removed[]": "RemovedTitle",
   "missing-request/installed[]": "InstalledApp",
@@ -228,7 +229,7 @@ class Generator {
       if (typeof node["$ref"] === "string") {
         const [where, target] = this.ref(node["$ref"]);
         this.documents.set(name, this.model(where, target));
-      } else if (Array.isArray(node["allOf"])) {
+      } else if (Array.isArray(node["allOf"]) && !isNode(node["properties"])) {
         // A document is a definition of common.json (a $ref) or an object of its own, and then the part that
         // adds its `schema`.
         const parts = (node["allOf"] as unknown[]).filter(isNode);
