@@ -8,7 +8,7 @@ set(LANTERN_CONSUMER "package" CACHE STRING "package (find_package) or subdirect
 if (LANTERN_CONSUMER STREQUAL "subdirectory")
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../.. lantern)
 else ()
-    find_package(Lantern 0.4 REQUIRED)
+    find_package(Lantern 0.5 REQUIRED)
 endif ()
 
 add_executable(lantern_consumer main.cpp)

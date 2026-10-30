@@ -24,6 +24,7 @@
 #include <lantern/document.hpp>
 #include <lantern/error.hpp>
 #include <lantern/memory.hpp>
+#include <lantern/peers.hpp>
 #include <lantern/types.hpp>
 
 namespace lantern
@@ -32,8 +33,8 @@ namespace lantern
 inline constexpr std::uint16_t discovery_port       = 47115;
 inline constexpr std::size_t max_discovery_datagram = 1200;
 
-// The request, as it is sent.
-[[nodiscard]] std::string_view discovery_request() noexcept;
+// The request, as it is sent; with `peers`, asking the peers too (§ 19.5).
+[[nodiscard]] std::string_view discovery_request(bool peers = false) noexcept;
 
 // A datagram received: its bytes are in the caller's buffer.
 struct Datagram
@@ -77,6 +78,15 @@ struct DiscoveredServer
     std::string_view origin;
 };
 
+// A peer found (§ 19.5): a hint, as a server's reply is.
+struct DiscoveredPeer
+{
+    std::string_view address; // the reply's source
+    const PeerReply* reply = nullptr;
+    // Where it serves, for Client::download_from_peer.
+    PeerEndpoint endpoint;
+};
+
 class DiscoveryHandler
 {
   public:
@@ -89,6 +99,8 @@ class DiscoveryHandler
 
     // Once per server (by uid) per call of discover(); false to stop.
     [[nodiscard]] virtual bool on_server(const DiscoveredServer& server) = 0;
+    // Once per peer (by uid), when DiscoveryOptions::peers asks for them.
+    [[nodiscard]] virtual bool on_peer(const DiscoveredPeer& /*peer*/) { return true; }
 };
 
 // A datagram read as a reply: absent for one of a newer schema; an error
@@ -111,6 +123,8 @@ struct DiscoveryOptions
     std::chrono::milliseconds wait { 1500 };
     // How many requests to send over the wait, for a datagram lost.
     unsigned attempts = 2;
+    // Ask the peers too (§ 19.5): at most once a minute (L-19.5-2).
+    bool peers = false;
     DecodeOptions decode {};
 };
 

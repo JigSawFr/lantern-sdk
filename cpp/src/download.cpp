@@ -215,11 +215,19 @@ Result<void> MemorySink::restart()
 
 Result<void> Client::download(const DownloadTarget& target, DownloadState& state, DownloadSink& sink)
 {
-    if (state.received > target.size)
-        return fail(Category::usage, "a download state past the file's size");
     const auto url = resolve_url(origin(), target.url, allocator_);
     if (!url)
         return std::unexpected(url.error());
+    Call call;
+    call.url = *url;
+    return transfer(call, target, state, sink);
+}
+
+Result<void> Client::transfer(
+    const Call& base, const DownloadTarget& target, DownloadState& state, DownloadSink& sink)
+{
+    if (state.received > target.size)
+        return fail(Category::usage, "a download state past the file's size");
 
     const auto finish = [&](Sha256& hash) -> Result<void>
     {
@@ -238,8 +246,14 @@ Result<void> Client::download(const DownloadTarget& target, DownloadState& state
 
     // Range from what was received; If-Range so that a changed file comes whole
     std::array<char, 40> range {};
-    std::array<Header, 2> extra {};
+    std::array<Header, 4> extra {};
     std::size_t extras = 0;
+    for (const Header& header : base.extra)
+    {
+        if (extras == extra.size() - 2)
+            return fail(Category::usage, "a download takes a few headers of its own");
+        extra[extras++] = header;
+    }
     if (state.received != 0)
     {
         const std::string_view prefix = "bytes=";
@@ -254,8 +268,9 @@ Result<void> Client::download(const DownloadTarget& target, DownloadState& state
     }
 
     DownloadHandler handler(target, state, sink, max_error_body_, allocator_);
-    Call call;
-    call.url        = *url;
+    Call call       = base;
+    call.method     = Method::get;
+    call.accept     = base.untrusted ? std::string_view("*/*") : base.accept;
     call.extra      = std::span(extra.data(), extras);
     const auto sent = exchange(call, handler);
     if (handler.error())

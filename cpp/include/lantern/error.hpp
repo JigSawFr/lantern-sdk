@@ -49,6 +49,7 @@ enum class Code : std::uint8_t
     not_found,
     conflict,
     gone,
+    precondition_failed, // 412: a sync write whose If-Match is not the collection's (§ 20.4)
     too_large,
     unsupported_schema,
     digest_mismatch,

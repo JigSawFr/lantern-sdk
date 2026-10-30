@@ -5,7 +5,7 @@
 cmake_minimum_required(VERSION 3.28)
 
 project(Lantern
-    VERSION 0.4.0
+    VERSION 0.5.0
     DESCRIPTION "Client library of the Lantern protocol"
     HOMEPAGE_URL "https://github.com/JigSawFr/lantern-sdk"
     LANGUAGES C CXX)
@@ -34,8 +34,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 include(cmake/LanternWarnings.cmake)
 
-# Monocypher (third_party/monocypher, THIRD_PARTY_NOTICES.md): ed25519 checks
-# only. Built as its own object library, with its own (lower) warnings: it is
+# Monocypher (third_party/monocypher, THIRD_PARTY_NOTICES.md): ed25519
+# checks, XChaCha20-Poly1305 and the wipe of secrets. Built as its own object library, with its own (lower) warnings: it is
 # vendored as published and never edited
 add_library(lantern_monocypher OBJECT
     third_party/monocypher/monocypher.c
@@ -56,18 +56,27 @@ add_library(lantern
     src/download.cpp
     src/ed25519.cpp
     src/encoding.cpp
+    src/encrypted_save.cpp
     src/error.cpp
+    src/event_stream.cpp
+    src/events.cpp
     src/generated/types.cpp
+    src/hkdf.cpp
     src/homebrew.cpp
     src/http_signature.cpp
     src/json.cpp
     src/memory.cpp
     src/pairing.cpp
     src/paths.cpp
+    src/peers.cpp
     src/pinning.cpp
     src/profiles.cpp
     src/requires.cpp
     src/sha256.cpp
+    src/sharing.cpp
+    src/static_library.cpp
+    src/sync.cpp
+    src/sync_client.cpp
     src/tls.cpp
     src/url.cpp
     src/writes.cpp
