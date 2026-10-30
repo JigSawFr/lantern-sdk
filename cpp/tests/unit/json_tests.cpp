@@ -1,6 +1,9 @@
 #include <doctest.h>
 
+#include <cstddef>
+#include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "support.hpp"

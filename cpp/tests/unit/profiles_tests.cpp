@@ -1,5 +1,7 @@
 #include <doctest.h>
 
+#include <string>
+
 #include "support.hpp"
 
 using namespace lantern;

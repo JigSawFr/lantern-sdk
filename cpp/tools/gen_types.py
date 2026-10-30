@@ -403,8 +403,10 @@ def emit_struct(t):
     other = "other" if members else "/*other*/"
     lines.append(f"    {t.name}(const {t.name}& {other}, const allocator_type&{unused or ' allocator'})"
                  + (f"\n        : {copy_init}" if members else "") + "\n    {\n    }")
-    lines.append(f"    {t.name}({t.name}&& {other}, const allocator_type&{unused or ' allocator'})"
-                 + (f"\n        : {move_init}" if members else "") + "\n    {\n    }")
+    # Without an allocated member, moving is copying: the constructor above
+    # takes rvalues too.
+    if uses:
+        lines.append(f"    {t.name}({t.name}&& other, const allocator_type& allocator)\n        : {move_init}\n    {{\n    }}")
     lines.append(f"    {t.name}(const {t.name}&)            = default;")
     lines.append(f"    {t.name}({t.name}&&) noexcept        = default;")
     lines.append(f"    {t.name}& operator=(const {t.name}&) = default;")

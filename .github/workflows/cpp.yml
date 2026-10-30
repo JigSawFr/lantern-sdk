@@ -167,14 +167,15 @@ jobs:
           sudo apt-get install -y -q --no-install-recommends ninja-build clang-$CLANG clang-tidy-$CLANG \
             libc++-$CLANG-dev libc++abi-$CLANG-dev
       # The library and the adapter, against libc++ and against libstdc++;
-      # .clang-tidy says which checks and why some are off
+      # cpp/.clang-tidy says which checks and why some are off; named, since
+      # run-clang-tidy lists the checks from the repository root, where none is
       - name: clang-tidy
         run: |
           export CC=clang-$CLANG CXX=clang++-$CLANG
           cmake -S cpp --preset dev -B build/libcxx -DCMAKE_CXX_FLAGS=-stdlib=libc++ -DCMAKE_EXE_LINKER_FLAGS=-stdlib=libc++
           cmake -S cpp --preset dev -B build/libstdcxx
           for build in build/libcxx build/libstdcxx; do
-            run-clang-tidy-$CLANG -clang-tidy-binary clang-tidy-$CLANG -p $build -quiet \
+            run-clang-tidy-$CLANG -clang-tidy-binary clang-tidy-$CLANG -config-file cpp/.clang-tidy -p $build -quiet \
               'cpp/src/[^g].*\.cpp$' 'cpp/adapters/.*\.cpp$'
           done
 

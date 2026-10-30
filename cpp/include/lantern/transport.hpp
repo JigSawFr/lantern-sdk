@@ -29,7 +29,7 @@ enum class Method : std::uint8_t
     post,
     put,
     patch,
-    delete_,
+    delete_, // NOLINT(readability-identifier-naming): `delete` is a keyword
 };
 
 [[nodiscard]] std::string_view method_name(Method method) noexcept;

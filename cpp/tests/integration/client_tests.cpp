@@ -4,10 +4,17 @@
 #include <doctest.h>
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <map>
+#include <optional>
 #include <set>
+#include <span>
 #include <string>
+#include <string_view>
+#include <utility>
 
 #include <lantern/lantern.hpp>
 

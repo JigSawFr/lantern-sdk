@@ -37,6 +37,10 @@
 # - bugprone-suspicious-stringview-data-usage: it flags
 #   std::from_chars(text.data(), text.data() + text.size()), which is given
 #   its end
+# - cppcoreguidelines-noexcept-move-operations,
+#   performance-noexcept-move-constructor: the documents' move assignment
+#   copies when the two sides use different memory resources (pmr), so it
+#   may allocate and cannot be noexcept
 Checks: >
   -*,
   bugprone-*,
@@ -70,7 +74,9 @@ Checks: >
   -modernize-use-designated-initializers,
   -cppcoreguidelines-avoid-const-or-ref-data-members,
   -bugprone-exception-escape,
-  -bugprone-suspicious-stringview-data-usage
+  -bugprone-suspicious-stringview-data-usage,
+  -cppcoreguidelines-noexcept-move-operations,
+  -performance-noexcept-move-constructor
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*/include/lantern/.*'
 CheckOptions:
@@ -90,6 +96,12 @@ CheckOptions:
     value: _
   - key: readability-implicit-bool-conversion.AllowPointerConditions
     value: true
+  # The allocator-extended move constructors move member by member
+  - key: cppcoreguidelines-rvalue-reference-param-not-moved.AllowPartialMove
+    value: true
+  # The generated documents move every member alike, trivial ones included
+  - key: performance-move-const-arg.CheckTriviallyCopyableMove
+    value: false
   - key: cppcoreguidelines-special-member-functions.AllowSoleDefaultDtor
     value: true
   - key: misc-non-private-member-variables-in-classes.IgnoreClassesWithAllMemberVariablesBeingPublic

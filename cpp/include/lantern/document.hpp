@@ -92,7 +92,7 @@ class BindContext
     // An array of objects (or anything `element` binds): `element(T&)` binds
     // one item; the next event is its first.
     template <class T, class Element>
-    bool array(Vector<T>& out, std::size_t max_items, std::string_view where, Element&& element)
+    bool array(Vector<T>& out, std::size_t max_items, std::string_view where, Element element)
     {
         if (!begin_array(where))
             return false;
@@ -149,7 +149,7 @@ class BindContext
 // gives an empty optional without binding anything.
 template <class T, class Bind>
 [[nodiscard]] Read<T> read_document(
-    std::string_view text, std::uint64_t known_schema, const DecodeOptions& options, Bind&& bind)
+    std::string_view text, std::uint64_t known_schema, const DecodeOptions& options, Bind bind)
 {
     const auto schema = peek_schema(text, options.limits);
     if (!schema)

@@ -170,13 +170,6 @@ struct HandshakeLimits
           saves_kept_per_title(other.saves_kept_per_title)
     {
     }
-    HandshakeLimits(HandshakeLimits&& other, const allocator_type& /*allocator*/)
-        : page_size(other.page_size),
-          save_body(other.save_body),
-          save_size(other.save_size),
-          saves_kept_per_title(other.saves_kept_per_title)
-    {
-    }
     HandshakeLimits(const HandshakeLimits&)            = default;
     HandshakeLimits(HandshakeLimits&&) noexcept        = default;
     HandshakeLimits& operator=(const HandshakeLimits&) = default;
@@ -505,13 +498,6 @@ struct TitlePlayers
     TitlePlayers() : TitlePlayers(allocator_type{}) {}
     explicit TitlePlayers(const allocator_type& /*allocator*/) {}
     TitlePlayers(const TitlePlayers& other, const allocator_type& /*allocator*/)
-        : min(other.min),
-          max(other.max),
-          online(other.online),
-          online_max(other.online_max)
-    {
-    }
-    TitlePlayers(TitlePlayers&& other, const allocator_type& /*allocator*/)
         : min(other.min),
           max(other.max),
           online(other.online),

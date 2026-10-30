@@ -40,7 +40,7 @@ struct ClientConfig
     // Limits and memory of every document read (§ 13).
     DecodeOptions decode {};
     // The most of a problem+json body read for an error.
-    std::size_t max_error_body = 64 * 1024;
+    std::size_t max_error_body = std::size_t { 64 } * 1024;
     // Draft 0.4's hook; null in this version.
     RequestSigner* signer = nullptr;
 };

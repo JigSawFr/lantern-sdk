@@ -2,10 +2,15 @@
 // that answers from memory.
 #pragma once
 
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <lantern/lantern.hpp>

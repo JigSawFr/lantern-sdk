@@ -6,6 +6,7 @@
 // not know is read by its HTTP status alone (Error::effective_code).
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -66,10 +67,10 @@ template <std::size_t N> class FixedText
 {
   public:
     void assign(std::string_view text) noexcept;
-    [[nodiscard]] std::string_view view() const noexcept { return { data_, size_ }; }
+    [[nodiscard]] std::string_view view() const noexcept { return { data_.data(), size_ }; }
 
   private:
-    char data_[N] {};
+    std::array<char, N> data_ {};
     std::size_t size_ = 0;
 };
 
