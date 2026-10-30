@@ -1,5 +1,6 @@
 """The asynchronous client, over httpx (the `httpx` extra): the same calls as
-LanternClient, awaited."""
+LanternClient, awaited (but download_from(), the mirrors' and peers', which
+is LanternClient's alone)."""
 
 from __future__ import annotations
 
@@ -9,6 +10,8 @@ from pathlib import Path
 from typing import BinaryIO, TypeVar
 from urllib.parse import quote
 
+from lantern import e2e
+from lantern import sync as syncing
 from lantern._base import LanternError
 from lantern._generated.models import (
     AdminDevice,
@@ -22,6 +25,8 @@ from lantern._generated.models import (
     Changes,
     CheatSet,
     CheatSets,
+    Encryption,
+    Grant,
     Handshake,
     HomebrewPage,
     InstalledApp,
@@ -35,6 +40,8 @@ from lantern._generated.models import (
     Save,
     Saves,
     Sections,
+    Sync,
+    SyncCollection,
     Title,
     TitleChanges,
     TitleRequest,
@@ -51,15 +58,19 @@ from lantern.client.core import (
     Call,
     ClientCore,
     chunked,
+    events_of,
+    item_of,
     merge_titles,
     next_cursor,
     retry_signature,
     token_record,
 )
 from lantern.client.download import Verifier
+from lantern.client.streams import AsyncEventStream
 from lantern.client.transport import AsyncResponse, AsyncTransport, BearerToken, Credentials, RequestSigner
 from lantern.digest import Sha256, sha256_file
-from lantern.errors import DocumentError, Gone, IntegrityError, SlowDown, UnexpectedResponse
+from lantern.errors import Conflict, DocumentError, Gone, IntegrityError, SlowDown, UnexpectedResponse
+from lantern.events import ServerEvent
 from lantern.limits import CHEAT_SET
 from lantern.pinning import ServerRecord, ServerStore
 from lantern.signatures import DeviceKey
@@ -119,6 +130,9 @@ class AsyncLanternClient:
         self.transport: AsyncTransport = transport
         self.timeout = timeout
         self.last_upload: str | None = None
+        self.last_header: bytes | None = None
+        #: What the user agreed to sync with this server (SPEC.md § 20.1): no call of /v1/sync without it.
+        self.sync_consent: syncing.SyncConsent | None = None
 
     @classmethod
     def paired(cls, record: ServerRecord, **options: object) -> AsyncLanternClient:
@@ -154,7 +168,7 @@ class AsyncLanternClient:
             await self.handshake()
         for attempt in range(2):
             request = self.core.request(call)
-            async with await self.transport.send(request, timeout=self.timeout) as response:
+            async with await self.transport.send(request, timeout=call.timeout or self.timeout) as response:
                 self.core.last_spki = response.spki
                 ok = response.status in call.statuses
                 body = await response.read(JSON_DOCUMENT) if ok else await _error_body(response)
@@ -244,6 +258,101 @@ class AsyncLanternClient:
 
     async def changes(self, since: str | None = None, *, platform: str | None = None) -> Changes:
         return await self._send(self.core.changes(since, platform))
+
+    # Events (SPEC.md § 18).
+
+    def events(
+        self,
+        since: str | None = None,
+        *,
+        platform: str | None = None,
+        reconnect: bool = True,
+        sleep: Callable[[float], Awaitable[object]] = asyncio.sleep,
+    ) -> AsyncEventStream:
+        """LanternClient.events(), as an async iterator: `async for event in client.events(): …`."""
+        return AsyncEventStream(self, since, platform=platform, reconnect=reconnect, sleep=sleep)
+
+    async def wait_changes(self, since: str, wait: int = 60, *, platform: str | None = None) -> Changes:
+        if self.core.base is None:
+            await self.handshake()
+        return await self._send(self.core.wait_changes(since, wait, platform, self.timeout))
+
+    async def poll_events(
+        self, since: str, wait: int = 60, *, platform: str | None = None
+    ) -> tuple[list[ServerEvent], str]:
+        changes = await self.wait_changes(since, wait, platform=platform)
+        return events_of(changes), changes.since
+
+    # Grants (SPEC.md § 19.3).
+
+    async def grant(self, sha256: str, size: int, *, platform: str | None = None) -> Grant:
+        if self.core.hello is None:
+            await self.handshake()
+        found = await self._send(self.core.grant(sha256, platform))
+        self.core.check_grant(found, sha256, size)
+        return found
+
+    # Sync (SPEC.md § 20), with the user's consent alone.
+
+    async def _consent(self, collection: str | None, *, write: bool) -> syncing.SyncConsent:
+        hello = self.core.hello or await self.handshake()
+        return syncing.consent_for(self.sync_consent, hello.uid, collection, write=write)
+
+    def _generation(self, consent: syncing.SyncConsent, found: str) -> None:
+        if not syncing.same_generation(consent, found):
+            self.sync_consent = None
+            raise syncing.SyncReset(consent.generation, found)
+
+    async def sync(self) -> Sync:
+        consent = await self._consent(None, write=False)
+        found = await self._send(self.core.sync_overview())
+        self._generation(consent, found.generation)
+        return found
+
+    async def sync_items(
+        self, collection: str, since: int | None = None, *, page_size: int | None = None
+    ) -> tuple[list[syncing.Item], int]:
+        consent = await self._consent(collection, write=False)
+        call = self.core.sync_read(collection, since, page_size, None)
+        items: list[syncing.Item] = []
+        rev: int | None = None
+        seen: set[str] = set()
+        while True:
+            page = await self._send(call)
+            self._generation(consent, page.generation)
+            rev = page.rev if rev is None else rev
+            items += [item_of(i) for i in page.items]
+            following = next_cursor(seen, page.next, "sync")
+            if following is None:
+                consent.revs[collection] = rev
+                return items, rev
+            call = call.with_cursor(following)
+
+    async def sync_write(
+        self, collection: str, items: Sequence[syncing.Item], *, if_match: bool = False
+    ) -> SyncCollection:
+        consent = await self._consent(collection, write=True)
+        if consent.generation is None:
+            await self.sync()
+        assert consent.generation is not None
+        tag = None
+        if if_match:
+            if collection not in consent.revs:
+                raise ValueError("if_match needs the collection read first (sync_items())")
+            tag = f'"{consent.generation}-{consent.revs[collection]}"'
+        try:
+            found = await self._send(self.core.sync_write(collection, consent.generation, items, tag))
+        except Conflict as e:
+            self.sync_consent = None
+            raise syncing.SyncReset(consent.generation, "?") from e
+        self._generation(consent, found.generation)
+        return found
+
+    async def delete_sync(self, collection: str | None = None) -> None:
+        await self._send(self.core.sync_delete(collection))
+        if self.sync_consent is not None:
+            self.sync_consent.generation = None
+            self.sync_consent.revs.clear()
 
     async def sections(self, *, platform: str | None = None) -> Sections:
         return await self._send(self.core.sections(platform))
@@ -460,6 +569,107 @@ class AsyncLanternClient:
             if progress is not None:
                 progress(offset, size)
 
+    async def save_encrypted(
+        self,
+        title_id: str,
+        archive: bytes,
+        key: e2e.SaveKey,
+        *,
+        kind: str | None = None,
+        slot: str | None = None,
+        game_version_code: int | None = None,
+        profile: str | None = None,
+        note: str | None = None,
+        platform: str | None = None,
+    ) -> Save:
+        """LanternClient.save_encrypted(), awaited."""
+        data = await asyncio.to_thread(e2e.encrypt, key, archive)
+        return await self._send(
+            self.core.save_post(
+                title_id,
+                data,
+                kind=kind,
+                slot=slot,
+                game_version_code=game_version_code,
+                profile=profile,
+                note=note,
+                platform=platform,
+                key_id=key.key_id,
+            )
+        )
+
+    async def upload_encrypted_save(
+        self,
+        title_id: str,
+        archive: str | Path,
+        key: e2e.SaveKey,
+        *,
+        kind: str | None = None,
+        slot: str | None = None,
+        game_version_code: int | None = None,
+        profile: str | None = None,
+        note: str | None = None,
+        platform: str | None = None,
+        resume: str | None = None,
+        header: bytes | None = None,
+        progress: Progress | None = None,
+    ) -> Save:
+        """LanternClient.upload_encrypted_save(), awaited; the encryption runs in a worker thread."""
+        source = Path(archive)
+        if resume is None:
+            header = e2e.make_header(key)
+        elif header is None:
+            raise ValueError("resuming an encrypted upload needs the header it began with (self.last_header)")
+        size = e2e.encrypted_size((await asyncio.to_thread(source.stat)).st_size)
+        if resume is None:
+            digest = await asyncio.to_thread(_encrypted_digest, key, source, header)
+            request = UploadRequest(
+                schema=1,
+                size=size,
+                sha256=digest,
+                kind=kind,
+                slot=slot,
+                game_version_code=game_version_code,
+                profile=profile,
+                note=note,
+                encryption=Encryption(scheme=e2e.SCHEME, key_id=key.key_id),
+            )
+            upload = await self._send(self.core.upload_open(title_id, request, platform))
+            address, chunk_size, offset = upload.upload, upload.chunk_size, upload.offset
+        else:
+            address, chunk_size = resume, 1 << 20
+            offset, _ = await self._send(self.core.upload_state(resume))
+        if chunk_size < 1:
+            raise UnexpectedResponse("upload: a chunk_size under 1")
+        self.last_upload, self.last_header = address, header
+        while True:
+            chunk = await asyncio.to_thread(_encrypted_at, key, source, header, offset, chunk_size)
+            result = await self._send(self.core.upload_chunk(address, offset, chunk))
+            if isinstance(result, Save):
+                self.last_upload = self.last_header = None
+                if progress is not None:
+                    progress(size, size)
+                return result
+            if not offset < result <= size:
+                raise UnexpectedResponse(f"upload: the server's offset {result}, after {offset} of {size}")
+            offset = result
+            if progress is not None:
+                progress(offset, size)
+
+    async def download_encrypted_save(self, save: Save, key: e2e.SaveKey, dest: str | Path) -> Path:
+        """LanternClient.download_encrypted_save(), awaited."""
+        if save.encryption is None or save.encryption.scheme != e2e.SCHEME:
+            raise e2e.RefusedBackup("not a backup encrypted with lantern-save-e2e-1")
+        if save.encryption.key_id != key.key_id:
+            raise e2e.RefusedBackup(f"a backup of the key {save.encryption.key_id}, not of {key.key_id}")
+        target = Path(dest)
+        sealed = target.with_name(target.name + ".lne")
+        try:
+            await self.download_save(save, sealed, resume=False)
+            return await asyncio.to_thread(e2e.decrypt_file, key, sealed, target)
+        finally:
+            sealed.unlink(missing_ok=True)
+
     async def upload_offset(self, upload: str) -> tuple[int, int | None]:
         return await self._send(self.core.upload_state(upload))
 
@@ -572,6 +782,10 @@ class AsyncLanternClient:
         rating_cap: RatingCap | None = None,
     ) -> None:
         await self._send(self.core.admin_decide(pairing_id, "approve", user, scopes, rating_cap))
+
+    async def delete_user(self, name: str, *, confirm: str) -> None:
+        """LanternClient.delete_user(), awaited."""
+        await self._send(self.core.admin_delete_user(name, confirm))
 
     async def refuse_pairing(self, pairing_id: str) -> None:
         await self._send(self.core.admin_decide(pairing_id, "refuse", None, None, None))
@@ -717,3 +931,19 @@ async def _error_body(response: AsyncResponse) -> bytes:
         return await response.read(ERROR_BODY)
     except DocumentError:
         return b""
+
+
+def _encrypted_digest(key: e2e.SaveKey, source: Path, header: bytes) -> str:
+    hasher = Sha256()
+    for piece in e2e.iter_encrypted(key, source, header):
+        hasher.update(piece)
+    return hasher.hexdigest()
+
+
+def _encrypted_at(key: e2e.SaveKey, source: Path, header: bytes, offset: int, size: int) -> bytes:
+    chunk = bytearray()
+    for piece in e2e.iter_encrypted(key, source, header, offset):
+        chunk += piece
+        if len(chunk) >= size:
+            break
+    return bytes(chunk[:size])

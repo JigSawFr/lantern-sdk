@@ -9,8 +9,9 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Generator, Iterator, Mapping
 from dataclasses import dataclass, field
+from typing import Protocol
 from urllib.parse import quote, urlencode
 
 from lantern._base import SCHEMA, DocumentError, JSONObject
@@ -107,22 +108,47 @@ class FileBody:
                 yield data
 
 
+class StreamBody(Protocol):
+    """A body of unknown length, written as it comes (an event stream, SPEC.md § 18.1): its adapter sends
+    each piece at once, without Content-Length, and calls close() once the client left or the body ended."""
+
+    def __iter__(self) -> Iterator[bytes]: ...
+
+    def close(self) -> None: ...
+
+
 @dataclass
 class ServerResponse:
-    """A response for an adapter to send. `body` is bytes, or a FileBody to
-    stream; Content-Length is always among the headers, HEAD included (whose
-    body is empty)."""
+    """A response for an adapter to send. `body` is bytes, a FileBody to
+    stream, or a StreamBody (no Content-Length: written as it comes);
+    Content-Length is otherwise always among the headers, HEAD included
+    (whose body is empty)."""
 
     status: int
     headers: Headers = field(default_factory=Headers)
-    body: bytes | FileBody = b""
+    body: bytes | FileBody | StreamBody = b""
 
-    def iter_body(self) -> Iterator[bytes]:
+    @property
+    def streaming(self) -> bool:
+        """Whether the body is written as it comes: each piece sent at once, close() called at the end."""
+        return not isinstance(self.body, (bytes, FileBody))
+
+    def iter_body(self) -> Generator[bytes]:
         if isinstance(self.body, bytes):
             if self.body:
                 yield self.body
-        else:
+        elif isinstance(self.body, FileBody):
             yield from self.body
+        else:
+            try:
+                yield from self.body
+            finally:
+                self.body.close()
+
+    def close(self) -> None:
+        """Ends a streaming body (the client left): its resources are freed."""
+        if not isinstance(self.body, (bytes, FileBody)):
+            self.body.close()
 
 
 class ProblemError(Exception):

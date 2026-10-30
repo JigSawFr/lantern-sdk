@@ -12,6 +12,8 @@ from email.utils import parsedate_to_datetime
 from typing import Generic, TypeVar
 from urllib.parse import quote, urlencode, urljoin, urlsplit
 
+from lantern import e2e
+from lantern import sync as syncing
 from lantern._base import SCHEMA, DocumentError, JSONObject, JSONValue
 from lantern._generated.models import (
     AdminDevices,
@@ -27,6 +29,7 @@ from lantern._generated.models import (
     CheatSet,
     CheatSets,
     CheatWrite,
+    Grant,
     Handshake,
     HomebrewPage,
     HomebrewUpdatesRequest,
@@ -44,6 +47,10 @@ from lantern._generated.models import (
     Save,
     Saves,
     Sections,
+    Sync,
+    SyncCollection,
+    SyncItem,
+    SyncWrite,
     Title,
     TitleChanges,
     TitleRequest,
@@ -70,6 +77,8 @@ from lantern.errors import (
     UnexpectedResponse,
     problem_error,
 )
+from lantern.events import ServerEvent, event_of
+from lantern.grants import grant_key, read_grant
 from lantern.http import JSON, PLATFORM_HEADER, Headers, media_type, origin, plain_http_allowed
 from lantern.limits import CHEAT_SET, JSON_DOCUMENT, NOTE, PROFILE, TITLES_AT_ONCE, load_json, printable
 from lantern.pinning import ServerRecord
@@ -124,6 +133,8 @@ class Call(Generic[T]):
     url: str | None = None
     anonymous: bool = False
     signer: RequestSigner | None = None
+    #: The seconds to wait for its answer, when not the client's own (a long poll's).
+    timeout: float | None = None
 
     def with_cursor(self, cursor: str) -> Call[T]:
         query = [(k, v) for k, v in self.query if k != "cursor"] + [("cursor", cursor)]
@@ -176,6 +187,12 @@ def _ascii_word(value: str, what: str) -> str:
     if not CORE_ID.match(value):
         raise ValueError(f"{what}: 1 to 64 letters, digits, '.', '_' and '-'")
     return value
+
+
+def _collection(name: str) -> str:
+    if not name or len(name) > 32 or not name.replace("_", "").isalnum() or not name[0].isalpha():
+        raise ValueError(f"{name!r} is not a sync collection's name")
+    return name
 
 
 def _listing(page_size: int | None, cursor: str | None, **filters: str | None) -> list[tuple[str, str]]:
@@ -572,10 +589,17 @@ class ClientCore:
         profile: str | None,
         note: str | None,
         platform: str | None,
+        key_id: str | None = None,
     ) -> Call[Save]:
-        """A save in one request (SPEC.md § 9.2): the zip, its Content-Digest, and its fields as headers."""
+        """A save in one request (SPEC.md § 9.2): the zip, its Content-Digest, and its fields as headers;
+        with `key_id`, a backup encrypted on the device (§ 9.4), its bytes the encrypted ones."""
         self._needs_platform(platform, "writing a save")
         headers = {"Content-Type": "application/zip", "Content-Digest": format_digest(sha256_hex(data))}
+        if key_id is not None:
+            if len(key_id) != 16 or any(c not in "0123456789abcdef" for c in key_id):
+                raise ValueError("a key id is 16 lower-case hex digits")
+            headers["Content-Type"] = "application/octet-stream"
+            headers["Lantern-Save-Encryption"] = e2e.encryption_header(key_id)
         if kind is not None:
             headers["Lantern-Save-Kind"] = _ascii_word(kind, "kind")
         if slot is not None:
@@ -751,6 +775,103 @@ class ClientCore:
     def admin_create_invitation(self, doc: InvitationCreate) -> Call[Invitation]:
         return Call("POST", "/admin/invitations", _model(Invitation), "invitation", body=doc.to_json(), statuses=(201,))
 
+    def admin_delete_user(self, name: str, confirm: str) -> Call[None]:
+        """DELETE an account (SPEC.md § 5.7): `confirm` repeats its name, as its user typed it."""
+        if not name or len(name) > 64:
+            raise ValueError("an account's name is 1 to 64 characters")
+        return Call(
+            "DELETE",
+            "/admin/users/" + quote(name, safe=""),
+            _reject,
+            "account deletion",
+            [("confirm", confirm)],
+            statuses=(),
+            empty_statuses=(204,),
+            empty=_none,
+        )
+
+    # Events (SPEC.md § 18).
+
+    def events_request(self, since: str | None, platform: str | None) -> Request:
+        """The request that opens a stream (SPEC.md § 18.1): resumed after `since` with Last-Event-ID."""
+        url = self.v1("/events")
+        query = _platform(platform)
+        if query:
+            url += "?" + urlencode(query, quote_via=quote)
+        headers = {"Accept": "text/event-stream", "Cache-Control": "no-store"}
+        if since is not None:
+            if not since or len(since) > 1024 or any(ord(c) < 32 for c in since):
+                raise ValueError("an event id is a token of /v1/changes")
+            headers["Last-Event-ID"] = since
+        return self.prepare("GET", url, headers=headers)
+
+    def wait_changes(self, since: str, wait: int, platform: str | None, timeout: float) -> Call[Changes]:
+        """A long poll (SPEC.md § 18.3): the changes and events after `since`, answered as soon as one comes
+        or after `wait` seconds (lowered to the server's `limits.wait`)."""
+        if wait < 0:
+            raise ValueError("wait is a number of seconds, from 0")
+        limits = self.hello.limits if self.hello is not None else None
+        if limits is not None and limits.wait is not None:
+            wait = min(wait, limits.wait)
+        query = [*_platform(platform), ("since", since), ("wait", str(wait))]
+        return Call("GET", "/changes", _model(Changes), "long poll", query, timeout=timeout + wait)
+
+    # Grants (SPEC.md § 19.3).
+
+    def grant(self, sha256: str, platform: str | None) -> Call[Grant]:
+        if len(sha256) != 64 or any(c not in "0123456789abcdef" for c in sha256):
+            raise ValueError("a file is named by its SHA-256, lower-case hex")
+        return Call("GET", "/grants/sha256/" + sha256, _model(Grant), "grant", _platform(platform))
+
+    def check_grant(self, grant: Grant, sha256: str, size: int) -> None:
+        """A grant the server gave, checked before it goes to a peer: of the file asked for, verifying by the
+        handshake's `peers.key` for its uid, not expired by the server's clock. A grant that does not is
+        refused (IntegrityError): a peer would refuse it too, and nothing else of the server goes to one."""
+        from lantern.errors import IntegrityError
+
+        hello = self.hello
+        key = grant_key(hello.peers.key) if hello is not None and hello.peers is not None else None
+        if hello is None or key is None:
+            raise IntegrityError("the server gives no grant key (peers.key): it offers no grants")
+        if grant.sha256 != sha256 or grant.size != size:
+            raise IntegrityError(f"a grant for {grant.sha256[:16]}…, {grant.size} bytes: not the file asked for")
+        found = read_grant(grant.grant, {hello.uid: key}, now=self.now())
+        if found is None or found.sha256 != sha256 or found.size != size:
+            raise IntegrityError("a grant that does not verify by peers.key, names another file, or expired")
+
+    # Sync (SPEC.md § 20).
+
+    def sync_overview(self) -> Call[Sync]:
+        return Call("GET", "/sync", _model(Sync), "sync")
+
+    def sync_read(
+        self, collection: str, since: int | None, page_size: int | None, cursor: str | None
+    ) -> Call[SyncCollection]:
+        query = [("since", str(since))] if since is not None else []
+        query += _listing(page_size, cursor)
+        return Call("GET", "/sync/" + _collection(collection), _model(SyncCollection), "sync collection", query)
+
+    def sync_write(
+        self, collection: str, generation: str, items: Sequence[syncing.Item], if_match: str | None
+    ) -> Call[SyncCollection]:
+        if not 1 <= len(items) <= syncing.WRITE_LIMIT:
+            raise ValueError(f"a write sends 1 to {syncing.WRITE_LIMIT} items")
+        if len({i.key for i in items}) != len(items):
+            raise ValueError("an item's key twice in one write")
+        for i in items:
+            if syncing.parse_updated(i.updated) is None:
+                raise ValueError(f"{i.updated!r}: updated is a UTC time to the millisecond")
+        doc = SyncWrite(schema=SCHEMA, generation=generation, items=[]).to_json()
+        doc["items"] = [{k: v for k, v in i.to_json().items() if k != "rev"} for i in items]
+        headers = {"If-Match": if_match} if if_match is not None else {}
+        return Call(
+            "PATCH", "/sync/" + _collection(collection), _model(SyncCollection), "sync write", body=doc, headers=headers
+        )
+
+    def sync_delete(self, collection: str | None) -> Call[None]:
+        path = "/sync" + ("/" + _collection(collection) if collection is not None else "")
+        return Call("DELETE", path, _reject, "sync deletion", statuses=(), empty_statuses=(204,), empty=_none)
+
     def _needs_platform(self, platform: str | None, what: str) -> None:
         if platform is None and self.platform is None:
             raise ValueError(f"{what} needs a platform (SPEC.md § 4.3)")
@@ -792,6 +913,22 @@ def token_record(core: ClientCore, pairing: Pairing, token: PairingToken) -> Ser
         rating_cap=token.rating_cap.to_json() if token.rating_cap is not None else None,
         paired=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     )
+
+
+def item_of(doc: SyncItem) -> syncing.Item:
+    """A sync item as read (SPEC.md § 20.2)."""
+    return syncing.Item(doc.key, doc.updated, doc.value, bool(doc.deleted), doc.rev)
+
+
+def events_of(changes: Changes) -> list[ServerEvent]:
+    """The events of a long poll, read by the rules of SPEC.md § 18.1: one of a type this library does not
+    know, or of a newer schema, skipped; ready and shutdown are a stream's alone."""
+    out = []
+    for e in changes.events or []:
+        found = event_of(e.id, e.event, e.data.to_json())
+        if found is not None and found.event not in ("ready", "shutdown"):
+            out.append(found)
+    return out
 
 
 def what_fits(apps: Iterable[App], free: int) -> tuple[list[App], list[App]]:
@@ -836,6 +973,8 @@ __all__ = [
     "ClientCore",
     "Deprecation",
     "chunked",
+    "events_of",
+    "item_of",
     "merge_titles",
     "next_cursor",
     "retry_signature",

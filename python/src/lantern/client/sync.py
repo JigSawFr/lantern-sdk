@@ -1,4 +1,4 @@
-"""The synchronous client: every route of draft 0.4."""
+"""The synchronous client: every route of draft 0.5."""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import TypeVar
 from urllib.parse import quote
 
+from lantern import e2e
+from lantern import sync as syncing
 from lantern._base import LanternError
 from lantern._generated.models import (
     AdminDevice,
@@ -21,6 +23,8 @@ from lantern._generated.models import (
     Changes,
     CheatSet,
     CheatSets,
+    Encryption,
+    Grant,
     Handshake,
     HomebrewPage,
     InstalledApp,
@@ -34,6 +38,8 @@ from lantern._generated.models import (
     Save,
     Saves,
     Sections,
+    Sync,
+    SyncCollection,
     Title,
     TitleChanges,
     TitleRequest,
@@ -50,6 +56,8 @@ from lantern.client.core import (
     Call,
     ClientCore,
     chunked,
+    events_of,
+    item_of,
     merge_titles,
     next_cursor,
     retry_signature,
@@ -57,9 +65,24 @@ from lantern.client.core import (
 )
 from lantern.client.download import Verifier
 from lantern.client.stdlib import StdlibTransport
-from lantern.client.transport import BearerToken, Credentials, RequestSigner, Response, Transport
+from lantern.client.streams import EventStream
+from lantern.client.transport import BearerToken, Credentials, Request, RequestSigner, Response, Transport
 from lantern.digest import Sha256, sha256_file
-from lantern.errors import DocumentError, Gone, IntegrityError, SlowDown, UnexpectedResponse
+from lantern.discovery import FoundPeer
+from lantern.errors import (
+    Conflict,
+    DocumentError,
+    Gone,
+    InsecureTransport,
+    IntegrityError,
+    ProblemError,
+    SlowDown,
+    TransportError,
+    UnexpectedResponse,
+)
+from lantern.events import ServerEvent
+from lantern.grants import plain_http_to
+from lantern.http import Headers
 from lantern.limits import CHEAT_SET
 from lantern.pinning import ServerRecord, ServerStore
 from lantern.signatures import DeviceKey
@@ -111,6 +134,8 @@ class LanternClient:
         accept_language: str | None = None,
         base: str | None = None,
         timeout: float = 30.0,
+        mirror_transport: Transport | None = None,
+        peer_transport: Transport | None = None,
     ) -> None:
         if token is not None and credentials is not None:
             raise ValueError("token or credentials, not both")
@@ -133,6 +158,14 @@ class LanternClient:
         self.timeout = timeout
         #: The address of the last upload left unfinished, to resume (upload_save(resume=…)).
         self.last_upload: str | None = None
+        #: The header of the last encrypted upload left unfinished, to resume it to the same bytes.
+        self.last_header: bytes | None = None
+        #: What the user agreed to sync with this server (SPEC.md § 20.1): no call of /v1/sync without it.
+        self.sync_consent: syncing.SyncConsent | None = None
+        #: The transports of mirrors (CAs checked) and peers (whose certificate nobody pins, SPEC.md § 19.4):
+        #: never the server's, which carry its pin, and never a credential.
+        self.mirror_transport: Transport = mirror_transport or StdlibTransport()
+        self.peer_transport: Transport = peer_transport or StdlibTransport(verify=False)
 
     @classmethod
     def paired(cls, record: ServerRecord, **options: object) -> LanternClient:
@@ -151,6 +184,8 @@ class LanternClient:
 
     def close(self) -> None:
         self.transport.close()
+        self.mirror_transport.close()
+        self.peer_transport.close()
 
     def set_token(self, token: str | None, key: DeviceKey | None = None) -> None:
         """Set or clear the token of later calls, and the device key it is bound to."""
@@ -174,7 +209,7 @@ class LanternClient:
             self.handshake()
         for attempt in range(2):
             request = self.core.request(call)
-            with self.transport.send(request, timeout=self.timeout) as response:
+            with self.transport.send(request, timeout=call.timeout or self.timeout) as response:
                 self.core.last_spki = response.spki
                 ok = response.status in call.statuses
                 body = response.read(JSON_DOCUMENT) if ok else _error_body(response)
@@ -274,6 +309,324 @@ class LanternClient:
 
     def sections(self, *, platform: str | None = None) -> Sections:
         return self._send(self.core.sections(platform))
+
+    # Events (SPEC.md § 18).
+
+    def events(
+        self,
+        since: str | None = None,
+        *,
+        platform: str | None = None,
+        reconnect: bool = True,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> EventStream:
+        """The server's event stream (SPEC.md § 18.1), from `since` (an event id or a changes token: what
+        was missed in between comes first), or from now. It connects again by itself after a cut, waiting
+        the server's `retry` (lantern.client.streams); hold one per server at most (L-18.4-3)."""
+        return EventStream(self, since, platform=platform, reconnect=reconnect, sleep=sleep)
+
+    def wait_changes(self, since: str, wait: int = 60, *, platform: str | None = None) -> Changes:
+        """A long poll (SPEC.md § 18.3): answered as soon as an event comes after `since`, or after `wait`
+        seconds (lowered to the server's `limits.wait`); its `events` and its new `since`."""
+        if self.core.base is None:
+            self.handshake()
+        return self._send(self.core.wait_changes(since, wait, platform, self.timeout))
+
+    def poll_events(self, since: str, wait: int = 60, *, platform: str | None = None) -> tuple[list[ServerEvent], str]:
+        """The events of a long poll, read by the rules of SPEC.md § 18.1 (one of a type this library does
+        not know, or of a newer schema, is skipped), and the token to ask again with, at once."""
+        changes = self.wait_changes(since, wait, platform=platform)
+        return events_of(changes), changes.since
+
+    # Grants, mirrors and peers (SPEC.md § 19).
+
+    def grant(self, sha256: str, size: int, *, platform: str | None = None) -> Grant:
+        """A grant for a file of the library (scope `library`), checked: of that file, verifying by the
+        handshake's `peers.key`, not expired (IntegrityError otherwise). It goes to a peer, alone."""
+        if self.core.hello is None:
+            self.handshake()
+        found = self._send(self.core.grant(sha256, platform))
+        self.core.check_grant(found, sha256, size)
+        return found
+
+    def download_from(
+        self,
+        file: App | Package,
+        dest: str | Path,
+        *,
+        mirrors: bool = True,
+        peers: Sequence[FoundPeer] = (),
+        platform: str | None = None,
+        progress: Progress | None = None,
+    ) -> Path:
+        """An app's or a package's file, from its mirrors and from peers first, then from the server
+        (SPEC.md § 19): whatever gave the bytes, they are checked by the size and SHA-256 of the server's
+        document before they are kept (L-19.1-1), and a source that gave more than the size, or bytes
+        that fail the check, is left for the next (L-19.1-3). No token, signature or cookie goes to a
+        mirror or a peer; a peer gets a grant, asked for once (L-19.1-2). Plain HTTP only to a private
+        network's address (L-19.2-1, L-19.4-6); at most 2 peers are tried (L-19.5-2)."""
+        sources: list[tuple[str, Transport, dict[str, str]]] = []
+        if mirrors:
+            for m in (file.mirrors or [])[:8]:
+                if plain_http_to(m.url):
+                    sources.append((m.url, self.mirror_transport, {}))
+        chosen = [p for p in peers if self.core.hello is None or self.core.hello.uid in p.servers][:2]
+        if chosen:
+            if self.core.hello is None:
+                self.handshake()
+            try:
+                grant = self.grant(file.sha256, file.size, platform=platform)
+            except (LanternError, ValueError):
+                grant = None
+            if grant is not None:
+                for peer in chosen:
+                    url = peer.blob_url(file.sha256)
+                    if plain_http_to(url):
+                        sources.append((url, self.peer_transport, {"Lantern-Grant": grant.grant}))
+        for url, transport, headers in sources:
+            try:
+                return self._download_source(
+                    url,
+                    transport=transport,
+                    headers=headers,
+                    sha256=file.sha256,
+                    size=file.size,
+                    dest=dest,
+                    progress=progress,
+                )
+            except (IntegrityError, TransportError, UnexpectedResponse, DocumentError, ProblemError):
+                continue
+        return self.download(file.file, dest, sha256=file.sha256, size=file.size, resume=False, progress=progress)
+
+    def _download_source(
+        self,
+        url: str,
+        *,
+        transport: Transport,
+        headers: dict[str, str],
+        sha256: str,
+        size: int,
+        dest: str | Path,
+        progress: Progress | None,
+    ) -> Path:
+        """One mirror's or peer's file: a bare request (no credential, no signature), checked as it arrives,
+        kept only once whole and right."""
+        if not plain_http_to(url):
+            raise InsecureTransport(f"{url}: plain HTTP only to a private network's address (SPEC.md § 19.2)")
+        verifier = Verifier(sha256, size, url)
+        h = Headers({"User-Agent": self.core.user_agent, "Accept": "*/*", "Accept-Encoding": "identity"})
+        for k, v in headers.items():
+            h[k] = v
+        target = Path(dest)
+        part = target.with_name(target.name + ".part")
+        hasher = Sha256()
+        with transport.send(Request("GET", url, h), timeout=self.timeout) as response:
+            if response.status != 200:
+                raise self.core.error(url, response.status, response.headers, _error_body(response))
+            verifier.start(response.status, response.headers, 0)
+            try:
+                with part.open("wb") as f:
+                    for chunk in response.iter_bytes():
+                        verifier.feed(hasher, chunk)
+                        f.write(chunk)
+                        if progress is not None:
+                            progress(hasher.size, size)
+                verifier.finish(hasher)
+            except BaseException:
+                part.unlink(missing_ok=True)
+                raise
+        part.replace(target)
+        return target
+
+    # Sync (SPEC.md § 20), with the user's consent alone.
+
+    def _consent(self, collection: str | None, *, write: bool) -> syncing.SyncConsent:
+        """The consent a sync call needs (L-20.1-1, L-20.1-2): ConsentRequired, before anything is sent."""
+        hello = self.core.hello or self.handshake()
+        return syncing.consent_for(self.sync_consent, hello.uid, collection, write=write)
+
+    def _generation(self, consent: syncing.SyncConsent, found: str) -> None:
+        """Another generation than the one kept: the data was deleted since; consent and copy are dropped,
+        and nothing is written back (L-20.3-2)."""
+        if not syncing.same_generation(consent, found):
+            self.sync_consent = None
+            raise syncing.SyncReset(consent.generation, found)
+
+    def sync(self) -> Sync:
+        """GET /v1/sync: the generation, each collection's revision, and this device's id."""
+        consent = self._consent(None, write=False)
+        found = self._send(self.core.sync_overview())
+        self._generation(consent, found.generation)
+        return found
+
+    def sync_items(
+        self, collection: str, since: int | None = None, *, page_size: int | None = None
+    ) -> tuple[list[syncing.Item], int]:
+        """The items of a collection (every live one, or every change after the revision `since`, deletions
+        included), page by page; and the collection's revision when its first page was read. Gone when the
+        server keeps no deletions that far back: read the collection whole."""
+        consent = self._consent(collection, write=False)
+        call = self.core.sync_read(collection, since, page_size, None)
+        items: list[syncing.Item] = []
+        rev: int | None = None
+        seen: set[str] = set()
+        while True:
+            page = self._send(call)
+            self._generation(consent, page.generation)
+            rev = page.rev if rev is None else rev
+            items += [item_of(i) for i in page.items]
+            following = next_cursor(seen, page.next, "sync")
+            if following is None:
+                consent.revs[collection] = rev
+                return items, rev
+            call = call.with_cursor(following)
+
+    def sync_write(self, collection: str, items: Sequence[syncing.Item], *, if_match: bool = False) -> SyncCollection:
+        """PATCH items (SPEC.md § 20.4), each merged by the server as § 20.4's rule says; the answer gives
+        each as the server then keeps it. `if_match` makes the write all or nothing against the revision
+        last read (PreconditionFailed when the collection changed since: read it again). `installed` needs
+        the user's consent by name; a device writes its own item there only."""
+        consent = self._consent(collection, write=True)
+        if consent.generation is None:
+            self.sync()
+        assert consent.generation is not None
+        tag = None
+        if if_match:
+            if collection not in consent.revs:
+                raise ValueError("if_match needs the collection read first (sync_items())")
+            tag = f'"{consent.generation}-{consent.revs[collection]}"'
+        try:
+            found = self._send(self.core.sync_write(collection, consent.generation, items, tag))
+        except Conflict as e:
+            self.sync_consent = None  # another generation: the data was deleted since (L-20.3-2)
+            raise syncing.SyncReset(consent.generation, "?") from e
+        self._generation(consent, found.generation)
+        return found
+
+    def delete_sync(self, collection: str | None = None) -> None:
+        """Erases what the server keeps of a collection, or of every one (SPEC.md § 20.5), at the user's
+        word: when they turn sync off, it is offered whatever the consent (L-20.1-3). The consent's
+        generation is dropped: the next read gives a new one."""
+        self._send(self.core.sync_delete(collection))
+        if self.sync_consent is not None:
+            self.sync_consent.generation = None
+            self.sync_consent.revs.clear()
+
+    # Encrypted saves (SPEC.md § 9.4).
+
+    def save_encrypted(
+        self,
+        title_id: str,
+        archive: bytes,
+        key: e2e.SaveKey,
+        *,
+        kind: str | None = None,
+        slot: str | None = None,
+        game_version_code: int | None = None,
+        profile: str | None = None,
+        note: str | None = None,
+        platform: str | None = None,
+    ) -> Save:
+        """A backup encrypted on the device, in one request: its bytes and Content-Digest the encrypted
+        ones, its key id in Lantern-Save-Encryption. `profile` and `note` stay in clear: leave them out
+        unless the user wants them shown (L-9.4-6). The key never leaves the device (L-9.4-2)."""
+        data = e2e.encrypt(key, archive)
+        return self._send(
+            self.core.save_post(
+                title_id,
+                data,
+                kind=kind,
+                slot=slot,
+                game_version_code=game_version_code,
+                profile=profile,
+                note=note,
+                platform=platform,
+                key_id=key.key_id,
+            )
+        )
+
+    def upload_encrypted_save(
+        self,
+        title_id: str,
+        archive: str | Path,
+        key: e2e.SaveKey,
+        *,
+        kind: str | None = None,
+        slot: str | None = None,
+        game_version_code: int | None = None,
+        profile: str | None = None,
+        note: str | None = None,
+        platform: str | None = None,
+        resume: str | None = None,
+        header: bytes | None = None,
+        progress: Progress | None = None,
+    ) -> Save:
+        """A backup of any size, encrypted on the device and sent by resumable upload (SPEC.md § 9.3,
+        § 9.4), without an encrypted copy on disk: the encrypted bytes are made again from the archive and
+        their header for each chunk. A new file key and nonce for each backup (L-9.4-3); to resume, give
+        `resume` (self.last_upload) and `header` (self.last_header), which encrypt again to the same
+        bytes."""
+        source = Path(archive)
+        if resume is None:
+            header = e2e.make_header(key)
+        elif header is None:
+            raise ValueError("resuming an encrypted upload needs the header it began with (self.last_header)")
+        size = e2e.encrypted_size(source.stat().st_size)
+        if resume is None:
+            hasher = Sha256()
+            for piece in e2e.iter_encrypted(key, source, header):
+                hasher.update(piece)
+            request = UploadRequest(
+                schema=1,
+                size=size,
+                sha256=hasher.hexdigest(),
+                kind=kind,
+                slot=slot,
+                game_version_code=game_version_code,
+                profile=profile,
+                note=note,
+                encryption=Encryption(scheme=e2e.SCHEME, key_id=key.key_id),
+            )
+            upload = self._send(self.core.upload_open(title_id, request, platform))
+            address, chunk_size, offset = upload.upload, upload.chunk_size, upload.offset
+        else:
+            address, chunk_size = resume, 1 << 20
+            offset, _ = self._send(self.core.upload_state(resume))
+        if chunk_size < 1:
+            raise UnexpectedResponse("upload: a chunk_size under 1")
+        self.last_upload, self.last_header = address, header
+        while True:
+            chunk = bytearray()
+            for piece in e2e.iter_encrypted(key, source, header, offset):
+                chunk += piece
+                if len(chunk) >= chunk_size:
+                    break
+            result = self._send(self.core.upload_chunk(address, offset, bytes(chunk[:chunk_size])))
+            if isinstance(result, Save):
+                self.last_upload = self.last_header = None
+                if progress is not None:
+                    progress(size, size)
+                return result
+            if not offset < result <= size:
+                raise UnexpectedResponse(f"upload: the server's offset {result}, after {offset} of {size}")
+            offset = result
+            if progress is not None:
+                progress(offset, size)
+
+    def download_encrypted_save(self, save: Save, key: e2e.SaveKey, dest: str | Path) -> Path:
+        """A backup encrypted on the device: its bytes checked against its sha256, then decrypted into
+        `dest` only when every chunk opens (RefusedBackup otherwise, and nothing is kept, L-9.4-1)."""
+        if save.encryption is None or save.encryption.scheme != e2e.SCHEME:
+            raise e2e.RefusedBackup("not a backup encrypted with lantern-save-e2e-1")
+        if save.encryption.key_id != key.key_id:
+            raise e2e.RefusedBackup(f"a backup of the key {save.encryption.key_id}, not of {key.key_id}")
+        target = Path(dest)
+        sealed = target.with_name(target.name + ".lne")
+        try:
+            self.download_save(save, sealed, resume=False)
+            return e2e.decrypt_file(key, sealed, target)
+        finally:
+            sealed.unlink(missing_ok=True)
 
     # Titles (SPEC.md § 7).
 
@@ -650,6 +1003,12 @@ class LanternClient:
         rating_cap: RatingCap | None = None,
     ) -> None:
         self._send(self.core.admin_decide(pairing_id, "approve", user, scopes, rating_cap))
+
+    def delete_user(self, name: str, *, confirm: str) -> None:
+        """Deletes an account, at once and whole (SPEC.md § 5.7): its devices, invitations, pairings waiting,
+        backups, requests and sync data. `confirm` is the name as the admin typed it again: a slip of the
+        finger deletes nothing (400); one's own account cannot be (409). It cannot be undone."""
+        self._send(self.core.admin_delete_user(name, confirm))
 
     def refuse_pairing(self, pairing_id: str) -> None:
         self._send(self.core.admin_decide(pairing_id, "refuse", None, None, None))

@@ -3,21 +3,31 @@ the demo server built from the toolkit (tests/demo.py), served by Flask and
 by FastAPI, anonymously and with a token. Families the toolkit does not
 offer (sections, saves, requests) are declared 0: the suite checks that
 their routes are refused, and skips the rest of them. The demo pairs
-devices, checks signed requests and answers the administration API: with
-its token, bound to its key, it reaches the levels LEVELS says."""
+devices, checks signed requests, answers the administration API (an account
+of the suite's own made, then deleted: --admin-writes), streams events,
+gives grants and keeps sync data; a peer of the toolkit (lantern.peer)
+serves its files, and both answer LAN discovery: with its token, bound to
+its key, it reaches the levels LEVELS says. Last, the static library the
+generator writes (lantern.static) passes --static."""
 
 from __future__ import annotations
 
 import importlib.util
 import io
 import re
+import socket
+import threading
 from pathlib import Path
 from types import ModuleType
 
 import pytest
 
 from conftest import SPEC
-from demo import DEMO_KEY, DEMO_TOKEN, demo_accounts, make_lantern, serve
+from demo import DEMO_KEY, DEMO_TOKEN, GRANT_SEED, UID, build_library, demo_accounts, make_lantern, serve
+from lantern import ed25519, static
+from lantern.peer import Peer
+from lantern.server.discovery import DiscoveryResponder
+from lantern.server.files import FileRef
 from lantern.server.http import content_coding
 
 pytestmark = pytest.mark.conformance
@@ -127,10 +137,41 @@ WITH_TOKEN = [
     "admin.refuse",
     "admin.devices",
     "admin.invitations",
+    "admin.users-write",
+    "admin.users-delete",
     "compression.etag",
+    # Draft 0.5.
+    "features.events",
+    "features.peers",
+    "features.sync",
+    "events.stream",
+    "events.resume",
+    "events.bad-token",
+    "events.long-poll",
+    "events.heartbeat",
+    "events.limit",
+    "events.revoked",
+    "peers.handshake",
+    "peers.grant",
+    "peers.mirrors",
+    "peer.refused",
+    "peer.serves",
+    "peer.discovery",
+    "peer.rate",
+    "sync.overview",
+    "sync.write",
+    "sync.future",
+    "sync.if-match",
+    "sync.generation",
+    "sync.installed",
+    "sync.malformed",
+    "sync.limits",
+    "discovery.reply",
+    "invitations.rate-limit",
+    "pairing.rate-limit",
 ]
 #: The levels the demo reaches with its token (SPEC.md § 17).
-LEVELS = "Lantern Core +titles +homebrew +cheats +admin"
+LEVELS = "Lantern Core +titles +homebrew +cheats +admin +events +peers +sync"
 
 
 def suite() -> ModuleType:
@@ -143,6 +184,24 @@ def suite() -> ModuleType:
     return module
 
 
+def free_udp() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.bind(("127.0.0.1", 0))
+        port: int = s.getsockname()[1]
+        return port
+
+
+def demo_peer(lib: object) -> Peer:
+    """A peer of the toolkit that holds every app and homebrew package of the demo's library."""
+    files: dict[str, FileRef] = {}
+    for a in lib.apps():  # type: ignore[attr-defined]
+        files[a.sha256] = lib.file(a.file.rsplit("/", 1)[1])  # type: ignore[attr-defined]
+    for e in lib.homebrew(()):  # type: ignore[attr-defined]
+        for p in [e.package, *(e.packages or [])]:
+            files[p.sha256] = lib.file(p.file.rsplit("/", 1)[1])  # type: ignore[attr-defined]
+    return Peer(("127.0.0.1", 0), files, {UID: ed25519.public_key(GRANT_SEED)}, name="Noor's console")
+
+
 @pytest.mark.parametrize("framework", ["flask", "fastapi"])
 @pytest.mark.parametrize("token", [False, True], ids=["anonymous", "token"])
 def test_the_suite_passes(framework: str, token: bool, tmp_path: Path) -> None:
@@ -153,8 +212,39 @@ def test_the_suite_passes(framework: str, token: bool, tmp_path: Path) -> None:
     out = io.StringIO()
     key = tmp_path / "demo.key"
     key.write_text(DEMO_KEY.seed_b64(), encoding="ascii")
-    with serve(framework, make_lantern(accounts=demo_accounts())) as url:
-        code = run.main([url, *(["--token", DEMO_TOKEN, "--key", str(key)] if token else [])], out=out)
+    lib = build_library()
+    app = make_lantern(lib, accounts=demo_accounts())
+    peer = demo_peer(lib)
+    threading.Thread(target=peer.serve_forever, daemon=True).start()
+    peer_port = free_udp()
+    peer_sock = peer.discovery(peer_port, "127.0.0.1")
+    try:
+        with serve(framework, app) as url:
+            server_port = free_udp()
+            responder = DiscoveryResponder(
+                app, int(url.rstrip("/").rsplit(":", 1)[1]), port=server_port, host="127.0.0.1"
+            ).start()
+            args = [url, "--discover", "127.0.0.1", "--discover-port", str(server_port)]
+            if token:
+                args += [
+                    "--token",
+                    DEMO_TOKEN,
+                    "--key",
+                    str(key),
+                    "--admin-writes",
+                    "--peer",
+                    f"http://127.0.0.1:{peer.port}/lantern",
+                    "--peer-discover-port",
+                    str(peer_port),
+                ]
+            try:
+                code = run.main(args, out=out)
+            finally:
+                responder.stop()
+    finally:
+        peer_sock.close()
+        peer.shutdown()
+        peer.server_close()
     report = out.getvalue()
     status = {m.group(2): m.group(1) for m in re.finditer(r"^(PASS|FAIL|WARN|SKIP)\s+§ \S+\s+(\S+)", report, re.M)}
     failed = [line for line in report.splitlines() if line.startswith("FAIL")]
@@ -166,7 +256,30 @@ def test_the_suite_passes(framework: str, token: bool, tmp_path: Path) -> None:
     expected = ["transport.https"] + ([] if zstd_available() else ["compression.json"])
     assert warnings == expected, report
     if token:
-        assert f"Levels reached (SPEC.md § 17, draft 0.4): {LEVELS}" in report, report
+        assert f"Levels reached (SPEC.md § 17, draft 0.5): {LEVELS}" in report, report
+
+
+def test_the_generators_static_library(tmp_path: Path) -> None:
+    """The generator's output (lantern.static) through the suite's --static (SPEC.md § 21)."""
+    run = suite()
+    out = io.StringIO()
+    static.export(build_library(), tmp_path / "library", uid=UID, name="Demo shelf", page_size=2)
+    code = run.main(["--static", str(tmp_path / "library")], out=out)
+    report = out.getvalue()
+    assert code == 0 and "FAIL" not in report, report
+    for check in (
+        "handshake",
+        "pages.apps",
+        "pages.titles",
+        "pages.homebrew",
+        "titles",
+        "homebrew",
+        "cheats",
+        "paths",
+        "files",
+    ):
+        assert re.search(rf"^PASS\s+§ \S+\s+static\.{re.escape(check)}\s", report, re.M), f"{check}\n{report}"
+    assert "Levels reached (SPEC.md § 17, draft 0.5): Lantern Static" in report
 
 
 def zstd_available() -> bool:

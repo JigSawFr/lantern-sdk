@@ -18,7 +18,7 @@ specification is pinned here as a submodule):
 | Folder | Language | Side |
 |---|---|---|
 | [`cpp/`](cpp/README.md) | C++23 | The client of the consoles and of apps built with [Aurore](https://github.com/JigSawFr/Aurore), and a server core; every platform Aurore runs on. The client of draft 0.4: pairing with a device key, signed requests, the routes that write, administration, discovery, and TLS transports over libcurl and mbedTLS |
-| [`python/`](python/README.md) | Python | Client and server, with Flask and FastAPI integration (`lantern-protocol`): draft 0.4, the whole client (pairing with a device key, signed requests, writes, discovery) and a server toolkit at Lantern Core +titles +homebrew +cheats +admin; the malicious test server for clients (`python/tools/hostile_server.py`) |
+| [`python/`](python/README.md) | Python | Client and server, with Flask and FastAPI integration (`lantern-protocol`): draft 0.5, the whole client (pairing with a device key, signed requests, writes, discovery, events, mirrors and peers, sync, encrypted saves, static libraries) and a server toolkit at Lantern Core +titles +homebrew +cheats +admin +events +peers +sync; a minimal peer, the generator of static libraries (Lantern Static); the malicious test server for clients (`python/tools/hostile_server.py`) |
 | `typescript/` | TypeScript | Client in the browser and Node, server for Node |
 | `c/` | C | A thin API over the C++ library, for Swift and Kotlin |
 

@@ -10,11 +10,14 @@ from pathlib import Path
 import pytest
 
 import lantern
-from hostile_server import SCENARIOS, HostileServer
+from fakes import FakeTransport
+from hostile_server import FILE, FILE_SHA256, SCENARIOS, HostileServer
 from lantern import homebrew as hb
 from lantern.client import LanternClient
+from lantern.discovery import FoundPeer
 from lantern.models import App
 from lantern.signatures import DeviceKey
+from lantern.static import StaticLibrary
 
 AGENT = "LanternHostileTest/1.0"
 KEY = DeviceKey(bytes(range(32)))  # a fictional device's
@@ -64,6 +67,11 @@ COVERED = {
     "replayed-challenge",
     "pairing-elsewhere",
     "redirect",
+    "forged-grant",
+    "expired-grant",
+    "oversized-event",
+    "mirror-wrong-bytes",
+    "static-newer-schema",
 }
 
 
@@ -203,3 +211,57 @@ def test_a_redirect(hostile: HostileServer) -> None:
     with client(hostile) as c, pytest.raises(lantern.UnexpectedResponse):
         c.handshake()
     assert len(hostile.requests) == 1
+
+
+@pytest.mark.parametrize("hostile", ["forged-grant", "expired-grant"], indirect=True)
+def test_a_grant_that_does_not_verify(hostile: HostileServer, tmp_path: Path) -> None:
+    peer_requests = FakeTransport(lambda r: (500, {}, b""))
+    peer = FoundPeer("192.168.1.30", 47116, "/lantern", False, "a-peer", "Noor's console", 2, (hostile_uid(),))
+    with client(hostile, peer_transport=peer_requests) as c:
+        with pytest.raises(lantern.IntegrityError):
+            c.grant(FILE_SHA256, len(FILE))
+        got = c.download_from(the_app(c), tmp_path / "frost.nsp", peers=[peer])  # the server's file, then
+        assert hashlib.sha256(got.read_bytes()).hexdigest() == FILE_SHA256
+    assert peer_requests.requests == []  # the grant went to no peer
+
+
+def hostile_uid() -> str:
+    from hostile_server import UID
+
+    return UID
+
+
+@pytest.mark.parametrize("hostile", ["oversized-event"], indirect=True)
+def test_an_oversized_event(hostile: HostileServer) -> None:
+    with client(hostile) as c:
+        stream = c.events()
+        assert next(stream).event == "ready"
+        with pytest.raises(lantern.DocumentError):
+            next(stream)
+        with pytest.raises(StopIteration):
+            next(stream)  # the stream is closed, not resumed
+
+
+@pytest.mark.parametrize("hostile", ["mirror-wrong-bytes"], indirect=True)
+def test_a_mirror_of_other_bytes(hostile: HostileServer, tmp_path: Path) -> None:
+    dest = tmp_path / "frost.nsp"
+    with client(hostile) as c:
+        app = the_app(c)
+        assert app.mirrors
+        got = c.download_from(app, dest)
+    assert hashlib.sha256(got.read_bytes()).hexdigest() == app.sha256
+    paths = [(r["path"], r["authorization"]) for r in hostile.requests if r["method"] == "GET"]
+    assert ("/mirror/f_frost", None) in paths  # tried, without the token (L-19.1-2)
+    assert paths[-1][0] == "/api/lantern/v1/files/f_frost"  # then the server's
+    assert not (tmp_path / "frost.nsp.part").exists()
+
+
+@pytest.mark.parametrize("hostile", ["static-newer-schema"], indirect=True)
+def test_a_static_library_of_a_newer_schema(hostile: HostileServer) -> None:
+    with StaticLibrary(hostile.url + "static/") as s:
+        with pytest.raises(lantern.NewerSchema):
+            s.handshake()
+        assert s.hello is None
+        with pytest.raises(lantern.NewerSchema):
+            list(s.iter_apps("switch"))
+    assert all(r["method"] == "GET" and r["authorization"] is None for r in hostile.requests)

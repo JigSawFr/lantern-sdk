@@ -37,6 +37,7 @@ __all__ = [
     "NewerSchema",
     "NotFound",
     "PinMismatch",
+    "PreconditionFailed",
     "ProblemError",
     "ServerError",
     "SignatureExpired",
@@ -139,7 +140,13 @@ class Conflict(ProblemError):
 
 
 class Gone(ProblemError):
-    """410: an expired cursor or `since` token (read the list again from its start), or a file id."""
+    """410: an expired cursor, `since` token, event id or sync revision (read the list again from its
+    start), or a file id."""
+
+
+class PreconditionFailed(ProblemError):
+    """412 `precondition_failed`: a sync write whose If-Match is not the collection's any more (SPEC.md
+    § 20.4); nothing changed: read the collection again."""
 
 
 class TooLarge(ProblemError):
@@ -170,6 +177,7 @@ _BY_STATUS: dict[int, type[ProblemError]] = {
     405: BadRequest,
     409: Conflict,
     410: Gone,
+    412: PreconditionFailed,
     413: TooLarge,
     416: BadRequest,
     422: Unprocessable,

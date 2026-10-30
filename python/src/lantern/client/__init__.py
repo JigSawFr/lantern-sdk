@@ -6,6 +6,7 @@ from lantern.client.aio import AsyncLanternClient
 from lantern.client.auth import DeviceSigner, InvitationLink, Pairing, invitation_link
 from lantern.client.core import Deprecation, what_fits
 from lantern.client.stdlib import StdlibTransport
+from lantern.client.streams import AsyncEventStream, EventStream
 from lantern.client.sync import LanternClient
 from lantern.client.transport import (
     AsyncResponse,
@@ -19,6 +20,7 @@ from lantern.client.transport import (
 )
 
 __all__ = [
+    "AsyncEventStream",
     "AsyncLanternClient",
     "AsyncResponse",
     "AsyncTransport",
@@ -26,6 +28,7 @@ __all__ = [
     "Credentials",
     "Deprecation",
     "DeviceSigner",
+    "EventStream",
     "InvitationLink",
     "LanternClient",
     "Pairing",

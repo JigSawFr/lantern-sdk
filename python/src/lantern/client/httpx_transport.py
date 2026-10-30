@@ -20,7 +20,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from lantern.client.tls import check_pin, fetch_certificate, peer_spki, pinned_context
-from lantern.client.transport import CHUNK, AsyncResponse, Request, Response
+from lantern.client.transport import AsyncResponse, Request, Response
 from lantern.errors import TransportError
 from lantern.http import Headers
 from lantern.spki import spki_sha256
@@ -94,7 +94,7 @@ class HttpxTransport:
 
         def chunks() -> Iterator[bytes]:
             try:
-                yield from answer.iter_bytes(CHUNK)
+                yield from answer.iter_bytes()  # as they arrive: an event stream's too
             except httpx.HTTPError as e:
                 raise TransportError(f"{request.method} {request.url}: {e}") from e
 
@@ -147,7 +147,7 @@ class AsyncHttpxTransport:
 
         async def chunks() -> AsyncIterator[bytes]:
             try:
-                async for chunk in answer.aiter_bytes(CHUNK):
+                async for chunk in answer.aiter_bytes():  # as they arrive
                     yield chunk
             except httpx.HTTPError as e:
                 raise TransportError(f"{request.method} {request.url}: {e}") from e

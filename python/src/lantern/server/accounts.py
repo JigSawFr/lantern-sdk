@@ -31,7 +31,7 @@ CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
 #: An account's name (SPEC.md § 5.7).
 ACCOUNT_NAME = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 #: The scopes, in the order the handshake lists them (SPEC.md § 4.2).
-SCOPES = ("library", "saves", "cheats", "cheats.write", "requests", "admin")
+SCOPES = ("library", "saves", "cheats", "cheats.write", "requests", "admin", "sync.read", "sync.write")
 INVITATION_SYMBOLS = 16  # 80 bits (SPEC.md § 5.5)
 
 
@@ -53,6 +53,11 @@ def parse_time(text: str | None) -> datetime | None:
 def token_hash(token: str) -> str:
     """What a server keeps of a token (SPEC.md § 5.1): its SHA-256, hex."""
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+def new_device_id() -> str:
+    """A device's id (SPEC.md § 5.7): `d_` and 16 hex digits, its key in the sync collection installed (§ 20.2)."""
+    return "d_" + secrets.token_hex(8)
 
 
 def new_token() -> str:
@@ -159,6 +164,12 @@ class Accounts(Protocol):
         """An account changed; AccountError 404 when there is none. Its devices' scopes are cut back with its own."""
         ...
 
+    def delete_user(self, name: str) -> None:
+        """Deletes an account and its devices and invitations, at once (SPEC.md § 5.7): its tokens give 401
+        from their next request, its invitations 410. AccountError 404 for an unknown one, 409 for one the
+        store will not delete (its configuration defines it)."""
+        ...
+
     def device_of(self, token: str) -> Device | None:
         """The live device whose token is `token`, or None (unknown, revoked or expired)."""
         ...
@@ -251,6 +262,16 @@ class MemoryAccounts:
             self._users[name] = user
             return user
 
+    def delete_user(self, name: str) -> None:
+        with self._lock:
+            if name not in self._users:
+                raise AccountError(404, "not_found", "No such account.")
+            del self._users[name]
+            for h in [h for h, d in self._devices.items() if d.user == name]:
+                del self._devices[h]
+            for i in [i for i, inv in self._invitations.items() if inv.user == name]:
+                del self._invitations[i]
+
     # Devices.
 
     def device_of(self, token: str) -> Device | None:
@@ -273,7 +294,7 @@ class MemoryAccounts:
         digest = token_hash(token)
         expires = utc(datetime.now(UTC) + timedelta(seconds=lifetime)) if lifetime else None
         record = Device(
-            id="d_" + secrets.token_urlsafe(12),
+            id=new_device_id(),
             token_hash=digest,
             user=user,
             device=device,
@@ -300,7 +321,7 @@ class MemoryAccounts:
     ) -> Device:
         """Keeps a token the server did not issue here (a demo's, or one moved from another store): its hash."""
         record = Device(
-            id="d_" + secrets.token_urlsafe(12),
+            id=new_device_id(),
             token_hash=token_hash(token),
             user=user,
             device=device,

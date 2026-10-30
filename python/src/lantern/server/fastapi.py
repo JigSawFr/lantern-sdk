@@ -13,6 +13,8 @@ disk): they run in Starlette's thread pool, and files are streamed from it.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Iterator
+
 from fastapi import FastAPI
 from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 from starlette.requests import Request
@@ -67,7 +69,24 @@ def to_response(resp: ServerResponse) -> Response:
     headers = dict(resp.headers.items())
     if isinstance(resp.body, bytes):
         return Response(resp.body, status_code=resp.status, headers=headers)
+    if resp.streaming:
+        return StreamingResponse(_stream(resp), status_code=resp.status, headers=headers)
     return StreamingResponse(iterate_in_threadpool(iter(resp.body)), status_code=resp.status, headers=headers)
+
+
+def _next(iterator: Iterator[bytes]) -> bytes | None:
+    return next(iterator, None)
+
+
+async def _stream(resp: ServerResponse) -> AsyncIterator[bytes]:
+    """A streaming body (an event stream), each piece sent as it comes; closed whatever ends it: its end, or
+    the client leaving (a write that fails, or a cancellation), which frees its slot at once."""
+    iterator = resp.iter_body()
+    try:
+        while (chunk := await run_in_threadpool(_next, iterator)) is not None:
+            yield chunk
+    finally:
+        resp.close()
 
 
 def include(app: FastAPI, lantern: LanternApp, *, body_limit: int = BODY_LIMIT) -> None:

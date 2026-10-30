@@ -17,7 +17,10 @@ Serving, it prints one JSON line, then serves until it is stopped:
 `token` is the token a client sends (the server takes any); `pin` is the
 fingerprint (SHA-256 of the SPKI, hex) a client must pin for a TLS scenario,
 which the server then breaks; `app`, `entry` and `code` are the documents a
-client acts on. Every request the server read is logged on standard error
+client acts on; `static` the root of the static library of
+static-newer-schema. Draft 0.5's scenarios: a forged or expired grant, an
+event of 64 KiB, a mirror that serves other bytes, a static library of a
+newer schema. Every request the server read is logged on standard error
 as one JSON line ({"method", "path", "authorization"}), so that a harness
 can check what a client sent, and to which key.
 
@@ -174,8 +177,38 @@ SCENARIOS: dict[str, Scenario] = {
             "Every route answers 302 to another host.",
             "Never follow it (UnexpectedResponse), and send the token nowhere else.",
         ),
+        Scenario(
+            "forged-grant",
+            "A grant for the file, signed by a key other than the handshake's peers.key (SPEC.md § 19.3).",
+            "Refuse it (IntegrityError) before it goes to any peer: a peer would refuse it too.",
+        ),
+        Scenario(
+            "expired-grant",
+            "A grant for the file, signed by peers.key, whose exp passed ten minutes ago.",
+            "Refuse it (IntegrityError) before it goes to any peer.",
+        ),
+        Scenario(
+            "oversized-event",
+            "An event stream whose second event carries 64 KiB of data (4 KiB at most, SPEC.md § 13).",
+            "Stop reading at the bound and refuse it (DocumentError): never hold the whole line.",
+        ),
+        Scenario(
+            "mirror-wrong-bytes",
+            "An app whose mirror (plain HTTP on loopback, at /mirror/f_frost) serves other bytes; the server's "
+            "own file is right.",
+            "Refuse the mirror's bytes (their SHA-256), keep none of them, take the file from the server; send the "
+            "mirror no token (SPEC.md § 19.1).",
+        ),
+        Scenario(
+            "static-newer-schema",
+            "A static library at /static/ whose lantern.json and pages are of schema 2 (SPEC.md § 21).",
+            "Treat it as absent (NewerSchema), and write nothing back.",
+        ),
     ]
 }
+#: The grant key of the scenarios (its seed), and another one that forges (fictional, the scenarios' own).
+GRANT_SEED = hashlib.sha256(b"Hostile shelf's grant key").digest()
+FORGER_SEED = hashlib.sha256(b"A forger's grant key").digest()
 
 
 def make_certificate(name: str = "Hostile shelf") -> tuple[str, str]:
@@ -225,6 +258,8 @@ def server_context(cert_pem: str, key_pem: str) -> ssl.SSLContext:
 
 
 def hello(schema: int = 1) -> dict[str, Any]:
+    from lantern import ed25519
+
     return {
         "schema": schema,
         "uid": UID,
@@ -233,9 +268,10 @@ def hello(schema: int = 1) -> dict[str, Any]:
         "versions": [1],
         "platforms": ["switch"],
         "account": {"state": "active", "scopes": ["library"], "bound": True},
-        "features": {"library": 1, "homebrew": 1, "pairing": 1, "signatures": 1},
+        "features": {"library": 1, "homebrew": 1, "pairing": 1, "signatures": 1, "events": 1, "peers": 1},
         "auth": {"bearer_only": True, "skew": 300},
-        "limits": {"page_size": 1000},
+        "peers": {"key": base64.b64encode(ed25519.public_key(GRANT_SEED)).decode(), "grant_lifetime": 600},
+        "limits": {"page_size": 1000, "heartbeat": 15, "event_streams": 2, "wait": 60},
     }
 
 
@@ -374,8 +410,16 @@ class Handler(BaseHTTPRequestHandler):
                 self.date = format_datetime(datetime.now(UTC) + timedelta(days=3650), usegmt=True)
             self.problem(401, code, **headers)
             return
-        if path in ("/.well-known/lantern", f"{BASE}/v1", f"{BASE}/v1/"):
+        if path.startswith("/static/"):
+            self.static(path[len("/static/") :])
+        elif path in ("/.well-known/lantern", f"{BASE}/v1", f"{BASE}/v1/"):
             self.doc(hello(schema))
+        elif path == f"{BASE}/v1/grants/sha256/{FILE_SHA256}":
+            self.grant()
+        elif path == f"{BASE}/v1/events":
+            self.events()
+        elif path == "/mirror/f_frost":
+            self.send(200, bytes(len(FILE)), "application/octet-stream")
         elif path == f"{BASE}/v1/apps":
             self.apps(schema)
         elif path == f"{BASE}/v1/homebrew/org.example.paperlamp":
@@ -399,6 +443,46 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.problem(404, "not_found")
 
+    def grant(self) -> None:
+        from lantern.grants import make_grant
+
+        scenario = self.server.scenario
+        exp = int(datetime.now(UTC).timestamp()) + (-600 if scenario == "expired-grant" else 600)
+        seed = FORGER_SEED if scenario == "forged-grant" else GRANT_SEED
+        grant = make_grant(seed, UID, FILE_SHA256, len(FILE), exp)
+        expires = datetime.fromtimestamp(exp, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.doc({"schema": 1, "sha256": FILE_SHA256, "size": len(FILE), "grant": grant, "expires": expires})
+
+    def events(self) -> None:
+        """A stream: retry, ready, then (oversized-event) one event of 64 KiB of data, then the end."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        self.wfile.write(b'retry: 1000\n\nid: e_1\nevent: ready\ndata: {"schema":1}\n\n')
+        if self.server.scenario == "oversized-event":
+            note = "x" * (64 << 10)
+            self.wfile.write(f'id: e_2\nevent: library\ndata: {{"schema":1,"x-hostile":"{note}"}}\n\n'.encode())
+        self.wfile.flush()
+
+    def static(self, rel: str) -> None:
+        """A static library of schema 2 (static-newer-schema), read whatever its Content-Type."""
+        schema = 2 if self.server.scenario == "static-newer-schema" else 1
+        if rel == "lantern.json":
+            doc = hello(schema)
+            doc.update(base=".", account={"state": "anonymous", "scopes": ["library"]})
+            doc["features"] = {"library": 1}
+            doc["static"] = {"generated": "2026-10-30T18:00:00Z", "page_size": 100}
+            doc.pop("peers")
+            self.send(200, json.dumps(doc).encode(), "text/plain")
+        elif rel == "v1/apps/switch/pages/1.json":
+            page = {"schema": schema, "items": [app(file="v1/blobs/sha256/" + FILE_SHA256)], "total": 1, "next": None}
+            self.send(200, json.dumps(page).encode(), "application/octet-stream")
+        else:
+            self.problem(404, "not_found")
+
     def apps(self, schema: int) -> None:
         scenario = self.server.scenario
         if scenario == "oversized-document":
@@ -409,6 +493,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, body)
             return
         items = [app()]
+        if scenario == "mirror-wrong-bytes":
+            host = self.headers.get("Host") or "127.0.0.1"
+            items = [app(mirrors=[{"url": f"http://{host}/mirror/f_frost"}])]
         if scenario == "long-string":
             items = [app("Frostline " * 60)]
         elif scenario == "page-too-long":
@@ -543,6 +630,8 @@ class HostileServer:
             "app": app(),
             "entry": "org.example.paperlamp",
             "code": "KQ4M-7TXD",
+            "static": self.url + "static/",
+            "grant_key": hello()["peers"]["key"],
         }
 
 

@@ -8,7 +8,9 @@ never gave (or gave for another listing) answers 400; an expired one, 410.
 
 A `since` token (SPEC.md § 6.4, § 7.3) holds a position in the server's
 change journal, sealed the same way: 400 when the server never gave it, 410
-when the journal no longer reaches back to it.
+when the journal no longer reaches back to it. With events (§ 18), it also
+holds a position among the events, so that an event's id is a token of
+/v1/changes, and a changes token a Last-Event-ID.
 """
 
 from __future__ import annotations
@@ -120,8 +122,29 @@ class SinceTokens:
     def __init__(self, sealer: Sealer) -> None:
         self.sealer = sealer
 
-    def give(self, kind: str, epoch: str, position: int) -> str:
-        return self.sealer.seal(kind, {"e": epoch, "n": position})
+    def give(self, kind: str, epoch: str, position: int, events: tuple[str, int] | None = None) -> str:
+        """A token of `position` in the journal of `epoch`; with `events`, also of a position among the events
+        (their epoch and sequence number). The same position gives the same token."""
+        payload: dict[str, JSONValue] = {"e": epoch, "n": position}
+        if events is not None:
+            payload["v"] = [events[0], events[1]]
+        return self.sealer.seal(kind, payload)
+
+    def events(self, kind: str, token: str) -> tuple[str, int] | None:
+        """(epoch, sequence number) of the events a token names; None for a token given without them; 400 for
+        one the server never gave."""
+        try:
+            payload = self.sealer.open(kind, token)
+        except ValueError:
+            raise bad_request("Unknown token: one this server never gave.") from None
+        found = payload.get("v") if isinstance(payload, dict) else None
+        if found is None:
+            return None
+        if not (
+            isinstance(found, list) and len(found) == 2 and isinstance(found[0], str) and isinstance(found[1], int)
+        ):
+            raise bad_request("Unknown token.")
+        return found[0], found[1]
 
     def position(self, kind: str, token: str, epoch: str, oldest: int, current: int) -> int:
         """The position a token names: 400 when the server never gave it, 410 when too old."""
