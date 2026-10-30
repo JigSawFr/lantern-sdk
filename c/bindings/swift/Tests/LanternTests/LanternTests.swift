@@ -1,6 +1,7 @@
 // The Swift sketch over the C library: its version, a fingerprint, and a
 // handshake through a transport of Swift (the specification's example
 // server, "Living room shelf").
+import CLantern
 import Foundation
 import XCTest
 

@@ -17,6 +17,6 @@ let package = Package(
         // lantern.h, through a module map; links liblantern_c
         .systemLibrary(name: "CLantern", path: "Sources/CLantern"),
         .target(name: "Lantern", dependencies: ["CLantern"]),
-        .testTarget(name: "LanternTests", dependencies: ["Lantern"]),
+        .testTarget(name: "LanternTests", dependencies: ["Lantern", "CLantern"]),
     ]
 )
