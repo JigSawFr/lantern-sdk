@@ -13,16 +13,24 @@ from pathlib import Path
 
 
 def c_string(value):
-    """A C string literal: printable ASCII as is, every other byte in octal."""
+    """A C string literal: printable ASCII as is, every other byte in octal.
+
+    A digit right after an octal escape starts a new literal ("\\012" "8"):
+    the escape stops at three digits anyway, but MSVC warns (C4125)."""
     out = ['"']
+    escaped = False
     for byte in value.encode("utf-8"):
         char = chr(byte)
+        if escaped and char.isdigit():
+            out.append('" "')
+        escaped = False
         if char in '"\\':
             out.append("\\" + char)
         elif 0x20 <= byte < 0x7F and char != "?":
             out.append(char)
         else:
             out.append(f"\\{byte:03o}")
+            escaped = True
     out.append('"')
     return "".join(out)
 
