@@ -160,7 +160,7 @@ jobs:
           for wanted in $PACKAGES; do
             case "$wanted" in
               libcxx) packages="$packages libc++-$CLANG-dev libc++abi-$CLANG-dev" ;;
-              coverage) packages="$packages llvm-$CLANG" ;;
+              coverage) packages="$packages llvm-$CLANG libclang-rt-$CLANG-dev" ;;
               # gcc-multilib brings the i386 asm/ headers the versioned one leaves out
               multilib) packages="$packages g++-$GCC-multilib gcc-multilib" ;;
               tls) packages="$packages libcurl4-openssl-dev libmbedtls-dev openssl python3-cryptography" ;;
