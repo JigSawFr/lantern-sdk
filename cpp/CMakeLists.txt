@@ -39,6 +39,7 @@ add_library(lantern
     src/document.cpp
     src/encoding.cpp
     src/error.cpp
+    src/generated/types.cpp
     src/json.cpp
     src/memory.cpp
     src/sha256.cpp)
