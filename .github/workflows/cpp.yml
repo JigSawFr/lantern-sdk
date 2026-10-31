@@ -1,50 +1,32 @@
 # The C++ library (cpp/, cpp/README.md): its format, its generated types,
 # its build with warnings as errors on every compiler and standard library
-# of the desktop, its tests (unit, against the specification's reference
-# server, its peer and a static export, every scenario of the
-# repository's malicious server, and each TLS adapter over HTTPS), the
-# sanitizers, clang-tidy, a short fuzz run, the install, and a cross build of the
-# library for every platform Aurore runs on, each with the toolchain
-# Aurore's CI uses (with the mbedTLS adapter where the image ships mbedTLS).
+# of the desktop (GCC 16, clang 23 with libstdc++ and libc++, MSVC and
+# clang-cl of Visual Studio 2026, Xcode's clang), hardened, its tests (unit,
+# against the specification's reference server, its peer and a static
+# export, every scenario of the repository's malicious server, and each TLS
+# adapter over HTTPS) with their coverage, the sanitizers, clang-tidy, a
+# short fuzz run, the install, and a cross build of the library for every
+# platform Aurore runs on, each with the toolchain Aurore's CI uses (with
+# the mbedTLS adapter where the image ships mbedTLS). CMake 4.4, Ninja 1.13
+# and ccache everywhere they apply (.github/actions/cmake).
 name: cpp
 
-# Only what the C++ library is made of: its folder, the specification it
-# follows (the submodule), this workflow, and the files every library of
-# the repository shares (the submodules' list, the licences), and the
-# malicious test server its integration tests run
+# Called by ci.yml when the C++ library's files change: its folder, the
+# specification it follows (the submodule), this workflow, the files every
+# library of the repository shares (the submodules' list, the licences), and
+# the malicious test server its integration tests run (.github/scripts/changes.sh)
 on:
-  push:
-    branches: [ main ]
-    paths:
-      - "cpp/**"
-      - "spec"
-      - ".gitmodules"
-      - "REUSE.toml"
-      - "LICENSES/**"
-      - "python/tools/hostile_server.py"
-      - ".github/workflows/cpp.yml"
-  pull_request:
-    paths:
-      - "cpp/**"
-      - "spec"
-      - ".gitmodules"
-      - "REUSE.toml"
-      - "LICENSES/**"
-      - "python/tools/hostile_server.py"
-      - ".github/workflows/cpp.yml"
-
-# A new push to a pull request stops the run of the previous one
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  workflow_call:
 
 permissions:
   contents: read
 
 env:
-  # The newest clang Ubuntu 26.04 ships, for clang, libc++, clang-tidy and libFuzzer
-  CLANG: 22
-  # The newest GCC it ships
+  # The newest stable LLVM, from apt.llvm.org (.github/actions/llvm): clang,
+  # libc++, clang-tidy, libFuzzer and the sanitizers' runtimes
+  CLANG: 23
+  # Ubuntu 26.04's newest released GCC, for the 32-bit job alone: GCC's
+  # image, which the other GCC jobs take (gcc 16), has no multilib
   GCC: 15
 
 jobs:
@@ -83,6 +65,62 @@ jobs:
       - name: gen_types.py --check
         run: python3 cpp/tools/gen_types.py --check
 
+  # GCC 16, the newest release (Ubuntu 26.04 only has a snapshot of it from
+  # before), from GCC's official image on Debian 13: the hardened dev
+  # build, without exceptions, and under ASan and UBSan. SYS_PTRACE for
+  # LeakSanitizer, which stops the process's threads to look for leaks.
+  gcc:
+    name: linux (gcc 16, ${{ matrix.preset }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    container:
+      image: gcc:16.2.0@sha256:07280eb2e744f1b7a2d8d4a3894c089ea07266c109758afc388a634bd098e4eb
+      options: --cap-add=SYS_PTRACE
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [ dev, noexcept, asan, ubsan ]
+    env:
+      # The image's GCC, in /usr/local (cc and c++ are Debian's)
+      CC: gcc
+      CXX: g++
+    steps:
+      # Before the checkout, for the submodule: git is the image's. The
+      # adapters' libraries and openssl, Python's cryptography for the
+      # malicious server's TLS scenarios
+      - name: The adapters' libraries
+        run: |
+          apt-get update -q
+          apt-get install -y -q --no-install-recommends ccache \
+            libcurl4-openssl-dev libmbedtls-dev openssl python3 python3-cryptography
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: ./.github/actions/cmake
+        with:
+          ccache: cpp-gcc16-${{ matrix.preset }}
+      - name: Build
+        working-directory: cpp
+        run: |
+          gcc --version | head -n 1
+          cmake --preset "$PRESET" -DLANTERN_WERROR=ON
+          cmake --build --preset "$PRESET"
+          ccache --show-stats
+        env:
+          PRESET: ${{ matrix.preset }}
+      # Unit tests, the integration tests against spec/server (its peer, its
+      # static export, each scenario of python/tools/hostile_server.py), each
+      # TLS adapter over HTTPS: side by side, each on its own ports
+      - name: Test
+        working-directory: cpp
+        run: ctest --preset "$PRESET" --parallel "$(nproc)"
+        env:
+          PRESET: ${{ matrix.preset }}
+
+  # clang (LLVM's newest) with libstdc++ and with libc++, and the 32-bit
+  # build of Ubuntu's GCC
   linux:
     name: linux (${{ matrix.name }})
     runs-on: ubuntu-26.04
@@ -93,94 +131,150 @@ jobs:
         include:
           # tls: libcurl, mbedTLS and openssl, for the TLS adapters and their
           # tests against the reference server over HTTPS, and Python's
-          # cryptography for the malicious server's TLS scenarios
-          - { name: "gcc, libstdc++", cc: gcc, packages: "tls" }
-          - { name: "clang, libstdc++", cc: clang, packages: "tls" }
+          # cryptography for the malicious server's TLS scenarios. With
+          # clang's source-based coverage: the report goes to the summary
+          - { name: "clang, libstdc++, coverage", cc: clang, packages: "tls coverage", preset: coverage }
           - { name: "clang, libc++", cc: clang, packages: "libcxx tls", cxxflags: "-stdlib=libc++" }
+          # The library, its tests, the adapters and the example with -fno-exceptions -fno-rtti
+          - { name: "clang, libc++, no exceptions", cc: clang, packages: "libcxx tls", cxxflags: "-stdlib=libc++", preset: noexcept }
           # The 32-bit consoles (3DS, Vita) and armeabi-v7a, on a desktop;
           # the adapters' libraries are the runner's 64-bit ones: left out
-          - { name: "gcc, 32-bit", cc: gcc, packages: "multilib", cxxflags: "-m32", cflags: "-m32",
+          - { name: "gcc 15, 32-bit", cc: gcc, packages: "multilib", cxxflags: "-m32", cflags: "-m32",
               cmake: "-DLANTERN_CURL=OFF -DLANTERN_MBEDTLS=OFF" }
-          # The library, its tests, the adapters and the example with -fno-exceptions -fno-rtti
-          - { name: "gcc, no exceptions", cc: gcc, packages: "tls", preset: noexcept }
-          - { name: "clang, no exceptions", cc: clang, packages: "libcxx tls", cxxflags: "-stdlib=libc++", preset: noexcept }
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           submodules: true
+      - uses: ./.github/actions/llvm
+        if: matrix.cc == 'clang'
+        with:
+          version: ${{ env.CLANG }}
       - name: Install the compilers
         run: |
-          sudo apt-get update -q
-          packages="ninja-build g++-$GCC clang-$CLANG"
-          for wanted in ${{ matrix.packages }}; do
+          case "$CC_NAME" in
+            gcc) packages="ccache g++-$GCC" ;;
+            clang) packages="ccache clang-$CLANG" ;;
+          esac
+          for wanted in $PACKAGES; do
             case "$wanted" in
               libcxx) packages="$packages libc++-$CLANG-dev libc++abi-$CLANG-dev" ;;
+              coverage) packages="$packages llvm-$CLANG libclang-rt-$CLANG-dev" ;;
               # gcc-multilib brings the i386 asm/ headers the versioned one leaves out
               multilib) packages="$packages g++-$GCC-multilib gcc-multilib" ;;
               tls) packages="$packages libcurl4-openssl-dev libmbedtls-dev openssl python3-cryptography" ;;
             esac
           done
+          sudo apt-get update -q
+          # shellcheck disable=SC2086 # a list of packages
           sudo apt-get install -y -q --no-install-recommends $packages
+        env:
+          CC_NAME: ${{ matrix.cc }}
+          PACKAGES: ${{ matrix.packages }}
+      - uses: ./.github/actions/cmake
+        with:
+          ccache: cpp-linux-${{ matrix.name }}
       - name: Build
         working-directory: cpp
         run: |
-          if [ "${{ matrix.cc }}" = gcc ]; then export CC=gcc-$GCC CXX=g++-$GCC; else export CC=clang-$CLANG CXX=clang++-$CLANG; fi
-          cmake --preset "$PRESET" -DLANTERN_WERROR=ON ${{ matrix.cmake }} \
-            -DCMAKE_C_FLAGS="${{ matrix.cflags }}" \
-            -DCMAKE_CXX_FLAGS="${{ matrix.cxxflags }}" \
-            -DCMAKE_EXE_LINKER_FLAGS="${{ matrix.cxxflags }}"
+          if [ "$CC_NAME" = gcc ]; then export CC="gcc-$GCC" CXX="g++-$GCC"; else export CC="clang-$CLANG" CXX="clang++-$CLANG"; fi
+          # shellcheck disable=SC2086 # a list of options
+          cmake --preset "$PRESET" -DLANTERN_WERROR=ON $CMAKE_OPTIONS \
+            ${MATRIX_CFLAGS:+-DCMAKE_C_FLAGS="$MATRIX_CFLAGS"} \
+            ${MATRIX_CXXFLAGS:+-DCMAKE_CXX_FLAGS="$MATRIX_CXXFLAGS" -DCMAKE_EXE_LINKER_FLAGS="$MATRIX_CXXFLAGS"}
           cmake --build --preset "$PRESET"
+          ccache --show-stats
         env:
           PRESET: ${{ matrix.preset || 'dev' }}
-      # Unit tests, then the integration tests against spec/server (its
-      # peer, its static export, and each plain HTTP scenario of
-      # python/tools/hostile_server.py), then each TLS adapter against it
-      # over HTTPS (and the malicious server's TLS scenarios)
+          CC_NAME: ${{ matrix.cc }}
+          CMAKE_OPTIONS: ${{ matrix.cmake }}
+          MATRIX_CFLAGS: ${{ matrix.cflags }}
+          MATRIX_CXXFLAGS: ${{ matrix.cxxflags }}
+      # As the gcc job's tests
       - name: Test
         working-directory: cpp
-        run: ctest --preset "$PRESET"
+        run: ctest --preset "$PRESET" --parallel "$(nproc)"
         env:
           PRESET: ${{ matrix.preset || 'dev' }}
+      # What the tests run of the library and its adapters (not the tests,
+      # nor the examples, the vendored and the generated code), in the job's
+      # summary; the LCOV file as an artifact
+      - name: Coverage
+        if: matrix.preset == 'coverage'
+        working-directory: cpp
+        run: |
+          "llvm-profdata-$CLANG" merge -sparse build/coverage/profiles/*.profraw -o build/coverage/lantern.profdata
+          # The test programs: the first as is, the others after -object
+          objects=()
+          for binary in build/coverage/tests/lantern_*_tests; do
+            if [ -x "$binary" ] && [ -f "$binary" ]; then objects+=(-object "$binary"); fi
+          done
+          "llvm-cov-$CLANG" export --format=lcov --instr-profile=build/coverage/lantern.profdata \
+            --ignore-filename-regex='/(tests|examples|third_party|generated)/' "${objects[@]:1}" > build/coverage/lantern.lcov
+          python3 ../.github/scripts/lcov_summary.py "C++ coverage (unit, integration and TLS tests)" \
+            build/coverage/lantern.lcov --strip "$PWD/" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: matrix.preset == 'coverage'
+        with:
+          name: cpp-coverage
+          path: cpp/build/coverage/lantern.lcov
+          retention-days: 14
 
+  # ASan with UBSan, and TSan, with clang (GCC's ASan and UBSan: the gcc job)
   sanitizers:
-    name: linux (${{ matrix.preset }}, ${{ matrix.cc }})
+    name: linux (${{ matrix.preset }}, clang)
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { preset: asan, cc: clang }
-          - { preset: asan, cc: gcc }
-          - { preset: ubsan, cc: gcc }
-          - { preset: tsan, cc: clang }
+        preset: [ asan, tsan ]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           submodules: true
+      - uses: ./.github/actions/llvm
+        with:
+          version: ${{ env.CLANG }}
       - name: Install the compilers
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends ninja-build g++-$GCC clang-$CLANG libclang-rt-$CLANG-dev \
+          sudo apt-get install -y -q --no-install-recommends ccache "clang-$CLANG" "libclang-rt-$CLANG-dev" \
             libcurl4-openssl-dev libmbedtls-dev openssl python3-cryptography
+      - uses: ./.github/actions/cmake
+        with:
+          ccache: cpp-${{ matrix.preset }}-clang
       - name: Build
         working-directory: cpp
         run: |
-          if [ "${{ matrix.cc }}" = gcc ]; then export CC=gcc-$GCC CXX=g++-$GCC; else export CC=clang-$CLANG CXX=clang++-$CLANG; fi
-          cmake --preset ${{ matrix.preset }} -DLANTERN_WERROR=ON
-          cmake --build --preset ${{ matrix.preset }}
+          export CC="clang-$CLANG" CXX="clang++-$CLANG"
+          cmake --preset "$PRESET" -DLANTERN_WERROR=ON
+          cmake --build --preset "$PRESET"
+          ccache --show-stats
+        env:
+          PRESET: ${{ matrix.preset }}
       - name: Test
         working-directory: cpp
-        run: ctest --preset ${{ matrix.preset }}
+        run: ctest --preset "$PRESET" --parallel "$(nproc)"
+        env:
+          PRESET: ${{ matrix.preset }}
 
   tidy:
-    name: clang-tidy
+    name: clang-tidy (${{ matrix.stdlib }})
     runs-on: ubuntu-26.04
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        stdlib: [ libc++, libstdc++ ]
+    env:
+      # Ubuntu's LLVM 22, whose checks the code is clean of: clang-tidy 23
+      # brings new ones (readability-trailing-comma, pointees in
+      # misc-const-correctness…) that the code is to meet first
+      TIDY: 22
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -190,25 +284,32 @@ jobs:
       - name: Install clang and clang-tidy
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends ninja-build clang-$CLANG clang-tidy-$CLANG \
-            libc++-$CLANG-dev libc++abi-$CLANG-dev libcurl4-openssl-dev libmbedtls-dev
-      # The library and the adapters, against libc++ and against libstdc++;
-      # cpp/.clang-tidy says which checks and why some are off; named, since
-      # run-clang-tidy lists the checks from the repository root, where none is
+          sudo apt-get install -y -q --no-install-recommends "clang-$TIDY" "clang-tidy-$TIDY" \
+            "libc++-$TIDY-dev" "libc++abi-$TIDY-dev" libcurl4-openssl-dev libmbedtls-dev
+      - uses: ./.github/actions/cmake
+      # The library and the adapters, against libc++ and against libstdc++
+      # (one job each, side by side); cpp/.clang-tidy says which checks and
+      # why some are off; named, since run-clang-tidy lists the checks from
+      # the repository root, where none is. Only the configure: clang-tidy
+      # reads the compile commands, and needs no build.
       - name: clang-tidy
         run: |
-          export CC=clang-$CLANG CXX=clang++-$CLANG
-          cmake -S cpp --preset dev -B build/libcxx -DCMAKE_CXX_FLAGS=-stdlib=libc++ -DCMAKE_EXE_LINKER_FLAGS=-stdlib=libc++
-          cmake -S cpp --preset dev -B build/libstdcxx
-          for build in build/libcxx build/libstdcxx; do
-            run-clang-tidy-$CLANG -clang-tidy-binary clang-tidy-$CLANG -config-file cpp/.clang-tidy -p $build -quiet \
-              'cpp/src/[^g].*\.cpp$' 'cpp/adapters/.*\.cpp$'
-          done
+          export CC="clang-$TIDY" CXX="clang++-$TIDY"
+          if [ "$STDLIB" = libc++ ]; then
+            cmake -S cpp --preset dev -B build/tidy -DCMAKE_CXX_FLAGS=-stdlib=libc++ -DCMAKE_EXE_LINKER_FLAGS=-stdlib=libc++
+          else
+            cmake -S cpp --preset dev -B build/tidy
+          fi
+          "run-clang-tidy-$TIDY" -clang-tidy-binary "clang-tidy-$TIDY" -config-file cpp/.clang-tidy -p build/tidy -quiet \
+            'cpp/src/[^g].*\.cpp$' 'cpp/adapters/.*\.cpp$'
+        env:
+          STDLIB: ${{ matrix.stdlib }}
 
   # The libFuzzer targets of cpp/tests/fuzz, a minute each, under ASan and
   # UBSan, as Aurore's fuzz job: seeded with the repository's corpus and the
   # specification's examples, the corpus each grows kept from one run to the
-  # next; an input that crashes goes up as an artifact.
+  # next; an input that crashes goes up as an artifact. One target per core
+  # at a time: the eleven minutes of fuzzing take three on the runner's four.
   fuzz:
     name: linux (fuzz)
     runs-on: ubuntu-26.04
@@ -219,35 +320,52 @@ jobs:
         with:
           persist-credentials: false
           submodules: true
+      - uses: ./.github/actions/llvm
+        with:
+          version: ${{ env.CLANG }}
       - name: Install clang
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends ninja-build clang-$CLANG libclang-rt-$CLANG-dev
+          sudo apt-get install -y -q --no-install-recommends ccache "clang-$CLANG" "libclang-rt-$CLANG-dev"
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: fuzz-corpus
           key: cpp-fuzz-corpus-${{ github.run_id }}
           restore-keys: cpp-fuzz-corpus-
+      - uses: ./.github/actions/cmake
+        with:
+          ccache: cpp-fuzz
       - name: Build
         run: |
-          export CC=clang-$CLANG CXX=clang++-$CLANG
+          export CC="clang-$CLANG" CXX="clang++-$CLANG"
           cmake -S cpp --preset fuzz -B build/fuzz -DLANTERN_WERROR=ON
           cmake --build build/fuzz
+          ccache --show-stats
+      # Each target's output in its own log, printed once it ends
       - name: Fuzz
         run: |
-          mkdir -p fuzz-crashes
-          for target in json paths problem homebrew signature discovery http_signature certificate sse save grant; do
-            mkdir -p fuzz-corpus/$target
-            seeds=cpp/tests/fuzz/corpus/$target
-            case $target in json|problem|homebrew|discovery|grant) seeds="$seeds spec/examples/v1 spec/examples/v1/invalid" ;; esac
-            build/fuzz/tests/fuzz/lantern_fuzz_$target -max_total_time=60 -max_len=16384 -timeout=10 \
-              -artifact_prefix=fuzz-crashes/$target- fuzz-corpus/$target $seeds
-          done
+          mkdir -p fuzz-crashes fuzz-logs
+          fuzz() {
+            target=$1
+            mkdir -p "fuzz-corpus/$target"
+            seeds=(cpp/tests/fuzz/corpus/"$target")
+            case $target in json|problem|homebrew|discovery|grant) seeds+=(spec/examples/v1 spec/examples/v1/invalid) ;; esac
+            status=0
+            build/fuzz/tests/fuzz/lantern_fuzz_"$target" -max_total_time=60 -max_len=16384 -timeout=10 \
+              -artifact_prefix="fuzz-crashes/$target-" "fuzz-corpus/$target" "${seeds[@]}" > "fuzz-logs/$target.log" 2>&1 || status=$?
+            echo "::group::$target (exit $status)"; tail -n 40 "fuzz-logs/$target.log"; echo "::endgroup::"
+            return "$status"
+          }
+          export -f fuzz
+          printf '%s\n' json paths problem homebrew signature discovery http_signature certificate sse save grant \
+            | xargs -P "$(nproc)" -I {} bash -c 'fuzz {}'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: cpp-fuzz-crashes
-          path: fuzz-crashes
+          path: |
+            fuzz-crashes
+            fuzz-logs
           retention-days: 30
 
   install:
@@ -263,20 +381,21 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install Ninja
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends ninja-build
+      - uses: ./.github/actions/cmake
+        with:
+          ccache: cpp-install-${{ matrix.consumer }}
       # An app's two ways in (cpp/README.md): find_package after an install,
       # or add_subdirectory of the source
       - name: Build an app with Lantern
+        env:
+          CONSUMER: ${{ matrix.consumer }}
         run: |
-          if [ "${{ matrix.consumer }}" = package ]; then
+          if [ "$CONSUMER" = package ]; then
             cmake -S cpp -B build/lantern -G Ninja -DCMAKE_BUILD_TYPE=Release -DLANTERN_BUILD_TESTS=OFF -DLANTERN_BUILD_EXAMPLES=OFF
             cmake --build build/lantern
             cmake --install build/lantern --prefix "$RUNNER_TEMP/prefix"
           fi
-          cmake -S cpp/tests/consumer -B build/consumer -G Ninja -DLANTERN_CONSUMER=${{ matrix.consumer }} \
+          cmake -S cpp/tests/consumer -B build/consumer -G Ninja -DLANTERN_CONSUMER="$CONSUMER" \
             -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/prefix"
           cmake --build build/consumer
           build/consumer/lantern_consumer
@@ -297,15 +416,21 @@ jobs:
         with:
           persist-credentials: false
           submodules: true
-      # Visual Studio's generator, the runner's newest; unit tests only (the
+      # Visual Studio's generator, the runner's newest (Visual Studio 2026
+      # on windows-2025 since June 2026); unit tests only (the
       # loopback adapter is POSIX). No TLS adapter: a libcurl the image
-      # carries for other tools is not one to build against
+      # carries for other tools is not one to build against. MSBuild
+      # compiles the files of a project side by side (its multi-tool task),
+      # and the projects too (--parallel)
       - name: Build
         shell: bash
         run: |
-          cmake -S cpp -B build ${{ matrix.toolset }} -DLANTERN_WERROR=ON -DLANTERN_BUILD_TESTS=ON -DLANTERN_BUILD_EXAMPLES=OFF \
-            -DLANTERN_CURL=OFF -DLANTERN_MBEDTLS=OFF
-          cmake --build build --config Debug
+          # shellcheck disable=SC2086 # empty, or -T ClangCL
+          cmake -S cpp -B build $TOOLSET -DLANTERN_WERROR=ON -DLANTERN_BUILD_TESTS=ON -DLANTERN_BUILD_EXAMPLES=OFF \
+            -DLANTERN_CURL=OFF -DLANTERN_MBEDTLS=OFF "-DCMAKE_VS_GLOBALS=UseMultiToolTask=true;EnforceProcessCountAcrossBuilds=true"
+          cmake --build build --config Debug --parallel
+        env:
+          TOOLSET: ${{ matrix.toolset }}
       - name: Test
         run: ctest --test-dir build -C Debug --output-on-failure -R unit
 
@@ -324,10 +449,15 @@ jobs:
         with:
           persist-credentials: false
           submodules: true
+      - uses: ./.github/actions/cmake
+        with:
+          ccache: cpp-macos
+      # Xcode's clang (AppleClang), with Ninja
       - name: Build
         run: |
-          cmake -S cpp -B build -DCMAKE_BUILD_TYPE=Debug -DLANTERN_WERROR=ON
-          cmake --build build -j "$(sysctl -n hw.ncpu)"
+          cmake -S cpp -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DLANTERN_WERROR=ON
+          cmake --build build
+          ccache --show-stats
       - name: Test
         run: ctest --test-dir build --output-on-failure -R unit
 
@@ -384,6 +514,7 @@ jobs:
       # VitaSDK's image (GCC 15.2), the one Aurore's GXM job runs
       - name: Build
         run: |
+          # shellcheck disable=SC2016 # expanded by the image's shell
           printf '%s\n' 'set -e' 'cd /src' \
             'cmake -S cpp -B build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" -DCMAKE_BUILD_TYPE=Release -DLANTERN_WERROR=ON' \
             'cmake --build build -j "$(nproc)"' > build_vita.sh
@@ -444,12 +575,15 @@ jobs:
         with:
           persist-credentials: false
       # The runner's newest NDK, as Aurore's Gradle build takes it
+      - uses: ./.github/actions/cmake
+        with:
+          ccache: cpp-android-${{ matrix.abi }}
       - name: Build
+        env:
+          ABI: ${{ matrix.abi }}
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends ninja-build
           cmake -S cpp -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=${{ matrix.abi }} -DANDROID_PLATFORM=android-26 -DCMAKE_BUILD_TYPE=Release -DLANTERN_WERROR=ON
+            -DANDROID_ABI="$ABI" -DANDROID_PLATFORM=android-26 -DCMAKE_BUILD_TYPE=Release -DLANTERN_WERROR=ON
           cmake --build build
 
   ios:
@@ -483,22 +617,30 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # emsdk with the tools it installs (clang, binaryen, node), and the
+      # system libraries Emscripten builds, kept for this version: the
+      # download and the install take a minute or two. The commit is checked
+      # on the clone, before anything is kept.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/.emscripten_cache
-          key: cpp-emscripten-${{ env.EMSDK_VERSION }}
+          path: |
+            ~/emsdk
+            ~/.emscripten_cache
+          key: cpp-emsdk-${{ env.EMSDK_VERSION }}-${{ env.EMSDK_COMMIT }}
       - name: Emscripten ${{ env.EMSDK_VERSION }}
         run: |
-          git clone --depth 1 --branch "$EMSDK_VERSION" https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
-          test "$(git -C "$RUNNER_TEMP/emsdk" rev-parse HEAD)" = "$EMSDK_COMMIT" \
+          if [ ! -d ~/emsdk/.git ]; then
+            git clone --depth 1 --branch "$EMSDK_VERSION" https://github.com/emscripten-core/emsdk.git ~/emsdk
+          fi
+          test "$(git -C ~/emsdk rev-parse HEAD)" = "$EMSDK_COMMIT" \
             || { echo "::error::emsdk's $EMSDK_VERSION tag is not $EMSDK_COMMIT any more"; exit 1; }
-          "$RUNNER_TEMP/emsdk/emsdk" install "$EMSDK_VERSION"
-          "$RUNNER_TEMP/emsdk/emsdk" activate "$EMSDK_VERSION"
+          ~/emsdk/emsdk install "$EMSDK_VERSION"
+          ~/emsdk/emsdk activate "$EMSDK_VERSION"
+      - uses: ./.github/actions/cmake
       - name: Build
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends ninja-build
-          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          # shellcheck disable=SC1090 # emsdk's, installed above
+          source ~/emsdk/emsdk_env.sh
           export EM_CACHE="$HOME/.emscripten_cache"
           emcmake cmake -S cpp -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLANTERN_WERROR=ON
           cmake --build build

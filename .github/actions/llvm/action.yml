@@ -1,0 +1,33 @@
+# LLVM's own packages (apt.llvm.org) for the runner's Ubuntu: the newest
+# stable clang, libc++, compiler-rt, clang-tidy and llvm tools, newer than
+# the ones the release ships. Adds the source only: the job's own
+# `apt-get update` and `apt-get install clang-$CLANG …` follow.
+#
+# The signing key is LLVM's (Sylvestre Ledru's, of the Debian LLVM
+# packages), checked against its fingerprint before apt trusts it.
+name: llvm
+description: apt.llvm.org's packages of one LLVM version, as an apt source
+inputs:
+  version:
+    description: LLVM's major version (e.g. 23)
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: apt.llvm.org (LLVM ${{ inputs.version }})
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        FINGERPRINT: 6084F3CF814B57C1CF12EFD515CF4D18AF4F7421
+      run: |
+        key="$RUNNER_TEMP/llvm-snapshot.gpg.key"
+        curl -fsSL --retry 3 https://apt.llvm.org/llvm-snapshot.gpg.key -o "$key"
+        found=$(gpg --show-keys --with-colons "$key" | awk -F: '$1 == "fpr" { print $10; exit }')
+        if [ "$found" != "$FINGERPRINT" ]; then
+          echo "::error::apt.llvm.org's key is $found, not $FINGERPRINT"
+          exit 1
+        fi
+        sudo gpg --dearmor --yes -o /usr/share/keyrings/llvm.gpg "$key"
+        codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+        echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] https://apt.llvm.org/$codename/ llvm-toolchain-$codename-$VERSION main" \
+          | sudo tee /etc/apt/sources.list.d/llvm.list > /dev/null

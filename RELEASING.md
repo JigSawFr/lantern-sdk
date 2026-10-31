@@ -117,7 +117,8 @@ tools/release-requirements.txt` in a virtual environment, then
 release's `build-info-npm.txt` says which. The native archives come out
 the same with the same compiler (GCC 15 on GitHub's ubuntu-26.04 image,
 `build-info-cpp.txt`). `release-check.yml` checks every part on each pull
-request that touches a library, the tools or this release chain.
+request that touches a library, the tools or this release chain (called by
+`ci.yml`, behind its `all green` check).
 
 The build tools are raised by hand: `hatchling` in
 `python/pyproject.toml` and `tools/release-requirements.in`, then

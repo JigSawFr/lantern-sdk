@@ -1,0 +1,117 @@
+# The repository's checks, in one run and behind one check. `changes` reads
+# which files a pull request or a push changes (.github/scripts/changes.sh);
+# each library's workflow runs when its files changed (cpp.yml, c.yml,
+# python.yml, typescript.yml, as reusable workflows), the release's
+# reproducibility when a part of a release changed (release-check.yml), the
+# workflows' own lint when .github/ changed, the licences always; then
+# `all green` passes when every one of them passed or was skipped for want of
+# a change. Branch protection requires `all green` alone (CONTRIBUTING.md),
+# so a pull request that touches only Python is not left waiting for C++
+# checks that never start. Everything starts at once: no job waits for
+# another but on `changes`, which takes a few seconds.
+name: ci
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  # Every part, on demand
+  workflow_dispatch:
+
+# A new push to a pull request cancels the run on the commit it replaces;
+# on main, every push keeps its own run (a run per commit, for the caches
+# and the release-please pull request's checks)
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      cpp: ${{ steps.files.outputs.cpp }}
+      c: ${{ steps.files.outputs.c }}
+      python: ${{ steps.files.outputs.python }}
+      typescript: ${{ steps.files.outputs.typescript }}
+      release: ${{ steps.files.outputs.release }}
+      workflows: ${{ steps.files.outputs.workflows }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # A pull request's merge commit and its base
+          fetch-depth: 2
+      - name: Files changed
+        id: files
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: .github/scripts/changes.sh "$EVENT" "$BEFORE" | tee -a "$GITHUB_OUTPUT"
+
+  cpp:
+    needs: changes
+    if: needs.changes.outputs.cpp == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/cpp.yml
+
+  c:
+    needs: changes
+    if: needs.changes.outputs.c == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/c.yml
+
+  python:
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/python.yml
+
+  typescript:
+    needs: changes
+    if: needs.changes.outputs.typescript == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/typescript.yml
+
+  release:
+    needs: changes
+    if: needs.changes.outputs.release == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/release-check.yml
+
+  workflows:
+    needs: changes
+    if: needs.changes.outputs.workflows == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/workflows.yml
+
+  reuse:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reuse.yml
+
+  # The one check branch protection requires. A job of a called workflow
+  # that may fail (continue-on-error: macOS, iOS, PS4) does not fail it.
+  all-green:
+    name: all green
+    if: always()
+    needs: [ changes, cpp, c, python, typescript, release, workflows, reuse ]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - uses: re-actors/alls-green@b5b5b37504aa4183270bd3d855c52a67f212be35 # v1.3.0
+        with:
+          jobs: ${{ toJSON(needs) }}
+          allowed-skips: cpp, c, python, typescript, release, workflows

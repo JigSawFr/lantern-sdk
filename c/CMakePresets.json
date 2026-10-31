@@ -17,10 +17,18 @@
       }
     },
     {
+      "name": "hardened",
+      "hidden": true,
+      "description": "Hardening flags (cmake/LanternHardening.cmake): the stack protector, stack clash and CET protection, full RELRO; _FORTIFY_SOURCE=3 when optimised; the standard library's checks and a pattern in uninitialised variables in Debug",
+      "cacheVariables": {
+        "LANTERN_HARDENING": "ON"
+      }
+    },
+    {
       "name": "dev",
       "displayName": "Development",
       "description": "Debug, the tests; any compiler",
-      "inherits": "base",
+      "inherits": ["base", "hardened"],
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
       }
@@ -29,7 +37,7 @@
       "name": "release",
       "displayName": "Release",
       "description": "Optimised, the tests",
-      "inherits": "base",
+      "inherits": ["base", "hardened"],
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
@@ -38,7 +46,7 @@
       "name": "noexcept",
       "displayName": "No exceptions, no RTTI",
       "description": "The C++ inside built with -fno-exceptions -fno-rtti, as the consoles build it",
-      "inherits": "base",
+      "inherits": ["base", "hardened"],
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "LANTERN_NO_EXCEPTIONS": "ON"

@@ -1,7 +1,7 @@
 # The TypeScript library (typescript/): the generated types against the
 # specification's schemas, Biome, tsc in strict mode, the build and its
 # package (and its lantern-static command); the unit tests and the
-# specification's vectors on Node 22 and 24; the client against the malicious
+# specification's vectors on Node 22, 24 and 26 (every LTS); the client against the malicious
 # test server (every scenario its --list gives) and against the
 # specification's reference server (over TLS, with a token bound to its key;
 # draft 0.5's events, sync, encrypted saves, grants and its peer, static
@@ -13,27 +13,28 @@
 # release (RELEASING.md).
 name: typescript
 
+# Called by ci.yml when the TypeScript library's files change: its folder,
+# the specification (the submodule), the malicious test server and the
+# Python library its tests run, and this workflow (.github/scripts/changes.sh)
 on:
-  push:
-    branches: [ main ]
-    paths: [ "typescript/**", "spec", "python/tools/hostile_server.py", "python/src/lantern/**", ".github/workflows/typescript.yml" ]
-  pull_request:
-    paths: [ "typescript/**", "spec", "python/tools/hostile_server.py", "python/src/lantern/**", ".github/workflows/typescript.yml" ]
+  workflow_call:
 
 permissions:
   contents: read
-
-concurrency:
-  group: typescript-${{ github.ref }}
-  cancel-in-progress: true
 
 defaults:
   run:
     working-directory: typescript
 
 env:
-  PIP_DISABLE_PIP_VERSION_CHECK: "1"
   PYTHONUTF8: "1"
+  # Node's newest LTS (26, since October 2026), for every job but the
+  # matrices, which take the older ones still supported (package.json's
+  # engines) too
+  NODE_VERSION: "26"
+  # The Python the tests' servers run, installed by uv (as python.yml)
+  PYTHON_VERSION: "3.15"
+  UV_VERSION: 0.13.6
   NPM_CONFIG_FUND: "false"
   NPM_CONFIG_AUDIT: "false"
 
@@ -49,7 +50,7 @@ jobs:
           submodules: true
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24"
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: typescript/package-lock.json
       - name: Install
@@ -69,6 +70,7 @@ jobs:
         run: |
           set -o pipefail
           files=$(find dist -name '*.js' -not -path 'dist/node/*' -not -path 'dist/server/*')
+          # shellcheck disable=SC2086 # a list of files
           if grep -l '"node:' $files; then
             echo "::error::a module of the browser entry imports node:"
             exit 1
@@ -81,7 +83,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: [ "22", "24" ]
+        node: [ "22", "24", "26" ]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -104,7 +106,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: [ "22", "24" ]
+        node: [ "22", "26" ]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -115,13 +117,16 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
           cache-dependency-path: typescript/package-lock.json
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      # Python in a virtual environment on the PATH (python), with uv
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          python-version: "3.13"
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          activate-environment: true
       - name: Install
         run: |
           npm ci
-          python -m pip install "cryptography>=42"
+          uv pip install "cryptography>=42"
       - name: Every scenario, listed
         run: python ../python/tools/hostile_server.py --list
       - name: The client against every scenario, from the server's command line
@@ -140,16 +145,18 @@ jobs:
           submodules: true
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24"
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: typescript/package-lock.json
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          python-version: "3.13"
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          activate-environment: true
       - name: Install
         run: |
           npm ci
-          python -m pip install "cryptography>=42" -r ../spec/tools/requirements.txt
+          uv pip install "cryptography>=42" -r ../spec/tools/requirements.txt
       - name: Reading, pairing over a pinned TLS key, signed requests, writes, administration
         env:
           PYTHON: python
@@ -170,16 +177,20 @@ jobs:
           submodules: true
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24"
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: typescript/package-lock.json
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      # 3.14 or later: zstd in the standard library, the suite reads the
+      # JSON the demo compresses
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          python-version: "3.14"  # zstd in the standard library: the suite reads the JSON the demo compresses
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          activate-environment: true
       - name: Install
         run: |
           npm ci
-          python -m pip install -r ../spec/tools/requirements.txt
+          uv pip install -r ../spec/tools/requirements.txt
       - name: node:http and fetchHandler, anonymously and with a token bound to its key; lantern-static and --static
         env:
           PYTHON: python
@@ -209,7 +220,7 @@ jobs:
           submodules: true
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24"
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: typescript/package-lock.json
       - name: Install, and Playwright's Chromium

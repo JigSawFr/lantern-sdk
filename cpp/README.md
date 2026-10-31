@@ -129,13 +129,21 @@ cmake --workflow --preset dev        # configure, build, run the tests
 
 | Preset | What |
 |---|---|
-| `dev` | Debug, the tests and the example |
-| `release` | Optimised, the tests and the example |
-| `noexcept` | Everything, tests included, with `-fno-exceptions -fno-rtti` |
+| `dev` | Debug, the tests and the example, hardened |
+| `release` | Optimised, the tests and the example, hardened |
+| `noexcept` | Everything, tests included, with `-fno-exceptions -fno-rtti`, hardened |
 | `asan` | AddressSanitizer and UndefinedBehaviorSanitizer |
 | `ubsan` | UndefinedBehaviorSanitizer alone, every report fatal |
 | `tsan` | ThreadSanitizer |
+| `coverage` | clang's source-based coverage (`CC=clang CXX=clang++`); the profiles go to `build/coverage/profiles/` |
 | `fuzz` | The libFuzzer targets (clang: `CC=clang CXX=clang++`) |
+
+Hardened (`LANTERN_HARDENING`, `cmake/LanternHardening.cmake`, GCC and
+clang): the stack protector, stack clash and control-flow protection, full
+RELRO; `_FORTIFY_SOURCE=3` when optimised; in Debug, the standard
+library's own checks (`_GLIBCXX_ASSERTIONS`, libc++'s debug hardening
+mode) and uninitialised variables filled with a pattern. Off by default,
+so an app that adds this folder keeps its own flags.
 
 `-DLANTERN_WERROR=ON` makes warnings errors, as the CI does. The tests need
 the `spec/` submodule (`git submodule update --init`); the integration
@@ -156,7 +164,7 @@ asks for one with `ON`. The library itself needs neither.
 
 ### Before pushing
 
-The CI (`.github/workflows/cpp.yml`) checks all of these; run what you can:
+The CI (`.github/workflows/cpp.yml`, through `ci.yml`) checks all of these; run what you can:
 
 ```sh
 cd cpp

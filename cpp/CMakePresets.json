@@ -18,10 +18,18 @@
       }
     },
     {
+      "name": "hardened",
+      "hidden": true,
+      "description": "Hardening flags (cmake/LanternHardening.cmake): the stack protector, stack clash and CET protection, full RELRO; _FORTIFY_SOURCE=3 when optimised; the standard library's checks and a pattern in uninitialised variables in Debug",
+      "cacheVariables": {
+        "LANTERN_HARDENING": "ON"
+      }
+    },
+    {
       "name": "dev",
       "displayName": "Development",
       "description": "Debug, the tests and the example; any compiler",
-      "inherits": "base",
+      "inherits": ["base", "hardened"],
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
       }
@@ -30,7 +38,7 @@
       "name": "release",
       "displayName": "Release",
       "description": "Optimised, the tests and the example",
-      "inherits": "base",
+      "inherits": ["base", "hardened"],
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
@@ -39,7 +47,7 @@
       "name": "noexcept",
       "displayName": "No exceptions, no RTTI",
       "description": "Everything, tests included, with -fno-exceptions -fno-rtti",
-      "inherits": "base",
+      "inherits": ["base", "hardened"],
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "LANTERN_NO_EXCEPTIONS": "ON"
@@ -82,6 +90,18 @@
       }
     },
     {
+      "name": "coverage",
+      "displayName": "Coverage",
+      "description": "Debug with clang's source-based coverage; Clang only (CC=clang CXX=clang++); each test process writes build/coverage/profiles/",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS": "-fprofile-instr-generate -fcoverage-mapping",
+        "CMAKE_CXX_FLAGS": "-fprofile-instr-generate -fcoverage-mapping",
+        "CMAKE_EXE_LINKER_FLAGS": "-fprofile-instr-generate"
+      }
+    },
+    {
       "name": "fuzz",
       "displayName": "libFuzzer",
       "description": "The fuzz targets under ASan and UBSan; Clang only (CC=clang CXX=clang++)",
@@ -103,6 +123,7 @@
     { "name": "asan", "configurePreset": "asan" },
     { "name": "ubsan", "configurePreset": "ubsan" },
     { "name": "tsan", "configurePreset": "tsan" },
+    { "name": "coverage", "configurePreset": "coverage" },
     { "name": "fuzz", "configurePreset": "fuzz" }
   ],
   "testPresets": [
@@ -126,6 +147,12 @@
       "configurePreset": "tsan",
       "output": { "outputOnFailure": true },
       "environment": { "TSAN_OPTIONS": "halt_on_error=1" }
+    },
+    {
+      "name": "coverage",
+      "configurePreset": "coverage",
+      "output": { "outputOnFailure": true },
+      "environment": { "LLVM_PROFILE_FILE": "${sourceDir}/build/coverage/profiles/%p-%m.profraw" }
     }
   ],
   "workflowPresets": [
