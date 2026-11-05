@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <utility>
 
 namespace lantern
 {
@@ -66,7 +67,7 @@ int construct(Code& code, const std::uint8_t* length, int n) noexcept
     code.count.fill(0);
     for (int s = 0; s < n; ++s)
         ++code.count[length[u(s)]];
-    if (code.count[0] == n)
+    if (std::cmp_equal(code.count[0], n))
         return 0;
     int left = 1;
     for (int len = 1; len <= max_bits; ++len)
