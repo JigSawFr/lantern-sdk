@@ -67,6 +67,7 @@ from lantern._generated.models import (
 )
 from lantern._version import __version__
 from lantern.client.auth import Pairing
+from lantern.client.coding import accepted
 from lantern.client.transport import Credentials, Pipeline, Request, RequestSigner
 from lantern.digest import format_digest, sha256_hex
 from lantern.documents import schema_of
@@ -356,7 +357,7 @@ class ClientCore:
             {
                 "User-Agent": self.user_agent,
                 "Accept": JSON,
-                "Accept-Encoding": "identity",
+                "Accept-Encoding": accepted(),
                 "Accept-Schema": ", ".join(f"{k}={v}" for k, v in KNOWN.items()),
             }
         )

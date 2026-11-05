@@ -37,6 +37,7 @@ if (LANTERN_BUILD_TESTS)
         unit/crypto_tests.cpp
         unit/document_tests.cpp
         unit/homebrew_tests.cpp
+        unit/inflate_tests.cpp
         unit/json_tests.cpp
         unit/paths_tests.cpp
         unit/profiles_tests.cpp

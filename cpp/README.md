@@ -514,8 +514,11 @@ if (done)
 ## Not there yet
 
 - **DNS-SD** (`_lantern._tcp`, § 4.1): the datagram only.
-- **Compression** (§ 2.1): the client sends no `Accept-Encoding` and gets
-  JSON as it is.
+- **Compression** (§ 2.1) beyond gzip: the client asks for `gzip` on its JSON
+  calls (never on a file or a stream) and reads it with `gunzip()`
+  (`lantern/inflate.hpp`, no dependency, the limits of § 13 applying once
+  decompressed); `zstd` and `br` need a decoder of their own, which a
+  platform brings by an adapter later.
 - **The mbedTLS adapter's connections**: one per request; keeping them is
   for a later version.
 - **Annex B's retries** (backoff with jitter, `Retry-After` as a floor):

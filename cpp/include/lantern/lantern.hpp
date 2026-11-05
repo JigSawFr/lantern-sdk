@@ -17,6 +17,7 @@
 #include <lantern/hkdf.hpp>
 #include <lantern/homebrew.hpp>
 #include <lantern/http_signature.hpp>
+#include <lantern/inflate.hpp>
 #include <lantern/json.hpp>
 #include <lantern/memory.hpp>
 #include <lantern/paths.hpp>

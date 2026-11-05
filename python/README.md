@@ -280,6 +280,14 @@ handshake is done and before it sends; httpx's, which cannot, reads the
 certificate on a connection of its own, checks its key, and trusts that
 certificate alone.
 
+The client asks for compressed JSON (`Accept-Encoding: zstd, gzip` on Python
+3.14, `gzip` before; § 2.1) and a response decodes it as it is read, in
+`lantern.client.coding`, whichever transport brought it: a transport gives
+the body as it came, httpx's included. The limits of § 13 apply to the
+document once decompressed, so a body that expands without end stops at its
+limit. Files and event streams are asked for as they are (`identity`). A
+transport of your own gives the body undecoded.
+
 The client records what a server deprecates (`Deprecation`, `Sunset`, §
 3.4) in `client.core.deprecations` and the log `lantern`, and
 `lantern.client.what_fits(apps, free)` says which apps fit in the device's
@@ -606,8 +614,6 @@ that a harness checks what its client sent. The TLS scenarios need the
 - Drawing the QR code of `verify_complete`: the client gives its text; an
   app draws it with its own toolkit (SPEC.md § 5.2 wants no image from the
   server).
-- Asking for compressed JSON: the client sends `Accept-Encoding: identity`
-  (a MAY of § 2.1).
 - Installing: the library says what to write and where, and checks it; it
   writes nothing on a device.
 
