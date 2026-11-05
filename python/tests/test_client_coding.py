@@ -79,10 +79,8 @@ def test_a_coding_that_was_not_asked_for_is_refused(name: str) -> None:
         Response(200, Headers({"Content-Encoding": name}), iter([b"{}"]))
 
 
-@pytest.mark.skipif(coding._zstd is None, reason="zstd is Python 3.14's")
 def test_a_zstd_body_is_read_as_the_document() -> None:
-    zstd = coding._zstd
-    assert zstd is not None
+    zstd = pytest.importorskip("compression.zstd", reason="zstd is Python 3.14's")
     body = zstd.compress(DOCUMENT)
     assert read({"Content-Encoding": "zstd"}, split(body, 13)) == DOCUMENT
     with pytest.raises(DocumentError, match="a body above"):
