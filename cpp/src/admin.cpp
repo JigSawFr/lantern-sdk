@@ -113,6 +113,36 @@ Result<void> Client::admin_decide_pairing(std::string_view id, const AdminPairin
     return {};
 }
 
+Read<AdminRequests> Client::admin_requests(
+    std::string_view status, std::string_view user, std::string_view platform, const PageQuery& page)
+{
+    if (auto ok = ready(Family::admin); !ok)
+        return std::unexpected(ok.error());
+    auto url   = api_url("/admin/requests");
+    bool first = true;
+    add_query(*url, first, "status", status);
+    add_query(*url, first, "user", user);
+    add_query(*url, first, "platform", platform);
+    add_page(*url, first, page);
+    return read<AdminRequests>(Method::get, *url, read_admin_requests);
+}
+
+Read<TitleRequest> Client::admin_decide_request(std::string_view id, const AdminRequestDecision& decision)
+{
+    if (auto ok = ready(Family::admin); !ok)
+        return std::unexpected(ok.error());
+    if (decision.decision != "decline" && decision.decision != "done")
+        return fail(Category::usage, "a decision is decline or done (SPEC.md 11)");
+    if (!decision.reason.empty() && decision.decision != "decline")
+        return fail(Category::usage, "a reason goes with decline only (SPEC.md 11)");
+    auto url = api_url("/admin/requests/");
+    if (auto added = append_segment(*url, id); !added)
+        return std::unexpected(added.error());
+    String body(allocator_);
+    write_admin_request_decision(decision, body);
+    return read<TitleRequest>(Method::post, *url, read_title_request, body);
+}
+
 Read<Invitations> Client::admin_invitations(const PageQuery& page)
 {
     if (auto ok = ready(Family::admin); !ok)

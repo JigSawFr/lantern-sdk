@@ -48,7 +48,7 @@
 #define LANTERN_C_API_VERSION 2
 #define LANTERN_C_ABI_VERSION 1
 #define LANTERN_VERSION_STRING "0.5.0"
-#define LANTERN_SPEC_DRAFT "0.5"
+#define LANTERN_SPEC_DRAFT "0.6"
 
 /* x-release-please-end */
 

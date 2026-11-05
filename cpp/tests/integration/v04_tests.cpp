@@ -568,6 +568,53 @@ TEST_CASE("requests: asked, asked again, listed, withdrawn")
     CHECK(gone.error().status() == 404);
 }
 
+TEST_CASE("requests: an admin lists them, declines one with a reason, then it is final")
+{
+    Device device(env("LANTERN_TEST_PRIVATE"), true);
+    RequestCreate wish;
+    wish.title_id    = "0100FFFF00030000";
+    const auto asked = device->request_title(wish);
+    REQUIRE(asked);
+    REQUIRE(*asked);
+    const std::string_view id = (*asked)->id;
+
+    const auto listed = device->admin_requests("open");
+    REQUIRE(listed);
+    REQUIRE(*listed);
+    CHECK(std::ranges::any_of(
+        (*listed)->items, [&](const TitleRequest& r) { return r.id == id && !r.user.empty(); }));
+    const auto none = device->admin_requests("done");
+    REQUIRE(none);
+    CHECK(std::ranges::none_of((*none)->items, [&](const TitleRequest& r) { return r.id == id; }));
+
+    AdminRequestDecision bad;
+    bad.decision = "done";
+    bad.reason   = "a reason goes with decline only";
+    CHECK_FALSE(device->admin_decide_request(id, bad)); // refused before it is sent
+
+    AdminRequestDecision decline;
+    decline.decision    = "decline";
+    decline.reason      = "Only the games this household owns.";
+    const auto declined = device->admin_decide_request(id, decline);
+    REQUIRE(declined);
+    REQUIRE(*declined);
+    CHECK((*declined)->status == "declined");
+    CHECK((*declined)->reason == "Only the games this household owns.");
+    const auto mine = device->requests();
+    REQUIRE(mine);
+    const auto seen
+        = std::ranges::find_if((*mine)->requests, [&](const TitleRequest& r) { return r.id == id; });
+    REQUIRE(seen != (*mine)->requests.end());
+    CHECK(seen->reason == "Only the games this household owns.");
+
+    AdminRequestDecision done;
+    done.decision    = "done";
+    const auto final = device->admin_decide_request(id, done);
+    REQUIRE_FALSE(final);
+    CHECK(final.error().status() == 409);
+    REQUIRE(device->withdraw_request(id));
+}
+
 TEST_CASE("discovery: the public server answers the datagram on loopback")
 {
     auto socket = posix::UdpBroadcastSocket::open();
