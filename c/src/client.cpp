@@ -167,6 +167,7 @@ LANTERN_API lantern_status lantern_client_create(
     if (c.max_error_body != 0)
         settings.max_error_body = c.max_error_body;
     settings.random       = c.random;
+    settings.signer       = c.signer;
     settings.clock        = c.clock;
     settings.trust        = c.trust == nullptr ? nullptr : &c.trust->trust;
     settings.deprecations = c.deprecations;
@@ -752,6 +753,32 @@ LANTERN_API lantern_status lantern_client_admin_decide_pairing(lantern_client* c
     strings(settings.scopes, d.scopes, d.scope_count);
     settings.rating_cap = rating_cap(d.rating_cap, allocator);
     return done(client->client.admin_decide_pairing(text(id), settings), error);
+}
+
+LANTERN_API lantern_status lantern_client_admin_requests(lantern_client* client, const char* status,
+    const char* user, const char* platform, const lantern_page_query* page, lantern_admin_requests** out,
+    lantern_error* error)
+{
+    if (client == nullptr || out == nullptr)
+        return usage(error, "a NULL argument");
+    *out = nullptr;
+    return give(client,
+        client->client.admin_requests(text(status), text(user), text(platform), page_query(page)), out,
+        error);
+}
+
+LANTERN_API lantern_status lantern_client_admin_decide_request(lantern_client* client, const char* id,
+    const lantern_admin_request_decision* decision, lantern_title_request** out, lantern_error* error)
+{
+    if (client == nullptr || decision == nullptr || out == nullptr)
+        return usage(error, "a NULL argument");
+    *out                                   = nullptr;
+    const lantern_admin_request_decision d = copy_struct(decision);
+    const lantern::Allocator allocator(resource_of(client));
+    lantern::AdminRequestDecision settings(allocator);
+    settings.decision = text(d.decision);
+    settings.reason   = text(d.reason);
+    return give(client, client->client.admin_decide_request(text(id), settings), out, error);
 }
 
 LANTERN_API lantern_status lantern_client_admin_invitations(

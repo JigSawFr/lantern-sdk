@@ -325,6 +325,8 @@ static void administration(void)
     fake_add(s, "DELETE", "/api/lantern/v1/admin/devices/*", 204, NULL);
     fake_add(s, "GET", "/api/lantern/v1/admin/pairings*", 200, example(&f, "admin-pairings.json"));
     fake_add(s, "POST", "/api/lantern/v1/admin/pairings/*", 204, NULL);
+    fake_add(s, "GET", "/api/lantern/v1/admin/requests*", 200, example(&f, "admin-requests.json"));
+    fake_add(s, "POST", "/api/lantern/v1/admin/requests/*", 200, example(&f, "request.json"));
     fake_add(s, "GET", "/api/lantern/v1/admin/invitations*", 200, example(&f, "invitations.json"));
     fake_add(s, "POST", "/api/lantern/v1/admin/invitations", 201, example(&f, "invitation.json"));
     fake_add(s, "DELETE", "/api/lantern/v1/admin/invitations/*", 204, NULL);
@@ -375,6 +377,23 @@ static void administration(void)
     CHECK_CALL(
         lantern_client_admin_decide_pairing(f.client, "p_4Fh2", &decision, &error), LANTERN_OK, &error);
     CHECK(strstr(s->last_body, "\"rating_cap\":{\"age\":12}") != NULL);
+    lantern_admin_requests* asked = NULL;
+    REQUIRE_CALL(lantern_client_admin_requests(f.client, "open", "noor", "switch", &page, &asked, &error),
+        LANTERN_OK, &error);
+    CHECK(strstr(s->last_url, "status=open") != NULL && strstr(s->last_url, "user=noor") != NULL
+        && strstr(s->last_url, "platform=switch") != NULL && strstr(s->last_url, "page_size=10") != NULL);
+    CHECK(lantern_admin_requests_get_items_count(asked) > 0);
+    lantern_admin_requests_free(asked);
+    lantern_admin_request_decision verdict = LANTERN_INIT(lantern_admin_request_decision);
+    verdict.decision                       = "decline";
+    verdict.reason                         = "Not on this shelf";
+    lantern_title_request* decided         = NULL;
+    REQUIRE_CALL(
+        lantern_client_admin_decide_request(f.client, "r_1", &verdict, &decided, &error), LANTERN_OK, &error);
+    CHECK(strcmp(s->last_method, "POST") == 0);
+    CHECK(strstr(s->last_body, "\"decision\":\"decline\"") != NULL
+        && strstr(s->last_body, "\"reason\":\"Not on this shelf\"") != NULL);
+    lantern_title_request_free(decided);
     lantern_invitations* invitations = NULL;
     REQUIRE_CALL(lantern_client_admin_invitations(f.client, NULL, &invitations, &error), LANTERN_OK, &error);
     lantern_invitations_free(invitations);
@@ -394,6 +413,65 @@ static void administration(void)
     CHECK(STR_EQ(lantern_invitation_get_code(invitation), link.code));
     lantern_invitation_free(invitation);
     CHECK_CALL(lantern_client_admin_revoke_invitation(f.client, "i_1", &error), LANTERN_OK, &error);
+    fixture_close(&f);
+}
+
+typedef struct signer_log
+{
+    int calls;
+    bool saw_target;
+    bool saw_digest;
+} signer_log;
+
+static lantern_status sign_with_a_header(
+    void* user, const lantern_signing_input* request, lantern_header_sink* headers, lantern_error* error)
+{
+    (void)error;
+    signer_log* log = (signer_log*)user;
+    log->calls++;
+    if (request->target.size > 0 && strstr(request->target.data, "/.well-known/lantern") != NULL)
+        log->saw_target = true;
+    if (request->has_content_digest)
+        log->saw_digest = true;
+    return lantern_header_sink_add(headers, "X-App-Signature", "signed");
+}
+
+static void the_apps_signer(void)
+{
+    fixture f;
+    if (!fixture_open(&f))
+    {
+        fixture_close(&f);
+        REQUIRE(false);
+    }
+    lantern_client_free(f.client);
+    f.client                              = NULL;
+    signer_log log                        = { 0, false, false };
+    lantern_request_signer_callbacks mine = LANTERN_INIT(lantern_request_signer_callbacks);
+    mine.user                             = &log;
+    mine.sign                             = sign_with_a_header;
+    lantern_request_signer* signer        = NULL;
+    lantern_error error                   = LANTERN_INIT(lantern_error);
+    REQUIRE_CALL(lantern_request_signer_create(&mine, NULL, &signer, &error), LANTERN_OK, &error);
+    lantern_client_config config = LANTERN_INIT(lantern_client_config);
+    config.origin                = ORIGIN;
+    config.user_agent            = "LanternCTests/0.4";
+    config.platform              = "switch";
+    config.transport             = f.transport;
+    config.random                = f.random;
+    config.signer                = signer;
+    REQUIRE_CALL(lantern_client_create(&config, &f.client, &error), LANTERN_OK, &error);
+    lantern_handshake* shake = NULL;
+    REQUIRE_CALL(lantern_client_handshake(f.client, &shake, &error), LANTERN_OK, &error);
+    lantern_handshake_free(shake);
+    CHECK(log.calls > 0);
+    CHECK(log.saw_target);
+    char seen[32] = "";
+    CHECK(fake_last_header(&f.server, "X-App-Signature", seen, sizeof(seen)) != NULL);
+    CHECK(strcmp(seen, "signed") == 0);
+    lantern_client_free(f.client);
+    f.client = NULL;
+    lantern_request_signer_free(signer);
     fixture_close(&f);
 }
 
@@ -821,6 +899,7 @@ const test_case client_tests[] = {
     { "client: the library, its cursors, missing, changes, titles", library_calls },
     { "client: homebrew, cheats, saves and requests", homebrew_cheats_saves_requests },
     { "client: the administration API", administration },
+    { "client: the app's request signer", the_apps_signer },
     { "client: a server's errors, problem+json, newer documents", errors_of_the_server },
     { "client: deprecations, and a family not offered", deprecations_and_unoffered_families },
     { "client: pairing with a key, a store, signed requests", pairing_with_a_key },

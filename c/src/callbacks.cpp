@@ -51,6 +51,51 @@ lantern::Result<void> lantern_random::fill(std::span<std::uint8_t> out)
     return {};
 }
 
+lantern::Result<void> lantern_request_signer::sign(
+    const lantern::SigningInput& request, lantern::HeaderSink& headers)
+{
+    // Every lantern_str the app gets is NUL-terminated: copied for the call
+    const lantern::Allocator allocator(resource());
+    const lantern::String method    = terminated(request.method, resource());
+    const lantern::String target    = terminated(request.target, resource());
+    const lantern::String authority = terminated(request.authority, resource());
+    const lantern::String path      = terminated(request.path, resource());
+    lantern::Vector<lantern::String> texts(allocator);
+    texts.reserve(request.headers.size() * 2);
+    lantern::Vector<lantern_header> given(allocator);
+    given.reserve(request.headers.size());
+    for (const lantern::Header& header : request.headers)
+    {
+        texts.emplace_back(header.name);
+        const lantern::String& name = texts.back();
+        texts.emplace_back(header.value);
+        const lantern::String& value = texts.back();
+        given.push_back({ str(name), str(value) });
+    }
+    lantern_signing_input out {};
+    out.struct_size  = sizeof(out);
+    out.method       = str(method);
+    out.target       = str(target);
+    out.authority    = str(authority);
+    out.path         = str(path);
+    out.headers      = given.data();
+    out.header_count = given.size();
+    if (request.content_digest)
+    {
+        out.has_content_digest = true;
+        std::copy(request.content_digest->begin(), request.content_digest->end(), out.content_digest);
+    }
+    out.keyed_poll = request.keyed_poll;
+    lantern::Result<void> failure {};
+    lantern_header_sink sink { &headers, &failure };
+    lantern_error error         = fresh_error();
+    const lantern_status status = callbacks().sign(callbacks().user, &out, &sink, &error);
+    if (status != LANTERN_OK)
+        return std::unexpected(
+            callback_error(status, error, lantern::Category::storage, "the app's request signer failed"));
+    return failure;
+}
+
 std::int64_t lantern_clock::unix_seconds()
 {
     return callbacks().unix_seconds(callbacks().user);
@@ -293,6 +338,33 @@ LANTERN_API lantern_status lantern_random_create(const lantern_random_callbacks*
 LANTERN_API void lantern_random_free(lantern_random* random)
 {
     unbox(random);
+}
+
+LANTERN_API lantern_status lantern_request_signer_create(const lantern_request_signer_callbacks* callbacks,
+    const lantern_allocator* allocator, lantern_request_signer** out, lantern_error* error)
+{
+    return make_callbacks(
+        callbacks, allocator, [](const lantern_request_signer_callbacks& c) { return c.sign != nullptr; },
+        out, error);
+}
+
+LANTERN_API void lantern_request_signer_free(lantern_request_signer* signer)
+{
+    unbox(signer);
+}
+
+LANTERN_API lantern_status lantern_header_sink_add(
+    lantern_header_sink* sink, const char* name, const char* value)
+{
+    if (sink == nullptr || name == nullptr || value == nullptr)
+        return LANTERN_ERROR_USAGE;
+    auto added = sink->sink->add(name, value);
+    if (!added)
+    {
+        *sink->failure = std::unexpected(added.error());
+        return LANTERN_ERROR_USAGE;
+    }
+    return LANTERN_OK;
 }
 
 LANTERN_API lantern_status lantern_clock_create(const lantern_clock_callbacks* callbacks,
