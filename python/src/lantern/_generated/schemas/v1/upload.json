@@ -17,7 +17,7 @@
       "minimum": 1
     },
     "offset": {
-      "$ref": "common.json#/$defs/uint64"
+      "$ref": "common.json#/$defs/uint53"
     },
     "expires": {
       "$ref": "common.json#/$defs/time"

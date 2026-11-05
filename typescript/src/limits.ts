@@ -106,6 +106,64 @@ export interface LoadOptions {
   where?: string;
 }
 
+/** The largest integer an I-JSON document holds: what an IEEE double holds exactly (SPEC.md § 2.3). */
+export const IJSON_INTEGER = 9007199254740991n;
+
+/**
+ * Why `text`, which JSON.parse read as `document`, is not I-JSON (RFC 7493; SPEC.md § 2.3): a member name given
+ * twice in an object, an integer beyond 2**53 - 1, or a lone surrogate in a string. Undefined when it is.
+ */
+export function ijsonProblem(text: string, document: unknown): string | undefined {
+  const names: (Set<string> | null)[] = [];
+  let wantName = false;
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i] as string;
+    if (c === '"') {
+      let j = i + 1;
+      while (text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
+      const top = names[names.length - 1];
+      if (wantName && top) {
+        const name = JSON.parse(text.slice(i, j + 1)) as string;
+        if (top.has(name)) return "a member name is given twice";
+        top.add(name);
+        wantName = false;
+      }
+      i = j + 1;
+    } else if (c === "{") {
+      names.push(new Set());
+      wantName = true;
+      i++;
+    } else if (c === "[") {
+      names.push(null);
+      wantName = false;
+      i++;
+    } else if (c === "}" || c === "]") {
+      names.pop();
+      wantName = false;
+      i++;
+    } else if (c === ",") {
+      wantName = names[names.length - 1] instanceof Set;
+      i++;
+    } else if (c === "-" || (c >= "0" && c <= "9")) {
+      let j = i + 1;
+      while (j < text.length && "0123456789.eE+-".includes(text[j] as string)) j++;
+      const token = text.slice(i, j);
+      if (/^-?\d+$/.test(token)) {
+        const n = BigInt(token);
+        if ((n < 0n ? -n : n) > IJSON_INTEGER) return `the integer ${token.slice(0, 20)} is beyond 2**53 - 1`;
+      }
+      i = j;
+    } else {
+      i++;
+    }
+  }
+  if (/\\u[dD][89a-fA-F]/.test(text) && /\\u[dD][89a-fA-F]/.test(JSON.stringify(document))) {
+    return "a lone surrogate";
+  }
+  return undefined;
+}
+
 /**
  * A JSON document read within SPEC.md § 13: at most `limit` bytes, UTF-8,
  * nested 16 deep at most, its strings within their bounds; DocumentError otherwise.
@@ -115,6 +173,8 @@ export function loadJson(raw: Uint8Array | string, options: LoadOptions = {}): J
   const limit = options.limit ?? JSON_DOCUMENT;
   const size = typeof raw === "string" ? utf8Length(raw) : raw.length;
   if (size > limit) throw new DocumentError(`${size} bytes, above ${limit}`, where);
+  if (typeof raw !== "string" && raw[0] === 0xef && raw[1] === 0xbb && raw[2] === 0xbf)
+    throw new DocumentError("not I-JSON (a byte order mark)", where);
   let text: string;
   try {
     text = typeof raw === "string" ? raw : fromUtf8(raw);
@@ -128,6 +188,8 @@ export function loadJson(raw: Uint8Array | string, options: LoadOptions = {}): J
   } catch (e) {
     throw new DocumentError(`not JSON (${e instanceof Error ? e.message.slice(0, 80) : "unreadable"})`, where);
   }
+  const notIJson = ijsonProblem(text, document);
+  if (notIJson !== undefined) throw new DocumentError(`not I-JSON (${notIJson})`, where);
   const found = problems(document, options.caps ?? STRING_CAPS);
   if (found.length > 0) throw new DocumentError(`beyond SPEC.md § 13: ${found.slice(0, 3).join("; ")}`, where);
   return document;

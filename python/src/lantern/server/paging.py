@@ -83,6 +83,12 @@ class Cursors:
     def __init__(self, sealer: Sealer, lifetime: float = 3600.0, clock: Callable[[], float] = time.time) -> None:
         self.sealer, self.lifetime, self.clock = sealer, lifetime, clock
 
+    def _issued(self) -> int:
+        """When a cursor is given, to a sixtieth of its lifetime (a minute for an hour): two identical requests
+        in a row give the same page, so the same ETag (SPEC.md § 14), unless a window ends between them."""
+        step = max(1, int(self.lifetime // 60))
+        return int(self.clock()) // step * step
+
     def scope(self, *parts: object) -> str:
         """A listing's identity, from its route and filters: a cursor of another listing is refused."""
         return hashlib.sha256(json.dumps(parts, sort_keys=True).encode()).hexdigest()[:16]
@@ -111,7 +117,7 @@ class Cursors:
         chosen = ordered[:size]
         following = None
         if len(ordered) > size:
-            payload: JSONValue = {"s": scope, "k": list(key(chosen[-1])), "t": int(self.clock())}
+            payload: JSONValue = {"s": scope, "k": list(key(chosen[-1])), "t": self._issued()}
             following = self.sealer.seal("c", payload)
         return Page(chosen, following, len(items))
 

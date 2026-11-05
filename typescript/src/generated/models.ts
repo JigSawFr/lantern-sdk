@@ -242,6 +242,79 @@ export function readAdminPairing(value: unknown, where = "AdminPairing"): AdminP
 }
 
 /**
+ * POST <base>/v1/admin/requests/{id} (SPEC.md § 11): decline, with a reason for the requester, or done.
+ *
+ * From admin-request-decision.
+ */
+export interface AdminRequestDecision {
+  schema?: number;
+  decision: string;
+  reason?: string;
+}
+
+export function readAdminRequestDecision(value: unknown, where = "AdminRequestDecision"): AdminRequestDecision {
+  const o = m.obj(value, where);
+  m.opt(o, "schema", where, m.int);
+  m.req(o, "decision", where, m.str);
+  m.opt(o, "reason", where, m.str);
+  return o as unknown as AdminRequestDecision;
+}
+
+/**
+ * GET <base>/v1/admin/requests (SPEC.md § 11, § 5.7): newest first, each with its user.
+ *
+ * From admin-requests.
+ */
+export interface AdminRequests {
+  schema?: number;
+  items: TitleRequest[];
+  total?: number;
+  next: string | null;
+}
+
+export function readAdminRequests(value: unknown, where = "AdminRequests"): AdminRequests {
+  const o = m.obj(value, where);
+  m.opt(o, "schema", where, m.int);
+  m.req(o, "items", where, m.list(readTitleRequest));
+  m.opt(o, "total", where, m.int);
+  m.req(o, "next", where, m.nullable(m.str));
+  return o as unknown as AdminRequests;
+}
+
+/**
+ * A request for a game (SPEC.md § 11): open, then done or declined, which are final.
+ *
+ * From common.json#/$defs/request.
+ */
+export interface TitleRequest {
+  schema?: number;
+  id: string;
+  platform: string;
+  title_id: string;
+  name?: string;
+  status: string;
+  created: string;
+  updated?: string;
+  reason?: string;
+  user?: string;
+}
+
+export function readTitleRequest(value: unknown, where = "TitleRequest"): TitleRequest {
+  const o = m.obj(value, where);
+  m.opt(o, "schema", where, m.int);
+  m.req(o, "id", where, m.str);
+  m.req(o, "platform", where, m.str);
+  m.req(o, "title_id", where, m.str);
+  m.opt(o, "name", where, m.str);
+  m.req(o, "status", where, m.str);
+  m.req(o, "created", where, m.str);
+  m.opt(o, "updated", where, m.str);
+  m.opt(o, "reason", where, m.str);
+  m.opt(o, "user", where, m.str);
+  return o as unknown as TitleRequest;
+}
+
+/**
  * An account, as the administration API shows it (SPEC.md § 5.7).
  *
  * From common.json#/$defs/admin_user.
@@ -394,7 +467,7 @@ export function readApp(value: unknown, where = "App"): App {
 }
 
 /**
- * Another address of a file's exact bytes (SPEC.md § 19.2): HTTPS, or HTTP at an address of a private network (10/8, 172.16/12, 192.168/16, fc00::/7, fe80::/10).
+ * Another address of a file's exact bytes (SPEC.md § 19.2): HTTPS, or HTTP at an address of a private network (10/8, 172.16/12, 192.168/16, fc00::/7, fe80::/10), or of loopback for testing (127/8, ::1; SPEC.md § 2).
  *
  * From common.json#/$defs/mirror.
  */
@@ -1485,33 +1558,6 @@ export function readProblem(value: unknown, where = "Problem"): Problem {
 }
 
 /**
- * A request for a game (SPEC.md § 11).
- *
- * From common.json#/$defs/request.
- */
-export interface TitleRequest {
-  schema?: number;
-  id: string;
-  platform: string;
-  title_id: string;
-  name?: string;
-  status: string;
-  created: string;
-}
-
-export function readTitleRequest(value: unknown, where = "TitleRequest"): TitleRequest {
-  const o = m.obj(value, where);
-  m.opt(o, "schema", where, m.int);
-  m.req(o, "id", where, m.str);
-  m.req(o, "platform", where, m.str);
-  m.req(o, "title_id", where, m.str);
-  m.opt(o, "name", where, m.str);
-  m.req(o, "status", where, m.str);
-  m.req(o, "created", where, m.str);
-  return o as unknown as TitleRequest;
-}
-
-/**
  * POST <base>/v1/requests (SPEC.md § 11); platform defaults to the client's.
  *
  * From request-create.
@@ -1984,6 +2030,8 @@ export interface Documents {
   "admin-devices": AdminDevices;
   "admin-pairing-decision": AdminPairingDecision;
   "admin-pairings": AdminPairings;
+  "admin-request-decision": AdminRequestDecision;
+  "admin-requests": AdminRequests;
   "admin-user": AdminUser;
   "admin-user-create": AdminUserCreate;
   "admin-user-update": AdminUserUpdate;
@@ -2031,6 +2079,8 @@ export const DOCUMENTS: { readonly [K in keyof Documents]: m.Check<Documents[K]>
   "admin-devices": readAdminDevices,
   "admin-pairing-decision": readAdminPairingDecision,
   "admin-pairings": readAdminPairings,
+  "admin-request-decision": readAdminRequestDecision,
+  "admin-requests": readAdminRequests,
   "admin-user": readAdminUser,
   "admin-user-create": readAdminUserCreate,
   "admin-user-update": readAdminUserUpdate,

@@ -17,7 +17,7 @@
             "$ref": "common.json#/$defs/homebrew_id"
           },
           "build": {
-            "$ref": "common.json#/$defs/uint64"
+            "$ref": "common.json#/$defs/uint53"
           }
         },
         "required": [

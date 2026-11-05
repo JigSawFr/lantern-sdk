@@ -722,7 +722,7 @@ describe("requests (SPEC.md § 11)", () => {
       json: { schema: 1, title_id: OWN },
     });
     assert.equal(first.status, 201);
-    assert.deepEqual(Object.keys(first.json), ["schema", "id", "platform", "title_id", "status", "created"]);
+    assert.deepEqual(Object.keys(first.json), ["schema", "id", "platform", "title_id", "status", "created", "updated"]);
     assert.equal(first.json["status"], "open");
     const again = await call(app, "POST", "requests", {
       token: LEA,
@@ -786,12 +786,20 @@ describe("requests (SPEC.md § 11)", () => {
     assert.equal(now[0]?.["status"], "done");
     assert.equal(now[0]?.["name"], "Glass Orchard");
     assert.ok((await events(app, LEA, start)).some((e) => e.event === "request" && e.data["status"] === "done"));
-    assert.equal(await app.setRequestStatus(id, "declined"), true);
+    // Final (L-11-3): a request already done is a 409; a title asked again is a new request.
+    await assert.rejects(app.setRequestStatus(id, "declined"), { status: 409, code: "conflict" });
+    assert.equal(await app.setRequestStatus("r_nothing", "done"), false);
+    const second = await call(app, "POST", "requests", {
+      token: LEA,
+      platform: "switch",
+      json: { schema: 1, title_id: OWN },
+    });
+    assert.equal(second.status, 201);
+    assert.equal(await app.setRequestStatus(second.json["id"] as string, "declined", "Not this one."), true);
     assert.equal(
       ((await call(app, "GET", "requests", { token: LEA })).json["requests"] as { status: string }[])[0]?.status,
       "declined",
     );
-    assert.equal(await app.setRequestStatus("r_nothing", "done"), false);
     // A device capped below the title's rating sees the request, not its name (SPEC.md § 5.6).
     await call(app, "POST", "requests", { token: LEA, platform: "switch", json: { schema: 1, title_id: LUMEN } });
     const capped = (await call(app, "GET", "requests", { token: CAPPED })).json["requests"] as Record<
@@ -801,6 +809,56 @@ describe("requests (SPEC.md § 11)", () => {
     const lumen = capped.find((r) => r["title_id"] === LUMEN);
     assert.ok(lumen);
     assert.equal(lumen["name"], undefined);
+  });
+});
+
+describe("admin requests (SPEC.md § 11)", () => {
+  test("listed with filters, declined with a reason, completed, then final; the admin hears of every change", async () => {
+    const app = await lantern();
+    const start = await since(app, DEMO_TOKEN);
+    const made = await call(app, "POST", "requests", {
+      token: LEA,
+      platform: "switch",
+      json: { schema: 1, title_id: OWN },
+    });
+    const id = made.json["id"] as string;
+    const listed = await call(app, "GET", "admin/requests?status=open&user=lea", { token: DEMO_TOKEN });
+    assert.equal(listed.status, 200);
+    assert.deepEqual(
+      (listed.json["items"] as { id: string; user: string }[]).map((r) => [r.id, r.user]),
+      [[id, "lea"]],
+    );
+    assert.deepEqual((await call(app, "GET", "admin/requests?status=done", { token: DEMO_TOKEN })).json["items"], []);
+    assert.equal((await call(app, "GET", "admin/requests?status=maybe", { token: DEMO_TOKEN })).status, 400);
+    assert.equal((await call(app, "GET", "admin/requests", { token: LEA })).status, 403);
+    const path = `admin/requests/${id}`;
+    const post = (json: unknown) => call(app, "POST", path, { token: DEMO_TOKEN, json });
+    assert.equal((await post({ schema: 1, decision: "done", reason: "x" })).status, 400);
+    assert.equal((await post({ schema: 1, decision: "later" })).status, 400);
+    assert.equal(
+      (
+        await call(app, "POST", "admin/requests/r_nothing", {
+          token: DEMO_TOKEN,
+          json: { schema: 1, decision: "done" },
+        })
+      ).status,
+      404,
+    );
+    const reason = "Only the games this household owns.";
+    const declined = await post({ schema: 1, decision: "decline", reason });
+    assert.equal(declined.status, 200);
+    assert.equal(declined.json["status"], "declined");
+    assert.equal(declined.json["reason"], reason);
+    assert.equal(declined.json["user"], "lea");
+    const mine = (await call(app, "GET", "requests", { token: LEA })).json["requests"] as Record<string, unknown>[];
+    assert.equal(mine[0]?.["reason"], reason);
+    const final = await post({ schema: 1, decision: "done" });
+    assert.equal(final.status, 409);
+    assert.equal(final.json["code"], "conflict");
+    // The admin's stream gets the event of another account's request (L-11-6).
+    assert.ok(
+      (await events(app, DEMO_TOKEN, start)).some((e) => e.event === "request" && e.data["status"] === "declined"),
+    );
   });
 });
 

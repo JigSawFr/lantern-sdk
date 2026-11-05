@@ -21,7 +21,7 @@ final class ExampleServer: Transport {
 final class LanternTests: XCTestCase {
     func testVersion() {
         XCTAssertGreaterThanOrEqual(Lantern.version, 1)
-        XCTAssertEqual(Lantern.specDraft, "0.5")
+        XCTAssertEqual(Lantern.specDraft, "0.6")
     }
 
     func testShortForm() {

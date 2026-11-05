@@ -1,5 +1,5 @@
 /**
- * The client of one Lantern server: every route of draft 0.5, in a browser and
+ * The client of one Lantern server: every route of draft 0.6, in a browser and
  * in Node, over a Transport (fetch() by default).
  *
  *     const client = new LanternClient("https://shelf.example.org/", { platform: "switch", userAgent: "MyShelf/1.0" });
@@ -37,6 +37,7 @@ import type {
   AdminDevices,
   AdminPairing,
   AdminPairings,
+  AdminRequests,
   AdminUser,
   AdminUsers,
   App,
@@ -1431,6 +1432,51 @@ export class LanternClient {
   }
   refusePairing(pairingId: string): Promise<void> {
     return this.#decide(pairingId, { decision: "refuse" });
+  }
+
+  #adminRequests(o: ListOptions & { status?: string; user?: string; platform?: string }): Call<AdminRequests> {
+    return {
+      method: "GET",
+      path: "/admin/requests",
+      what: "requests",
+      query: listing(o.pageSize, o.cursor, { status: o.status, user: o.user, platform: o.platform }),
+      read: models.readAdminRequests,
+    };
+  }
+  /** Every account's requests, newest first (SPEC.md § 11), filtered by status, user and platform. */
+  adminRequests(
+    options: ListOptions & { status?: string; user?: string; platform?: string } = {},
+  ): Promise<AdminRequests> {
+    return this.#send(this.#adminRequests(options));
+  }
+  iterAdminRequests(
+    options: Omit<ListOptions, "cursor"> & { status?: string; user?: string; platform?: string } = {},
+  ): AsyncGenerator<TitleRequest> {
+    return this.#pages(
+      this.#adminRequests(options),
+      (p) => p.items,
+      (p) => p.next,
+    );
+  }
+  #decideRequest(requestId: string, body: Record<string, unknown>): Promise<TitleRequest> {
+    return this.#send<TitleRequest>({
+      method: "POST",
+      path: `/admin/requests/${segment(requestId)}`,
+      what: "request",
+      body: { schema: SCHEMA, ...body },
+      read: models.readTitleRequest,
+    });
+  }
+  /** Declines an open request, with the words its requester will read (SPEC.md § 11); 409 once decided. */
+  declineRequest(requestId: string, reason?: string): Promise<TitleRequest> {
+    return this.#decideRequest(
+      requestId,
+      reason === undefined ? { decision: "decline" } : { decision: "decline", reason },
+    );
+  }
+  /** Marks an open request done (SPEC.md § 11); 409 once decided. */
+  completeRequest(requestId: string): Promise<TitleRequest> {
+    return this.#decideRequest(requestId, { decision: "done" });
   }
 
   #adminInvitations(o: ListOptions): Call<Invitations> {

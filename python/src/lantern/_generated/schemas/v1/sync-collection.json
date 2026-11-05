@@ -15,7 +15,7 @@
       "$ref": "common.json#/$defs/generation"
     },
     "rev": {
-      "$ref": "common.json#/$defs/uint64"
+      "$ref": "common.json#/$defs/uint53"
     },
     "items": {
       "type": "array",

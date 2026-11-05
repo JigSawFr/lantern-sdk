@@ -110,12 +110,12 @@ constant LANTERN_TRUST_PINNED: 1
 constant LANTERN_TRUST_UNVERIFIED: 2
 constant LANTERN_WARN: 1
 define LANTERN_C_ABI_VERSION: 1
-define LANTERN_C_API_VERSION: 2
+define LANTERN_C_API_VERSION: 3
 define LANTERN_KNOWN_SCHEMA: 1
 define LANTERN_SAVE_CHUNK_SIZE: 65536
 define LANTERN_SAVE_HEADER_SIZE: 88
 define LANTERN_SAVE_SCHEME: "lantern-save-e2e-1"
-define LANTERN_SPEC_DRAFT: "0.5"
+define LANTERN_SPEC_DRAFT: "0.6"
 define LANTERN_VERSION_STRING: "0.5.0"
 function lantern_accepted_version_get_label: lantern_str lantern_accepted_version_get_label(const lantern_accepted_version*value)
 function lantern_accepted_version_get_md5: lantern_str lantern_accepted_version_get_md5(const lantern_accepted_version*value)
@@ -151,6 +151,11 @@ function lantern_admin_pairings_get_items_at: const lantern_admin_pairing*lanter
 function lantern_admin_pairings_get_items_count: size_t lantern_admin_pairings_get_items_count(const lantern_admin_pairings*value)
 function lantern_admin_pairings_get_next: lantern_str lantern_admin_pairings_get_next(const lantern_admin_pairings*value)
 function lantern_admin_pairings_get_total: bool lantern_admin_pairings_get_total(const lantern_admin_pairings*value, uint64_t*out)
+function lantern_admin_requests_free: void lantern_admin_requests_free(lantern_admin_requests*value)
+function lantern_admin_requests_get_items_at: const lantern_title_request*lantern_admin_requests_get_items_at(const lantern_admin_requests*value, size_t index)
+function lantern_admin_requests_get_items_count: size_t lantern_admin_requests_get_items_count(const lantern_admin_requests*value)
+function lantern_admin_requests_get_next: lantern_str lantern_admin_requests_get_next(const lantern_admin_requests*value)
+function lantern_admin_requests_get_total: bool lantern_admin_requests_get_total(const lantern_admin_requests*value, uint64_t*out)
 function lantern_admin_user_free: void lantern_admin_user_free(lantern_admin_user*value)
 function lantern_admin_user_get_created: lantern_str lantern_admin_user_get_created(const lantern_admin_user*value)
 function lantern_admin_user_get_devices: bool lantern_admin_user_get_devices(const lantern_admin_user*value, uint64_t*out)
@@ -645,6 +650,7 @@ function lantern_rating_get_rating: lantern_str lantern_rating_get_rating(const 
 function lantern_rating_get_system: lantern_str lantern_rating_get_system(const lantern_rating*value)
 function lantern_read_admin_devices: lantern_status lantern_read_admin_devices(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_admin_devices**out, lantern_error*error)
 function lantern_read_admin_pairings: lantern_status lantern_read_admin_pairings(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_admin_pairings**out, lantern_error*error)
+function lantern_read_admin_requests: lantern_status lantern_read_admin_requests(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_admin_requests**out, lantern_error*error)
 function lantern_read_admin_user: lantern_status lantern_read_admin_user(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_admin_user**out, lantern_error*error)
 function lantern_read_admin_users: lantern_status lantern_read_admin_users(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_admin_users**out, lantern_error*error)
 function lantern_read_apps_page: lantern_status lantern_read_apps_page(const char*text, size_t size, const lantern_limits*limits, const lantern_allocator*allocator, lantern_apps_page**out, lantern_error*error)
@@ -868,8 +874,11 @@ function lantern_title_request_get_created: lantern_str lantern_title_request_ge
 function lantern_title_request_get_id: lantern_str lantern_title_request_get_id(const lantern_title_request*value)
 function lantern_title_request_get_name: lantern_str lantern_title_request_get_name(const lantern_title_request*value)
 function lantern_title_request_get_platform: lantern_str lantern_title_request_get_platform(const lantern_title_request*value)
+function lantern_title_request_get_reason: lantern_str lantern_title_request_get_reason(const lantern_title_request*value)
 function lantern_title_request_get_status: lantern_str lantern_title_request_get_status(const lantern_title_request*value)
 function lantern_title_request_get_title_id: lantern_str lantern_title_request_get_title_id(const lantern_title_request*value)
+function lantern_title_request_get_updated: lantern_str lantern_title_request_get_updated(const lantern_title_request*value)
+function lantern_title_request_get_user: lantern_str lantern_title_request_get_user(const lantern_title_request*value)
 function lantern_title_requests_free: void lantern_title_requests_free(lantern_title_requests*value)
 function lantern_title_requests_get_requests_at: const lantern_title_request*lantern_title_requests_get_requests_at(const lantern_title_requests*value, size_t index)
 function lantern_title_requests_get_requests_count: size_t lantern_title_requests_get_requests_count(const lantern_title_requests*value)
@@ -931,6 +940,7 @@ opaque lantern_admin_device
 opaque lantern_admin_devices
 opaque lantern_admin_pairing
 opaque lantern_admin_pairings
+opaque lantern_admin_requests
 opaque lantern_admin_user
 opaque lantern_admin_users
 opaque lantern_app

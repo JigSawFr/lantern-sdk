@@ -19,6 +19,8 @@ from lantern._generated.models import (
     AdminDevices,
     AdminPairingDecision,
     AdminPairings,
+    AdminRequestDecision,
+    AdminRequests,
     AdminUser,
     AdminUserCreate,
     AdminUsers,
@@ -767,6 +769,25 @@ class ClientCore:
             statuses=(),
             empty_statuses=(204,),
             empty=_none,
+        )
+
+    def admin_requests(
+        self, status: str | None, user: str | None, platform: str | None, page_size: int | None, cursor: str | None
+    ) -> Call[AdminRequests]:
+        query = _listing(page_size, cursor, status=status, user=user, platform=platform)
+        return Call("GET", "/admin/requests", _model(AdminRequests), "requests", query)
+
+    def admin_decide_request(self, request_id: str, decision: str, reason: str | None) -> Call[TitleRequest]:
+        """POST a decision on an open request (SPEC.md § 11): `decline` (with a `reason`, if any) or `done`."""
+        if decision not in ("decline", "done") or (reason is not None and decision != "decline"):
+            raise ValueError("decision is decline (with a reason, if any) or done")
+        doc = AdminRequestDecision(schema=SCHEMA, decision=decision, reason=reason)
+        return Call(
+            "POST",
+            "/admin/requests/" + quote(request_id, safe=""),
+            _model(TitleRequest),
+            "request",
+            body=doc.to_json(),
         )
 
     def admin_invitations(self, page_size: int | None, cursor: str | None) -> Call[Invitations]:

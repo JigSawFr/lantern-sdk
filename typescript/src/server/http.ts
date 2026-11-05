@@ -261,8 +261,8 @@ export function jsonResponse(request: ServerRequest, document: unknown, status =
   if (status === 200 && (request.method === "GET" || request.method === "HEAD")) {
     const etag = `"${tag}"`;
     headers.set("ETag", etag);
-    const asked = (request.header("If-None-Match") ?? "").split(",").map((t) => t.trim());
-    if (asked.includes(etag)) {
+    const asked = (request.header("If-None-Match") ?? "").split(",").map((t) => t.trim().replace(/^W\//, ""));
+    if (asked.includes("*") || asked.includes(etag)) {
       headers.delete("Content-Type");
       headers.delete("Content-Encoding");
       headers.set("Content-Length", "0");

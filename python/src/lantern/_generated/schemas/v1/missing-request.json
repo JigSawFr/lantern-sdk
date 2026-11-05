@@ -17,7 +17,7 @@
             "$ref": "common.json#/$defs/id"
           },
           "version_code": {
-            "$ref": "common.json#/$defs/uint64"
+            "$ref": "common.json#/$defs/uint53"
           }
         },
         "required": [

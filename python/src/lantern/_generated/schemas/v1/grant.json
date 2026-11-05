@@ -12,7 +12,7 @@
       "$ref": "common.json#/$defs/sha256"
     },
     "size": {
-      "$ref": "common.json#/$defs/uint64"
+      "$ref": "common.json#/$defs/uint53"
     },
     "grant": {
       "type": "string",

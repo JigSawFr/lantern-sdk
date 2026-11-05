@@ -593,3 +593,41 @@ def test_the_async_client_writes(tmp_path: Path) -> None:
     asyncio.run(run())
     paired = AsyncLanternClient.paired(RECORD, user_agent="LanternTest/1.0", transport=AsyncFakeTransport(answer))
     assert paired.core.pipeline.signer is not None
+
+
+def test_an_admin_lists_and_decides_requests() -> None:
+    """SPEC.md § 11: GET /admin/requests with its filters, POST a decision; a bad decision never leaves the client."""
+    one = {
+        "schema": 1,
+        "id": "r_1",
+        "platform": "switch",
+        "title_id": "0100ABCD00010000",
+        "status": "declined",
+        "created": "2026-10-30T09:12:00Z",
+        "updated": "2026-10-30T10:00:00Z",
+        "reason": "Only the games this household owns.",
+        "user": "ines",
+    }
+
+    def answer(r: Any) -> Any:
+        if r.url.endswith("/.well-known/lantern"):
+            return doc(body=signed_hello())
+        if r.url.endswith("/admin/requests/r_1") and r.method == "POST":
+            return doc(200, one)
+        if "/admin/requests" in r.url:
+            return doc(200, {"schema": 1, "items": [one], "total": 1, "next": None})
+        return doc(404, {"schema": 1, "type": "about:blank", "title": "x", "status": 404, "code": "not_found"})
+
+    c, t = client(answer, token="et_lea", key=KEY)
+    listed = c.admin_requests(status="declined", user="ines", platform="switch", page_size=5)
+    assert listed.items[0].reason == "Only the games this household owns." and listed.items[0].user == "ines"
+    assert c.decline_request("r_1", "Only the games this household owns.").status == "declined"
+    assert c.complete_request("r_1").id == "r_1"
+    with pytest.raises(ValueError):
+        c.core.admin_decide_request("r_1", "done", "a reason goes with decline only")
+    seen = [(r.method, r.url.split("/v1", 1)[-1]) for r in t.requests[1:]]
+    assert seen == [
+        ("GET", "/admin/requests?status=declined&user=ines&platform=switch&page_size=5"),
+        ("POST", "/admin/requests/r_1"),
+        ("POST", "/admin/requests/r_1"),
+    ]

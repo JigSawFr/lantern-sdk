@@ -1,4 +1,4 @@
-// The client of draft 0.5: the handshake, pairing (with a device key, an
+// The client of draft 0.6: the handshake, pairing (with a device key, an
 // invitation, a QR code), signed requests, the apps' listing with its
 // cursors, what the device is missing, changes, titles, homebrew (the
 // listing, an entry, the updates), save backups (listed, downloaded, sent
@@ -363,6 +363,14 @@ class Client
     [[nodiscard]] Read<AdminPairings> admin_pairings(const PageQuery& page = {});
     [[nodiscard]] Result<void> admin_decide_pairing(
         std::string_view id, const AdminPairingDecision& decision);
+    // Every account's requests, newest first (SPEC.md § 11), filtered by
+    // status (open, done, declined), user and platform when given; and an
+    // admin's decision on an open one: "decline" (with a reason its requester
+    // reads, or none) or "done". A request no longer open is a 409 `conflict`.
+    [[nodiscard]] Read<AdminRequests> admin_requests(std::string_view status = {}, std::string_view user = {},
+        std::string_view platform = {}, const PageQuery& page = {});
+    [[nodiscard]] Read<TitleRequest> admin_decide_request(
+        std::string_view id, const AdminRequestDecision& decision);
     [[nodiscard]] Read<Invitations> admin_invitations(const PageQuery& page = {});
     [[nodiscard]] Read<Invitation> admin_create_invitation(const InvitationCreate& invitation);
     [[nodiscard]] Result<void> admin_revoke_invitation(std::string_view id);

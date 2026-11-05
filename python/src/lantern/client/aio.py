@@ -18,6 +18,7 @@ from lantern._generated.models import (
     AdminDevices,
     AdminPairing,
     AdminPairings,
+    AdminRequests,
     AdminUser,
     AdminUsers,
     App,
@@ -772,6 +773,26 @@ class AsyncLanternClient:
 
     def iter_admin_pairings(self, *, page_size: int | None = None) -> AsyncIterator[AdminPairing]:
         return self._pages(self.core.admin_pairings(page_size, None), lambda p: p.items, lambda p: p.next)
+
+    async def admin_requests(
+        self,
+        *,
+        status: str | None = None,
+        user: str | None = None,
+        platform: str | None = None,
+        page_size: int | None = None,
+        cursor: str | None = None,
+    ) -> AdminRequests:
+        """Every account's requests, newest first (SPEC.md § 11), filtered by status, user and platform."""
+        return await self._send(self.core.admin_requests(status, user, platform, page_size, cursor))
+
+    async def decline_request(self, request_id: str, reason: str | None = None) -> TitleRequest:
+        """Declines an open request, with the words its requester will read (SPEC.md § 11); 409 once decided."""
+        return await self._send(self.core.admin_decide_request(request_id, "decline", reason))
+
+    async def complete_request(self, request_id: str) -> TitleRequest:
+        """Marks an open request done (SPEC.md § 11); 409 once decided."""
+        return await self._send(self.core.admin_decide_request(request_id, "done", None))
 
     async def approve_pairing(
         self,

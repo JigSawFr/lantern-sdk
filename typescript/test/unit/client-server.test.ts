@@ -193,6 +193,20 @@ describe("pairing, signed requests and administration", () => {
     await assert.rejects(again.cheats(), Forbidden);
   });
 
+  test("an admin lists and decides requests", async () => {
+    const mira = admin();
+    const made = await mira.requestTitle("0500ABCDEF120000", { platform: "switch" });
+    const listed = await mira.adminRequests({ status: "open", user: "mira" });
+    assert.ok(listed.items.some((r) => r.id === made.id && r.user === "mira"));
+    const declined = await mira.declineRequest(made.id, "Only the games this household owns.");
+    assert.equal(declined.status, "declined");
+    assert.equal(declined.reason, "Only the games this household owns.");
+    const seen: string[] = [];
+    for await (const r of mira.iterAdminRequests({ status: "declined" })) seen.push(r.id);
+    assert.ok(seen.includes(made.id));
+    await assert.rejects(mira.completeRequest(made.id), { status: 409 }); // final
+  });
+
   test("the clock: a console an hour late signs again with the server's Date", async () => {
     const mira = admin();
     mira.clockOffset = -3600;
