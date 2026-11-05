@@ -45,7 +45,7 @@
  * adds to the API (functions, members appended to a struct, constants);
  * nothing is ever removed or changed while LANTERN_C_ABI_VERSION, the
  * shared library's SONAME version, stays the same. */
-#define LANTERN_C_API_VERSION 3
+#define LANTERN_C_API_VERSION 4
 #define LANTERN_C_ABI_VERSION 1
 #define LANTERN_VERSION_STRING "0.5.0"
 #define LANTERN_SPEC_DRAFT "0.6"
@@ -585,6 +585,50 @@ LANTERN_API void lantern_device_key_sign(
 LANTERN_API bool lantern_ed25519_verify(
     const uint8_t signature[64], const uint8_t public_key[32], const uint8_t* message, size_t size);
 
+/* ------------------------------------------ The app's request signer (§ 5.4) */
+
+/* What a request signer sees of a request, borrowed for the call to sign():
+ * the method, the whole URL, the authority and the path with its query, each
+ * header set so far, and the SHA-256 of the body when there is one. */
+typedef struct lantern_signing_input
+{
+    size_t struct_size;
+    lantern_str method; /* "GET" */
+    lantern_str target; /* the whole URL */
+    lantern_str authority; /* host[:port], as in the URL */
+    lantern_str path; /* path and query */
+    const lantern_header* headers;
+    size_t header_count;
+    bool has_content_digest;
+    uint8_t content_digest[32];
+    /* A poll of a pairing made with a key (§ 5.4): signed although it
+     * carries no Authorization. */
+    bool keyed_poll;
+} lantern_signing_input;
+
+/* Where a signer puts the headers it adds (Signature-Input, Signature,
+ * Content-Digest); copied. */
+typedef struct lantern_header_sink lantern_header_sink;
+LANTERN_API lantern_status lantern_header_sink_add(
+    lantern_header_sink* sink, const char* name, const char* value);
+
+/* The hook of device-bound tokens, for an app whose key lives in a secure
+ * element the library cannot read: the client calls sign() last, after every
+ * other header is set, and only for a request to the server's origin. The
+ * library signs by itself when the app gives its device key instead. */
+typedef struct lantern_request_signer_callbacks
+{
+    size_t struct_size;
+    void* user;
+    lantern_status (*sign)(
+        void* user, const lantern_signing_input* request, lantern_header_sink* headers, lantern_error* error);
+    void (*release)(void* user);
+} lantern_request_signer_callbacks;
+typedef struct lantern_request_signer lantern_request_signer;
+LANTERN_API lantern_status lantern_request_signer_create(const lantern_request_signer_callbacks* callbacks,
+    const lantern_allocator* allocator, lantern_request_signer** out, lantern_error* error);
+LANTERN_API void lantern_request_signer_free(lantern_request_signer* signer);
+
 /* ------------------------------------------------ Signed requests (§ 5.4) */
 
 /* The client signs by itself; these are the same steps one at a time, for
@@ -703,6 +747,10 @@ typedef struct lantern_client_config
     const lantern_limits* limits;
     /* The most of a problem+json read for an error; 0: 64 KiB. */
     size_t max_error_body;
+    /* The app's own signer, called after the client's (rarely needed: the
+     * client signs with the device key by itself); NULL: none. Borrowed, and
+     * must outlive the client. */
+    lantern_request_signer* signer;
 } lantern_client_config;
 
 LANTERN_API lantern_status lantern_client_create(
@@ -1284,6 +1332,12 @@ typedef struct lantern_admin_pairing_decision
     size_t scope_count;
     const lantern_rating_cap_input* rating_cap; /* NULL: none */
 } lantern_admin_pairing_decision;
+typedef struct lantern_admin_request_decision
+{
+    size_t struct_size;
+    const char* decision; /* "decline" or "done" */
+    const char* reason; /* with "decline" only: 1 to 512 bytes the requester reads; NULL: none */
+} lantern_admin_request_decision;
 typedef struct lantern_invitation_create
 {
     size_t struct_size;
@@ -1311,6 +1365,14 @@ LANTERN_API lantern_status lantern_client_admin_pairings(lantern_client* client,
     const lantern_page_query* page, lantern_admin_pairings** out, lantern_error* error);
 LANTERN_API lantern_status lantern_client_admin_decide_pairing(lantern_client* client, const char* id,
     const lantern_admin_pairing_decision* decision, lantern_error* error);
+/* Every account's requests, newest first (§ 11), filtered by status (open,
+ * done, declined), user and platform when given (NULL: any). */
+LANTERN_API lantern_status lantern_client_admin_requests(lantern_client* client, const char* status,
+    const char* user, const char* platform, const lantern_page_query* page, lantern_admin_requests** out,
+    lantern_error* error);
+/* An admin's decision on an open request; one no longer open is a 409. */
+LANTERN_API lantern_status lantern_client_admin_decide_request(lantern_client* client, const char* id,
+    const lantern_admin_request_decision* decision, lantern_title_request** out, lantern_error* error);
 LANTERN_API lantern_status lantern_client_admin_invitations(
     lantern_client* client, const lantern_page_query* page, lantern_invitations** out, lantern_error* error);
 LANTERN_API lantern_status lantern_client_admin_create_invitation(lantern_client* client,

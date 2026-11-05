@@ -6,14 +6,14 @@ client library: a thin, stable C ABI over the C++23 library of
 through JNI) and any language with a C FFI. One header,
 `include/lantern/lantern.h` (C11 or later, and C++), and one library,
 `Lantern::c` (shared) or `Lantern::c_static`. It follows the
-specification's **draft 0.6** (C API version 3).
+specification's **draft 0.6** (C API version 4).
 
 **Status: draft 0.6, the C++ client whole.** The handshake, pairing with a
 device key, signed requests, invitations, the library and its cursors,
 `missing`, `changes`, titles, homebrew (manifest and path checks, install
 plans, signatures and pins, ports' data, requirements), cheat sets, verified
 downloads, saves (single and resumable), requests, the administration API
-(deleting an account included), LAN discovery, and the server key's
+(requests decided and accounts deleted included), LAN discovery, and the server key's
 fingerprint; and since draft 0.5, events (a stream, or long polling),
 grants, mirrors and peers (a peer's gate included), sync with its consent,
 end-to-end encrypted saves, and static libraries: each a C function.
@@ -286,6 +286,7 @@ where it is given a `lantern_error`.
 | `lantern_transport` | HTTP: URLSession, OkHttp, a console's sockets; `send()` gets the request and pushes the answer with `lantern_response_status()`, `_header()`, `_body()` |
 | `lantern_random` | Cryptographic bytes: a device key and a nonce per signed request; `lantern_random_create_system()` takes the system's |
 | `lantern_clock` | The time a signature says, corrected by the server's `Date` |
+| `lantern_request_signer` | The app's own signer of requests (§ 5.4), for a key the library cannot read: `sign()` sees each request and adds its headers with `lantern_header_sink_add()`; given as `signer` in the client's configuration (rarely needed: the client signs with the device key by itself) |
 | `lantern_credential_store` | The token, the device key's seed and the pinned server key, by server uid: the keychain, the keystore |
 | `lantern_pin_store` | Homebrew authors' keys (§ 8.4) |
 | `lantern_deprecation_log` | Each `Deprecation` a server sends (§ 3.4) |
@@ -557,8 +558,6 @@ the reference server.
 
 ## Not there yet
 
-- An app's own `RequestSigner` (`ClientConfig::signer` in C++): the client
-  signs with its device key itself, which is what an app needs.
 - What the C++ library leaves for later (DNS-SD, compression, Annex B's
   retries), and its server-side pieces beyond `lantern_check_signature()`.
 - The Swift and Kotlin bindings are examples, not packages: an app copies

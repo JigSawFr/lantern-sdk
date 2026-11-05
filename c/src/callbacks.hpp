@@ -64,6 +64,20 @@ struct lantern_random final : lantern::RandomSource, CallbackHolder<lantern_rand
     [[nodiscard]] lantern::Result<void> fill(std::span<std::uint8_t> out) override;
 };
 
+struct lantern_request_signer final : lantern::RequestSigner, CallbackHolder<lantern_request_signer_callbacks>
+{
+    using CallbackHolder::CallbackHolder;
+    [[nodiscard]] lantern::Result<void> sign(
+        const lantern::SigningInput& request, lantern::HeaderSink& headers) override;
+};
+
+// Where the app's signer puts the headers it adds, for the call to sign().
+struct lantern_header_sink
+{
+    lantern::HeaderSink* sink;
+    lantern::Result<void>* failure;
+};
+
 struct lantern_clock final : lantern::Clock, CallbackHolder<lantern_clock_callbacks>
 {
     using CallbackHolder::CallbackHolder;
