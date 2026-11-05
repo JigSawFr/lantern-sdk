@@ -160,11 +160,11 @@
           "maximum": 1000
         },
         "save_body": {
-          "$ref": "common.json#/$defs/uint64",
+          "$ref": "common.json#/$defs/uint53",
           "description": "The largest save a single request takes (SPEC.md § 9.2)."
         },
         "save_size": {
-          "$ref": "common.json#/$defs/uint64",
+          "$ref": "common.json#/$defs/uint53",
           "description": "The largest save at all (SPEC.md § 9.3)."
         },
         "saves_kept_per_title": {

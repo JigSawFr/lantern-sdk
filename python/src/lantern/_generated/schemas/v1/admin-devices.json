@@ -15,7 +15,7 @@
           }
         },
         "total": {
-          "$ref": "common.json#/$defs/uint64"
+          "$ref": "common.json#/$defs/uint53"
         },
         "next": {
           "oneOf": [

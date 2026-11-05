@@ -78,6 +78,26 @@ def _constant(name: str) -> None:
     raise ValueError(f"{name} is not JSON")
 
 
+#: The largest integer an I-JSON document holds (SPEC.md § 2.3).
+IJSON_INTEGER = (1 << 53) - 1
+
+
+def _integer(text: str) -> int:
+    """An integer of an I-JSON document: within what an IEEE double holds exactly (RFC 7493 § 2.2)."""
+    value = int(text)
+    if abs(value) > IJSON_INTEGER:
+        raise ValueError(f"the integer {text[:20]} is beyond 2**53 - 1")
+    return value
+
+
+def _object(pairs: list[tuple[str, JSONValue]]) -> dict[str, JSONValue]:
+    """An object of an I-JSON document: a member name only once (RFC 7493 § 2.3)."""
+    found = dict(pairs)
+    if len(found) != len(pairs):
+        raise ValueError("a member name is given twice")
+    return found
+
+
 def load_json(
     raw: bytes, *, limit: int = JSON_DOCUMENT, caps: Mapping[str, int] = STRING_CAPS, where: str = "document"
 ) -> JSONValue:
@@ -88,10 +108,12 @@ def load_json(
         raise DocumentError(f"{len(raw)} bytes, above {limit}", where)
     try:
         text = raw.decode("utf-8")
-        document: JSONValue = json.loads(text, parse_constant=_constant)
+        document: JSONValue = json.loads(text, parse_constant=_constant, parse_int=_integer, object_pairs_hook=_object)
+        if "\\ud" in text.lower():  # an escaped surrogate: I-JSON allows no lone one (RFC 7493 § 2.1)
+            json.dumps(document, ensure_ascii=False).encode("utf-8")
     except RecursionError:
         raise DocumentError(f"nested deeper than {DEPTH}", where) from None
-    except (UnicodeDecodeError, ValueError) as e:
+    except (UnicodeError, ValueError) as e:
         raise DocumentError(f"not JSON ({e})", where) from None
     found = problems(document, caps)
     if found:

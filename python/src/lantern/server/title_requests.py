@@ -6,9 +6,9 @@ memory. LanternApp does the protocol's work: a request per open title (the
 same title asked again gives the open one), the platform and its title ids,
 withdrawing, the events of each change (§ 18.2), a request marked `done`
 when its title arrives in the library, and erasing an account's requests
-when it is deleted (§ 5.7). The draft 0.5 defines no route for an
-administrator to answer a request: a server marks one `done` or `declined`
-with `LanternApp.answer_request()`, from its own pages.
+when it is deleted (§ 5.7). An administrator decides an open request with
+`POST /admin/requests/{id}`, or a server's own pages with
+`LanternApp.answer_request()`; `done` and `declined` are final.
 """
 
 from __future__ import annotations
@@ -42,12 +42,16 @@ class StoredRequest:
     status: str
     created: str
     name: str | None = None
+    updated: str | None = None
+    reason: str | None = None
 
     def to_json(self) -> JSONObject:
         doc: JSONObject = {"id": self.id, "platform": self.platform, "title_id": self.title_id}
         if self.name is not None:
             doc["name"] = self.name
-        doc.update(status=self.status, created=self.created)
+        doc.update(status=self.status, created=self.created, updated=self.updated or self.created)
+        if self.reason is not None and self.status == "declined":
+            doc["reason"] = self.reason
         return doc
 
 
@@ -60,8 +64,10 @@ class RequestStore(Protocol):
 
     def add(self, request: StoredRequest) -> None: ...
 
-    def set_status(self, request_id: str, status: str) -> StoredRequest | None:
-        """The request with its new status; None when there is none of that id."""
+    def set_status(
+        self, request_id: str, status: str, *, reason: str | None = None, updated: str | None = None
+    ) -> StoredRequest | None:
+        """The request with its new status, the admin's `reason` and when it changed; None if there is none."""
         ...
 
     def remove(self, user: str, request_id: str) -> StoredRequest | None:
@@ -88,12 +94,14 @@ class MemoryRequests:
         with self._lock:
             self._requests[request.id] = request
 
-    def set_status(self, request_id: str, status: str) -> StoredRequest | None:
+    def set_status(
+        self, request_id: str, status: str, *, reason: str | None = None, updated: str | None = None
+    ) -> StoredRequest | None:
         with self._lock:
             found = self._requests.get(request_id)
             if found is None:
                 return None
-            found = dataclasses.replace(found, status=status)
+            found = dataclasses.replace(found, status=status, reason=reason, updated=updated)
             self._requests[request_id] = found
             return found
 

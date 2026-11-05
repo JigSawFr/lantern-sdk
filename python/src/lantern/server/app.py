@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import contextlib
 import dataclasses
 import hashlib
 import json
@@ -43,7 +44,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import TypeVar, cast
-from urllib.parse import unquote
+from urllib.parse import parse_qsl, unquote
 
 from lantern import e2e, ed25519, ratings, schema
 from lantern import signatures as sig
@@ -51,6 +52,7 @@ from lantern import sync as syncing
 from lantern._base import SCHEMA, DocumentError, JSONObject, JSONValue
 from lantern._generated.models import (
     AdminPairingDecision,
+    AdminRequestDecision,
     AdminUserCreate,
     AdminUserUpdate,
     App,
@@ -204,6 +206,8 @@ ROUTES = (
     Route(("admin", "devices", "{}"), ("DELETE",), "admin", "admin_device"),
     Route(("admin", "pairings"), ("GET", "HEAD"), "admin", "admin_pairings"),
     Route(("admin", "pairings", "{}"), ("POST",), "admin", "admin_pairing"),
+    Route(("admin", "requests"), ("GET", "HEAD"), "admin", "admin_requests"),
+    Route(("admin", "requests", "{}"), ("POST",), "admin", "admin_request"),
     Route(("admin", "invitations"), ("GET", "HEAD", "POST"), "admin", "admin_invitations"),
     Route(("admin", "invitations", "{}"), ("DELETE",), "admin", "admin_invitation"),
 )
@@ -271,7 +275,7 @@ class LanternApp:
       as they come (§ 9.4), which the server never decrypts.
     - `requests`: a RequestStore (MemoryRequests), which offers requests
       (SPEC.md § 11) to the accounts with the scope requests;
-      `answer_request()` marks one done or declined.
+      `answer_request()` decides one: done or declined.
     - `cheat_writes`: with a library that writes cheat sets (a CheatWriter,
       as MemoryLibrary is), take them from the accounts with cheats.write
       (SPEC.md § 10); without, writing answers 405.
@@ -410,7 +414,20 @@ class LanternApp:
         )
         return html_response(request, page)
 
+    @staticmethod
+    def _plain_query(request: ServerRequest) -> ServerRequest:
+        """The query as SPEC.md § 2.4 reads it: a parameter given twice is 400, an empty value is absent.
+        The target stays as sent (a signature covers it)."""
+        if "?" in request.target:
+            names = [k for k, _ in parse_qsl(request.target.partition("?")[2], keep_blank_values=True)]
+            if len(names) != len(set(names)):
+                raise bad_request("Each query parameter is given once.")
+        if any(v == "" for v in request.query.values()):
+            return dataclasses.replace(request, query={k: v for k, v in request.query.items() if v != ""})
+        return request
+
     def route(self, request: ServerRequest) -> ServerResponse:
+        request = self._plain_query(request)
         path = request.path
         if self.verify_path is not None and path == self.verify_path:
             return self.approval(request)
@@ -865,7 +882,9 @@ class LanternApp:
         scopes and account, of its platform when it named one, within its rating cap."""
         if rec.event in ("ready", "shutdown"):
             return rec.data
-        if rec.scope is None or rec.scope not in account.scopes:
+        # The event `request` also goes to the scope admin, whoever's request it is (SPEC.md § 11, L-11-6).
+        admin_sees = rec.event == "request" and "admin" in account.scopes
+        if rec.scope is None or (rec.scope not in account.scopes and not admin_sees):
             return None
         if rec.event == "library":
             hide = self.hides(account) if account.rating_cap is not None else None
@@ -885,7 +904,7 @@ class LanternApp:
             fams: list[JSONValue] = [*sorted(families)]
             plats: list[JSONValue] = [*sorted(platforms)]
             return {"schema": SCHEMA, "families": fams, "platforms": plats}
-        if rec.user is not None and rec.user != self.owner(account):
+        if rec.user is not None and rec.user != self.owner(account) and not admin_sees:
             return None
         if platform is not None and rec.platform not in (None, platform):
             return None
@@ -1877,22 +1896,55 @@ class LanternApp:
         self._request_event(gone, deleted=True)
         return _no_content(request)
 
-    def answer_request(self, request_id: str, status: str) -> StoredRequest | None:
-        """Marks a request `done` or `declined` (or `open` again), as the server's own administration
-        decides (SPEC.md § 11): the account's devices get its event (§ 18.2). None when there is none."""
-        if status not in STATUSES:
-            raise ValueError("status is " + ", ".join(STATUSES))
+    def answer_request(self, request_id: str, status: str, reason: str | None = None) -> StoredRequest | None:
+        """Decides an open request: `done`, or `declined` with a `reason` for its requester (SPEC.md § 11).
+        `done` and `declined` are final (L-11-3): a request no longer open raises ProblemError 409 `conflict`.
+        The account's devices and the admins' get its event (§ 18.2). None when there is none."""
+        if status not in ("done", "declined"):
+            raise ValueError("status is done or declined")
         store = self._request_store()
         with self._requests_lock:
             before = next((r for r in store.requests() if r.id == request_id), None)
             if before is None:
                 return None
-            if before.status == status:
-                return before
-            after = store.set_status(request_id, status)
+            if before.status != "open":
+                raise ProblemError(409, "conflict", f"The request is {before.status}: it is final.")
+            after = store.set_status(request_id, status, reason=reason, updated=utc())
         if after is not None:
             self._request_event(after)
         return after
+
+    def h_admin_requests(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        status, user = request.query.get("status"), request.query.get("user")
+        if status is not None and status not in STATUSES:
+            raise bad_request("status is open, done or declined.")
+        platform = platform_of(request)
+        docs: list[JSONObject] = []
+        for r in self.all_requests():
+            if (status, user, platform) == (None, None, None) or (
+                status in (None, r.status) and user in (None, r.user) and platform in (None, r.platform)
+            ):
+                docs.append({**r.to_json(), "user": r.user})
+        return self._admin_page(
+            request,
+            docs,
+            self.cursors.scope("admin-requests", status, user, platform),
+            lambda d: (str(d["created"]), str(d["id"])),
+        )
+
+    def h_admin_request(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        try:
+            doc = AdminRequestDecision.from_json(read_document(request), "the body")
+        except DocumentError as e:
+            raise bad_request(f"A decision is {{schema, decision, reason?}}: {e}") from None
+        if doc.decision not in ("decline", "done") or (doc.reason is not None and doc.decision != "decline"):
+            raise bad_request("decision is decline (with a reason, if any) or done; a reason goes with decline only.")
+        if doc.reason is not None and not 1 <= len(doc.reason.encode()) <= 512:
+            raise bad_request("reason is 1 to 512 bytes.")
+        found = self.answer_request(args[0], "declined" if doc.decision == "decline" else "done", doc.reason)
+        if found is None:
+            raise not_found("No such request.")
+        return json_response(request, {"schema": SCHEMA, **found.to_json(), "user": found.user})
 
     def all_requests(self) -> list[StoredRequest]:
         """Every account's requests, newest first: what a server's own administration pages show."""
@@ -1914,7 +1966,8 @@ class LanternApp:
             ]
         if waiting and any((a.platform, a.title_id) == (change.platform, change.title_id) for a in self.library.apps()):
             for r in waiting:
-                self.answer_request(r.id, "done")
+                with contextlib.suppress(ProblemError):  # decided by an admin meanwhile: final (L-11-3)
+                    self.answer_request(r.id, "done")
 
     @property
     def body_limit(self) -> int:

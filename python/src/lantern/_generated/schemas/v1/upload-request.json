@@ -9,7 +9,7 @@
       "$ref": "common.json#/$defs/schema1"
     },
     "size": {
-      "$ref": "common.json#/$defs/uint64"
+      "$ref": "common.json#/$defs/uint53"
     },
     "sha256": {
       "$ref": "common.json#/$defs/sha256"
@@ -21,7 +21,7 @@
       "$ref": "common.json#/$defs/slot"
     },
     "game_version_code": {
-      "$ref": "common.json#/$defs/uint64"
+      "$ref": "common.json#/$defs/uint53"
     },
     "profile": {
       "$ref": "common.json#/$defs/profile"

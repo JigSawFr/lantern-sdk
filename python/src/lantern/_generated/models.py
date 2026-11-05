@@ -368,6 +368,138 @@ class AdminPairing:
 
 
 @dataclass(kw_only=True, slots=True)
+class AdminRequestDecision:
+    """POST <base>/v1/admin/requests/{id} (SPEC.md § 11): decline, with a reason for the requester, or done.
+
+    From admin-request-decision.
+    """
+
+    schema: int | None = None
+    decision: str
+    reason: str | None = None
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "decision", "reason"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "AdminRequestDecision") -> AdminRequestDecision:
+        o = _m.obj(data, where)
+        return cls(
+            schema=_m.opt(o, "schema", where, _m.as_int),
+            decision=_m.req(o, "decision", where, _m.as_str),
+            reason=_m.opt(o, "reason", where, _m.as_str),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        if self.schema is not None:
+            out["schema"] = self.schema
+        out["decision"] = self.decision
+        if self.reason is not None:
+            out["reason"] = self.reason
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class AdminRequests:
+    """GET <base>/v1/admin/requests (SPEC.md § 11, § 5.7): newest first, each with its user.
+
+    From admin-requests.
+    """
+
+    schema: int | None = None
+    items: list[TitleRequest]
+    total: int | None = None
+    next: str | None
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "items", "total", "next"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "AdminRequests") -> AdminRequests:
+        o = _m.obj(data, where)
+        return cls(
+            schema=_m.opt(o, "schema", where, _m.as_int),
+            items=_m.req(o, "items", where, lambda v, w: _m.as_list(v, w, TitleRequest.from_json)),
+            total=_m.opt(o, "total", where, _m.as_int),
+            next=_m.req(o, "next", where, _m.nullable(_m.as_str)),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        if self.schema is not None:
+            out["schema"] = self.schema
+        out["items"] = _m.json_list(x.to_json() for x in self.items)
+        if self.total is not None:
+            out["total"] = self.total
+        out["next"] = None if self.next is None else self.next
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class TitleRequest:
+    """A request for a game (SPEC.md § 11): open, then done or declined, which are final.
+
+    From common.json#/$defs/request.
+    """
+
+    schema: int | None = None
+    id: str
+    platform: str
+    title_id: str
+    name: str | None = None
+    status: str
+    created: str
+    updated: str | None = None
+    reason: str | None = None
+    user: str | None = None
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "id", "platform", "title_id", "name", "status", "created", "updated", "reason", "user"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "TitleRequest") -> TitleRequest:
+        o = _m.obj(data, where)
+        return cls(
+            schema=_m.opt(o, "schema", where, _m.as_int),
+            id=_m.req(o, "id", where, _m.as_str),
+            platform=_m.req(o, "platform", where, _m.as_str),
+            title_id=_m.req(o, "title_id", where, _m.as_str),
+            name=_m.opt(o, "name", where, _m.as_str),
+            status=_m.req(o, "status", where, _m.as_str),
+            created=_m.req(o, "created", where, _m.as_str),
+            updated=_m.opt(o, "updated", where, _m.as_str),
+            reason=_m.opt(o, "reason", where, _m.as_str),
+            user=_m.opt(o, "user", where, _m.as_str),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        if self.schema is not None:
+            out["schema"] = self.schema
+        out["id"] = self.id
+        out["platform"] = self.platform
+        out["title_id"] = self.title_id
+        if self.name is not None:
+            out["name"] = self.name
+        out["status"] = self.status
+        out["created"] = self.created
+        if self.updated is not None:
+            out["updated"] = self.updated
+        if self.reason is not None:
+            out["reason"] = self.reason
+        if self.user is not None:
+            out["user"] = self.user
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
 class AdminUser:
     """An account, as the administration API shows it (SPEC.md § 5.7).
 
@@ -641,7 +773,7 @@ class App:
 
 @dataclass(kw_only=True, slots=True)
 class Mirror:
-    """Another address of a file's exact bytes (SPEC.md § 19.2): HTTPS, or HTTP at an address of a private network (10/8, 172.16/12, 192.168/16, fc00::/7, fe80::/10).
+    """Another address of a file's exact bytes (SPEC.md § 19.2): HTTPS, or HTTP at an address of a private network (10/8, 172.16/12, 192.168/16, fc00::/7, fe80::/10), or of loopback for testing (127/8, ::1; SPEC.md § 2).
 
     From common.json#/$defs/mirror.
     """
@@ -2602,53 +2734,6 @@ class Problem:
 
 
 @dataclass(kw_only=True, slots=True)
-class TitleRequest:
-    """A request for a game (SPEC.md § 11).
-
-    From common.json#/$defs/request.
-    """
-
-    schema: int | None = None
-    id: str
-    platform: str
-    title_id: str
-    name: str | None = None
-    status: str
-    created: str
-    extra: JSONObject = field(default_factory=dict)
-
-    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "id", "platform", "title_id", "name", "status", "created"})
-
-    @classmethod
-    def from_json(cls, data: JSONValue, where: str = "TitleRequest") -> TitleRequest:
-        o = _m.obj(data, where)
-        return cls(
-            schema=_m.opt(o, "schema", where, _m.as_int),
-            id=_m.req(o, "id", where, _m.as_str),
-            platform=_m.req(o, "platform", where, _m.as_str),
-            title_id=_m.req(o, "title_id", where, _m.as_str),
-            name=_m.opt(o, "name", where, _m.as_str),
-            status=_m.req(o, "status", where, _m.as_str),
-            created=_m.req(o, "created", where, _m.as_str),
-            extra=_m.extras(o, cls.KEYS),
-        )
-
-    def to_json(self) -> JSONObject:
-        out: JSONObject = {}
-        if self.schema is not None:
-            out["schema"] = self.schema
-        out["id"] = self.id
-        out["platform"] = self.platform
-        out["title_id"] = self.title_id
-        if self.name is not None:
-            out["name"] = self.name
-        out["status"] = self.status
-        out["created"] = self.created
-        out.update(self.extra)
-        return out
-
-
-@dataclass(kw_only=True, slots=True)
 class RequestCreate:
     """POST <base>/v1/requests (SPEC.md § 11); platform defaults to the client's.
 
@@ -3495,6 +3580,8 @@ DOCUMENTS: dict[str, type[Any]] = {
     "admin-devices": AdminDevices,
     "admin-pairing-decision": AdminPairingDecision,
     "admin-pairings": AdminPairings,
+    "admin-request-decision": AdminRequestDecision,
+    "admin-requests": AdminRequests,
     "admin-user": AdminUser,
     "admin-user-create": AdminUserCreate,
     "admin-user-update": AdminUserUpdate,
@@ -3546,6 +3633,8 @@ __all__ = [
     "AdminPairing",
     "AdminPairingDecision",
     "AdminPairings",
+    "AdminRequestDecision",
+    "AdminRequests",
     "AdminUser",
     "AdminUserCreate",
     "AdminUserUpdate",

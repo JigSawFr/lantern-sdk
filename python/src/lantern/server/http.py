@@ -286,13 +286,19 @@ def json_response(request: ServerRequest, document: JSONObject, status: int = 20
     if status == 200 and request.method in ("GET", "HEAD"):
         etag = f'"{tag}"'
         headers["ETag"] = etag
-        if etag in [t.strip() for t in (request.header("If-None-Match") or "").split(",")]:
+        if _matches(request.header("If-None-Match"), etag):
             del headers["Content-Type"]
             headers.pop("Content-Encoding", None)
             headers["Content-Length"] = "0"
             return ServerResponse(304, headers)
     headers["Content-Length"] = str(len(body))
     return ServerResponse(status, headers, b"" if request.method == "HEAD" else body)
+
+
+def _matches(header: str | None, etag: str) -> bool:
+    """If-None-Match as HTTP says (SPEC.md § 14): `*`, or a tag compared weakly (W/ ignored)."""
+    wanted = [t.strip().removeprefix("W/") for t in (header or "").split(",")]
+    return "*" in wanted or etag in wanted
 
 
 def html_response(request: ServerRequest, page: str, status: int = 200) -> ServerResponse:

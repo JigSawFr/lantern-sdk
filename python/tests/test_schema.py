@@ -38,7 +38,7 @@ def test_names_and_definitions() -> None:
 
 def test_formats() -> None:
     assert schema.definition("time", "2026-10-30T09:12:00Z") == []
-    assert schema.definition("time", "2026-10-30T09:12:00.5+02:00") == []
+    assert schema.definition("time", "2026-10-30T09:12:00.5+02:00") != []  # draft 0.6: UTC with Z (L-2.3-2)
     assert schema.definition("time", "2026-10-30 09:12")
     assert schema.definition("time", "2026-13-30T09:12:00Z")
     hello: Any = {

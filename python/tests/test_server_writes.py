@@ -781,3 +781,57 @@ def test_a_file_stores_index_that_is_not_json(tmp_path: Path) -> None:
 
 def test_the_demo_key_is_the_one_tests_sign_with() -> None:
     assert base64.b64decode(DEMO_KEY.seed_b64()) == DEMO_KEY.seed
+
+
+def test_an_admin_decides_requests(app: LanternApp) -> None:
+    """SPEC.md § 11 (L-11-3 to L-11-6): the admin lists every request and declines or completes an open one."""
+    boss = member(app, "noor", ("library", "requests", "admin"))
+    rid = doc(mira(app, "POST", V1 + "/requests", body={"schema": 1, "platform": "switch", "title_id": TITLE}))["id"]
+    stream = Reader(call(app, "GET", V1 + "/events", token=boss))
+    stream.wait_for("event: ready")
+    listed = doc(call(app, "GET", V1 + "/admin/requests?status=open", token=boss))
+    assert schema.validate("admin-requests", listed) == []
+    assert [i["id"] for i in listed["items"]] == [rid] and listed["items"][0]["user"] == "mira"
+    assert doc(call(app, "GET", V1 + "/admin/requests?status=done", token=boss))["items"] == []
+    assert call(app, "GET", V1 + "/admin/requests?status=maybe", token=boss).status == 400
+    decide = f"{V1}/admin/requests/{rid}"
+    assert call(app, "POST", decide, token=boss, body={"schema": 1, "decision": "done", "reason": "x"}).status == 400
+    assert call(app, "POST", decide, token=boss, body={"schema": 1, "decision": "later"}).status == 400
+    assert (
+        call(app, "POST", V1 + "/admin/requests/r_nothing", token=boss, body={"schema": 1, "decision": "done"}).status
+        == 404
+    )
+    reason = "Only the games this household owns."
+    answered = doc(call(app, "POST", decide, token=boss, body={"schema": 1, "decision": "decline", "reason": reason}))
+    assert answered["status"] == "declined" and answered["reason"] == reason and answered["user"] == "mira"
+    stream.wait_for('"status":"declined"')  # the admin's stream gets the event of another account's request
+    mine = doc(mira(app, "GET", V1 + "/requests"))["requests"]
+    assert mine[0]["reason"] == reason and mine[0]["updated"]
+    final = call(app, "POST", decide, token=boss, body={"schema": 1, "decision": "done"})
+    problem(final, 409, "conflict")
+
+
+def test_the_query_and_the_body_follow_the_core(app: LanternApp) -> None:
+    """SPEC.md § 2.3, § 2.4, § 14: a parameter twice is 400, an empty one is absent, a name twice in a body is 400, and
+    If-None-Match takes `*` and weak tags."""
+    twice = mira(app, "GET", V1 + "/apps?sort=name&sort=added")
+    assert twice.status == 400
+    assert mira(app, "GET", V1 + "/apps?type=&q=&sort=&page_size=500&unknown=1").status == 200
+    first = mira(app, "GET", V1 + "/apps?page_size=1")
+    tag = first.headers["ETag"]
+    assert mira(app, "GET", V1 + "/apps?page_size=1", If_None_Match=f"W/{tag}").status == 304
+    assert mira(app, "GET", V1 + "/apps?page_size=1", If_None_Match="*").status == 304
+    body = b'{"schema":1,"installed":[],"installed":[],"want":["update"]}'
+    assert (
+        raw_call(
+            app, "POST", V1 + "/apps/missing", body, token=DEMO_TOKEN, key=DEMO_KEY, Content_Type="application/json"
+        ).status
+        == 400
+    )
+    big = b'{"schema":1,"installed":[],"want":["update"],"x":9007199254740993}'
+    assert (
+        raw_call(
+            app, "POST", V1 + "/apps/missing", big, token=DEMO_TOKEN, key=DEMO_KEY, Content_Type="application/json"
+        ).status
+        == 400
+    )
