@@ -10,6 +10,7 @@
 
 #include <lantern/digest.hpp>
 #include <lantern/encoding.hpp>
+#include <lantern/inflate.hpp>
 #include <lantern/json.hpp>
 #include <lantern/profiles.hpp>
 
@@ -185,6 +186,8 @@ class Client::Collector final : public ResponseHandler
             response_.retry_after.assign(value);
         else if (equal_ignoring_case(name, "Upload-Offset"))
             response_.upload_offset.assign(value);
+        else if (equal_ignoring_case(name, "Content-Encoding"))
+            response_.content_encoding.assign(value);
         return true;
     }
 
@@ -294,7 +297,18 @@ class Client::Retry final : public ResponseHandler
             return Code::none;
         DecodeOptions options       = client_.decode_;
         options.limits.max_document = std::min(options.limits.max_document, max_body_);
-        const auto read             = read_problem(body_, options);
+        // The server may have compressed it (§ 2.1)
+        String plain(client_.allocator_);
+        std::string_view text = body_;
+        for (const auto& [name, value] : headers_)
+        {
+            if (!equal_ignoring_case(name, "Content-Encoding") || equal_ignoring_case(value, "identity"))
+                continue;
+            if (!gunzip(detail::bytes_of(body_), max_body_, plain))
+                return Code::none;
+            text = plain;
+        }
+        const auto read = read_problem(text, options);
         if (!read || !*read)
             return Code::none;
         if ((**read).code == "signature_expired" && !date_.empty())
@@ -540,6 +554,8 @@ Result<void> Client::send_once(const Call& call, ResponseHandler& handler)
     headers.reserve(20 + call.extra.size());
     headers.push_back({ "User-Agent", user_agent_ });
     headers.push_back({ "Accept", call.accept });
+    if (call.compressible)
+        headers.push_back({ "Accept-Encoding", "gzip" });
     if (!platform_.empty())
         headers.push_back({ "Lantern-Platform", platform_ });
     if (!accept_language_.empty())
@@ -645,13 +661,35 @@ Result<Client::Response> Client::fetch(const Call& call)
 {
     Response response(allocator_);
     Collector collector(response, decode_.limits.max_document, max_error_body_);
-    const auto sent = exchange(call, collector);
+    Call asking         = call;
+    asking.compressible = !call.untrusted;
+    const auto sent     = exchange(asking, collector);
     if (collector.error())
         return std::unexpected(*collector.error());
     if (!sent && !collector.truncated())
         return std::unexpected(sent.error());
     if (response.status == 0)
         return fail(Category::transport, "no answer");
+    // § 2.1: a document the server compressed is read as it was, within the limits once decompressed
+    if (!response.content_encoding.empty() && !equal_ignoring_case(response.content_encoding, "identity"))
+    {
+        if (!equal_ignoring_case(response.content_encoding, "gzip")
+            && !equal_ignoring_case(response.content_encoding, "x-gzip"))
+            return fail(Category::invalid_response, "an answer in a coding that was not asked for");
+        const bool ok = response.status >= 200 && response.status < 300;
+        String plain(allocator_);
+        if (auto inflated = gunzip(
+                detail::bytes_of(response.body), ok ? decode_.limits.max_document : max_error_body_, plain);
+            !inflated)
+        {
+            // An error's body is only read for its detail: what it said is dropped, not refused
+            if (ok)
+                return std::unexpected(inflated.error());
+            plain.clear();
+        }
+        response.body = std::move(plain);
+        response.content_encoding.clear();
+    }
     return response;
 }
 

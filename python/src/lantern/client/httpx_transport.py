@@ -94,7 +94,7 @@ class HttpxTransport:
 
         def chunks() -> Iterator[bytes]:
             try:
-                yield from answer.iter_bytes()  # as they arrive: an event stream's too
+                yield from answer.iter_raw()  # as they arrive, not decoded: Response decodes (SPEC.md § 2.1)
             except httpx.HTTPError as e:
                 raise TransportError(f"{request.method} {request.url}: {e}") from e
 
@@ -147,7 +147,7 @@ class AsyncHttpxTransport:
 
         async def chunks() -> AsyncIterator[bytes]:
             try:
-                async for chunk in answer.aiter_bytes():  # as they arrive
+                async for chunk in answer.aiter_raw():  # as they arrive, not decoded: the response decodes
                     yield chunk
             except httpx.HTTPError as e:
                 raise TransportError(f"{request.method} {request.url}: {e}") from e

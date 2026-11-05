@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from lantern._base import DocumentError
+from lantern.client.coding import adecode, decode, decoder
 from lantern.http import Headers, origin
 
 CHUNK = 1 << 16
@@ -86,6 +87,27 @@ class Pipeline:
         return request
 
 
+def _decoded(headers: Headers, chunks: Iterator[bytes]) -> Iterator[bytes]:
+    """The body decoded when it has a Content-Encoding (SPEC.md § 2.1); the headers then describe the decoded one."""
+    how = decoder(headers.get("Content-Encoding"))
+    if how is None:
+        return chunks
+    del headers["Content-Encoding"]
+    if "Content-Length" in headers:
+        del headers["Content-Length"]
+    return decode(chunks, how)
+
+
+def _adecoded(headers: Headers, chunks: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
+    how = decoder(headers.get("Content-Encoding"))
+    if how is None:
+        return chunks
+    del headers["Content-Encoding"]
+    if "Content-Length" in headers:
+        del headers["Content-Length"]
+    return adecode(chunks, how)
+
+
 class Response:
     """A response whose body is read as it arrives. Close it, or use it as a context manager."""
 
@@ -93,7 +115,7 @@ class Response:
         self, status: int, headers: Headers, chunks: Iterator[bytes], close: Callable[[], None] = lambda: None
     ) -> None:
         self.status, self.headers = status, headers
-        self._chunks, self._close = chunks, close
+        self._chunks, self._close = _decoded(headers, chunks), close
         #: The fingerprint (SHA-256 of the SPKI, hex) of the key of the TLS connection, when the transport knows it.
         self.spki: str | None = None
 
@@ -126,7 +148,7 @@ class AsyncResponse:
         self, status: int, headers: Headers, chunks: AsyncIterator[bytes], close: Callable[[], object] | None = None
     ) -> None:
         self.status, self.headers = status, headers
-        self._chunks, self._close = chunks, close
+        self._chunks, self._close = _adecoded(headers, chunks), close
         self.spki: str | None = None
 
     async def iter_bytes(self) -> AsyncIterator[bytes]:

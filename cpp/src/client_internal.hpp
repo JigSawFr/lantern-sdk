@@ -40,6 +40,8 @@ struct Client::Call
     // client's own headers but its User-Agent; plain HTTP to a private
     // network allowed (§ 19.2).
     bool untrusted = false;
+    // A JSON document: Accept-Encoding gzip (§ 2.1).
+    bool compressible = false;
 };
 
 // A whole answer, for the documents and the errors.
@@ -50,12 +52,14 @@ struct Client::Response
     String content_type;
     String retry_after;
     String upload_offset;
+    String content_encoding;
 
     explicit Response(Allocator allocator)
         : body(allocator)
         , content_type(allocator)
         , retry_after(allocator)
         , upload_offset(allocator)
+        , content_encoding(allocator)
     {
     }
 };

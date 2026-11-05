@@ -66,6 +66,7 @@ add_library(lantern
     src/events.cpp
     src/generated/types.cpp
     src/hkdf.cpp
+    src/inflate.cpp
     src/homebrew.cpp
     src/http_signature.cpp
     src/json.cpp
