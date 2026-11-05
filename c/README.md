@@ -6,7 +6,7 @@ client library: a thin, stable C ABI over the C++23 library of
 through JNI) and any language with a C FFI. One header,
 `include/lantern/lantern.h` (C11 or later, and C++), and one library,
 `Lantern::c` (shared) or `Lantern::c_static`. It follows the
-specification's **draft 0.6** (C API version 2).
+specification's **draft 0.6** (C API version 3).
 
 **Status: draft 0.6, the C++ client whole.** The handshake, pairing with a
 device key, signed requests, invitations, the library and its cursors,

@@ -97,6 +97,15 @@ export class Cursors {
     this.clock = clock;
   }
 
+  /**
+   * When a cursor is given, to a sixtieth of its lifetime (a minute for an hour): two identical requests in a row
+   * give the same page, so the same ETag (SPEC.md § 14), unless a window ends between them.
+   */
+  #issued(): number {
+    const step = Math.max(1, Math.trunc(this.lifetime / 60));
+    return Math.trunc(this.clock() / step) * step;
+  }
+
   /** A listing's identity, from its route and filters: a cursor of another listing is refused. */
   scope(...parts: unknown[]): string {
     return createHash("sha256").update(stable(parts)).digest("hex").slice(0, 16);
@@ -137,7 +146,7 @@ export class Cursors {
     let next: string | null = null;
     const tail = chosen.at(-1);
     if (ordered.length > options.size && tail !== undefined) {
-      next = this.sealer.seal("c", { s: options.scope, k: [...tail.key], t: Math.trunc(this.clock()) });
+      next = this.sealer.seal("c", { s: options.scope, k: [...tail.key], t: this.#issued() });
     }
     return { items: chosen.map((x) => x.item), next, total: items.length };
   }
