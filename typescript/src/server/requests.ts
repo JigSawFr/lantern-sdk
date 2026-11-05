@@ -4,8 +4,9 @@
  * own storage; `MemoryRequestStore` keeps them in memory. LanternApp answers
  * the routes, sends the event `request` (§ 18.2) for each one made, changed
  * or withdrawn, and erases an account's with it (§ 5.7); a request is done
- * when its title comes into the library, or as the server decides
- * (`app.setRequestStatus()`).
+ * when its title comes into the library, or as an admin decides it
+ * (`POST /admin/requests/{id}`, or `app.setRequestStatus()`); `done` and
+ * `declined` are final.
  */
 
 type Maybe<T> = T | Promise<T>;
@@ -23,6 +24,10 @@ export interface StoredRequest {
   status: RequestStatus;
   /** RFC 3339, UTC. */
   created: string;
+  /** When its status last changed (the creation, until then). */
+  updated?: string;
+  /** What an admin said when declining it, for its requester. */
+  reason?: string;
 }
 
 /** Where LanternApp keeps requests. Every method may be async. */
@@ -30,8 +35,12 @@ export interface RequestStore {
   /** The requests of `user`, or of every account; in the order they were made. */
   requests(user?: string): Maybe<readonly StoredRequest[]>;
   add(request: StoredRequest): Maybe<void>;
-  /** Changes a request's status; the request, or undefined when there is none of that id. */
-  setStatus(id: string, status: RequestStatus): Maybe<StoredRequest | undefined>;
+  /** Changes a request's status, with the admin's `reason` and when it changed; the request, or undefined when there is none of that id. */
+  setStatus(
+    id: string,
+    status: RequestStatus,
+    change?: { reason?: string; updated?: string },
+  ): Maybe<StoredRequest | undefined>;
   /** Removes a request; the one removed, or undefined. */
   remove(id: string): Maybe<StoredRequest | undefined>;
   /** Every request of `user` erased (an account deleted, SPEC.md § 5.7). */
@@ -50,10 +59,17 @@ export class MemoryRequestStore implements RequestStore {
     this.#requests.push({ ...request });
   }
 
-  setStatus(id: string, status: RequestStatus): StoredRequest | undefined {
+  setStatus(
+    id: string,
+    status: RequestStatus,
+    change: { reason?: string; updated?: string } = {},
+  ): StoredRequest | undefined {
     const found = this.#requests.find((r) => r.id === id);
     if (found === undefined) return undefined;
     found.status = status;
+    if (change.updated !== undefined) found.updated = change.updated;
+    if (change.reason === undefined) delete found.reason;
+    else found.reason = change.reason;
     return { ...found };
   }
 

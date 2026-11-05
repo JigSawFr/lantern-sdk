@@ -29,7 +29,7 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { DocumentError, SCHEMA } from "../base.ts";
-import { fromBase64, toBase64 } from "../bytes.ts";
+import { fromBase64, toBase64, utf8Length } from "../bytes.ts";
 import { digestSha256 } from "../digest.ts";
 import * as e2e from "../e2e.ts";
 import * as ed25519 from "../ed25519.ts";
@@ -72,7 +72,7 @@ import {
   platformOf,
   problemResponse,
   readDocument,
-  type ServerRequest,
+  ServerRequest,
   type ServerResponse,
   type StreamBody,
   unauthorized,
@@ -171,6 +171,8 @@ const ROUTES: Route[] = [
   { pattern: ["admin", "devices", "{}"], methods: ["DELETE"], family: "admin", handler: "hAdminDevice" },
   { pattern: ["admin", "pairings"], methods: ["GET", "HEAD"], family: "admin", handler: "hAdminPairings" },
   { pattern: ["admin", "pairings", "{}"], methods: ["POST"], family: "admin", handler: "hAdminPairing" },
+  { pattern: ["admin", "requests"], methods: ["GET", "HEAD"], family: "admin", handler: "hAdminRequests" },
+  { pattern: ["admin", "requests", "{}"], methods: ["POST"], family: "admin", handler: "hAdminRequest" },
   {
     pattern: ["admin", "invitations"],
     methods: ["GET", "HEAD", "POST"],
@@ -591,8 +593,10 @@ export class LanternApp {
     for (const e of hub.after(after)) {
       if (e.event === "shutdown" || e.event === "ready") continue;
       const scope = e.audience.scope ?? EVENT_SCOPES[e.event];
-      if (scope === undefined || !account.scopes.has(scope) || account.state === "frozen") continue;
-      if (e.audience.user !== undefined && e.audience.user !== account.name) continue;
+      // The event `request` also goes to the scope admin, whoever's request it is (SPEC.md § 11, L-11-6).
+      const adminSees = e.event === "request" && account.scopes.has("admin");
+      if (scope === undefined || !(account.scopes.has(scope) || adminSees) || account.state === "frozen") continue;
+      if (e.audience.user !== undefined && e.audience.user !== account.name && !adminSees) continue;
       if (platform !== undefined && e.audience.platform !== undefined && e.audience.platform !== platform) continue;
       if (account.ratingCap !== undefined && e.audience.titleId !== undefined && e.audience.platform !== undefined) {
         hide ??= await this.hides(account);
@@ -763,7 +767,35 @@ export class LanternApp {
     return htmlResponse(request, page);
   }
 
-  async route(request: ServerRequest): Promise<ServerResponse> {
+  /**
+   * The query as SPEC.md § 2.4 reads it: a parameter given twice is 400, an empty value is absent. The target
+   * stays as sent (a signature covers it).
+   */
+  private plainQuery(request: ServerRequest): ServerRequest {
+    const q = request.target.indexOf("?");
+    if (q >= 0) {
+      const seen = new Set<string>();
+      for (const [name] of new URLSearchParams(request.target.slice(q + 1))) {
+        if (seen.has(name)) throw badRequest("Each query parameter is given once.");
+        seen.add(name);
+      }
+    }
+    const kept = [...request.query].filter(([, v]) => v !== "");
+    if (kept.length === request.query.size) return request;
+    return new ServerRequest({
+      method: request.method,
+      path: request.path,
+      query: kept,
+      headers: request.headers,
+      body: request.body,
+      scheme: request.scheme,
+      target: request.target,
+      remote: request.remote,
+    });
+  }
+
+  async route(original: ServerRequest): Promise<ServerResponse> {
+    const request = this.plainQuery(original);
     const path = request.path;
     if (this.verifyPath !== undefined && path === this.verifyPath) return this.approval(request);
     if (path === "/.well-known/lantern" || path === `${this.base}/v1` || path === `${this.base}/v1/`) {
@@ -1966,6 +1998,8 @@ export class LanternApp {
       if (name !== undefined && !hide(r.platform, r.title_id)) doc["name"] = name;
       doc["status"] = r.status;
       doc["created"] = r.created;
+      doc["updated"] = r.updated ?? r.created;
+      if (r.reason !== undefined && r.status === "declined") doc["reason"] = r.reason;
       return doc;
     });
   }
@@ -2026,20 +2060,63 @@ export class LanternApp {
   }
 
   /**
-   * A request's status, as the server decides (SPEC.md § 11): `done` when the
-   * title came, `declined`, or `open` again. Its account's devices get the
-   * event `request`. False when there is no such request.
+   * Decides an open request, as the server decides (SPEC.md § 11): `done` when the title came, or `declined`
+   * with a `reason` for its requester. `done` and `declined` are final (L-11-3): a request no longer open is a 409
+   * `conflict`. Its account's devices and the admins get the event `request`. False when there is no such request.
    */
-  async setRequestStatus(id: string, status: RequestStatus): Promise<boolean> {
+  async setRequestStatus(id: string, status: RequestStatus, reason?: string): Promise<boolean> {
     if (this.requestStore === undefined) throw new TypeError("this server keeps no requests");
-    if (!REQUEST_STATUSES.includes(status)) throw new RangeError(`status is ${REQUEST_STATUSES.join(", ")}`);
+    if (status !== "done" && status !== "declined") throw new RangeError("status is done or declined");
     const before = (await this.requestStore.requests()).find((r) => r.id === id);
     if (before === undefined) return false;
-    if (before.status === status) return true;
-    const after = await this.requestStore.setStatus(id, status);
+    if (before.status !== "open")
+      throw new HttpProblem(409, "conflict", `The request is ${before.status}: it is final.`);
+    const change = reason === undefined ? { updated: utc() } : { updated: utc(), reason };
+    const after = await this.requestStore.setStatus(id, status, change);
     if (after === undefined) return false;
     await this.#requestEvent(after);
     return true;
+  }
+
+  async hAdminRequests(request: ServerRequest, account: Account): Promise<ServerResponse> {
+    const status = request.query.get("status");
+    const user = request.query.get("user");
+    if (status !== undefined && !(REQUEST_STATUSES as readonly string[]).includes(status))
+      throw badRequest("status is open, done or declined.");
+    const platform = platformOf(request);
+    const found = (await this.#requests.requests())
+      .filter(
+        (r) =>
+          (status === undefined || r.status === status) &&
+          (user === undefined || r.user === user) &&
+          (platform === undefined || r.platform === platform),
+      )
+      .sort((a, b) => (a.created === b.created ? 0 : a.created < b.created ? 1 : -1));
+    const shown = await this.#requestDocs(account, found);
+    const docs = shown.map((d, i) => ({ ...d, user: (found[i] as StoredRequest).user }));
+    return this.#adminPage(request, docs, this.cursors.scope("admin-requests", status, user, platform), (d) => [
+      String(d["created"]),
+      String(d["id"]),
+    ]);
+  }
+
+  async hAdminRequest(request: ServerRequest, account: Account, args: string[]): Promise<ServerResponse> {
+    const doc = parse(
+      models.readAdminRequestDecision,
+      readDocument(request),
+      "A decision is {schema, decision, reason?}",
+    );
+    if (doc.decision !== "decline" && doc.decision !== "done")
+      throw badRequest("decision is decline (with a reason, if any) or done.");
+    if (doc.reason !== undefined && doc.decision !== "decline") throw badRequest("A reason goes with decline only.");
+    if (doc.reason !== undefined && (utf8Length(doc.reason) < 1 || utf8Length(doc.reason) > 512))
+      throw badRequest("reason is 1 to 512 bytes.");
+    const id = args[0] ?? "";
+    if (!(await this.setRequestStatus(id, doc.decision === "decline" ? "declined" : "done", doc.reason)))
+      throw notFound("No such request.");
+    const now = (await this.#requests.requests()).find((r) => r.id === id) as StoredRequest;
+    const [shown] = await this.#requestDocs(account, [now]);
+    return jsonResponse(request, { schema: SCHEMA, ...shown, user: now.user });
   }
 
   /** Open requests whose title now has apps in the library are done (SPEC.md § 11). */
@@ -2053,7 +2130,11 @@ export class LanternApp {
     );
     if (open.length === 0) return;
     const present = new Set((await this.library.apps()).map((a) => `${a.platform}/${a.title_id}`));
-    for (const r of open) if (present.has(`${r.platform}/${r.title_id}`)) await this.setRequestStatus(r.id, "done");
+    for (const r of open)
+      if (present.has(`${r.platform}/${r.title_id}`))
+        await this.setRequestStatus(r.id, "done").catch((e: unknown) => {
+          if (!(e instanceof HttpProblem && e.status === 409)) throw e; // decided by an admin meanwhile: final
+        });
   }
 
   // Pairing (SPEC.md § 5.2, § 5.4, § 5.5).
