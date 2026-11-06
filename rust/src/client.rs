@@ -15,7 +15,9 @@ use serde_json::{Value, json};
 use crate::documents::{SCHEMA, schema_of};
 use crate::download::{DownloadSink, Expected, Verifier};
 use crate::error::{Error, Result};
-use crate::generated::models::{AppsPage, Handshake, PairingCode, PairingToken};
+use crate::generated::models::{
+    AppsPage, Changes, Handshake, PairingCode, PairingToken, Sections, Title, TitleChanges, Titles,
+};
 use crate::http::{
     JSON_TYPE, Origin, PLATFORM_HEADER, media_type, on_origin, origin, plain_http_allowed, quote,
 };
@@ -640,6 +642,94 @@ impl<T: Transport> Client<T> {
         out
     }
 
+    /// What changed in the library since `since` (SPEC.md § 6.4). Without a
+    /// token, no apps and the current token. An old token is a `Gone`: read
+    /// the library again.
+    ///
+    /// # Errors
+    ///
+    /// Any error of the exchange.
+    pub fn changes(&mut self, since: Option<&str>, platform: Option<&str>) -> Result<Changes> {
+        let mut call = Call::get("changes", "/changes");
+        call.query = Self::platform_query(platform);
+        if let Some(token) = since {
+            call.query.push(("since".to_owned(), token.to_owned()));
+        }
+        let reply = self.send(&call)?;
+        document(&reply.body, "changes")
+    }
+
+    /// The shelves the server curates (SPEC.md § 6.5).
+    ///
+    /// # Errors
+    ///
+    /// Any error of the exchange.
+    pub fn sections(&mut self) -> Result<Sections> {
+        let call = Call::get("sections", "/sections");
+        let reply = self.send(&call)?;
+        document(&reply.body, "sections")
+    }
+
+    // Titles (SPEC.md § 7).
+
+    /// One title (SPEC.md § 7.1), for `platform` or the client's own.
+    ///
+    /// # Errors
+    ///
+    /// When `title_id` is not one, or any error of the exchange.
+    pub fn title(&mut self, title_id: &str, platform: Option<&str>) -> Result<Title> {
+        check_id(title_id, "title_id")?;
+        let path = format!("/titles/{}", quote(title_id));
+        let mut call = Call::get("title", &path);
+        call.query = Self::platform_query(platform);
+        let reply = self.send(&call)?;
+        document(&reply.body, "title")
+    }
+
+    /// Many titles at once (SPEC.md § 7.2): the ones the server has and the
+    /// ids it does not know.
+    ///
+    /// # Errors
+    ///
+    /// When there are none, more than 100, or an id is not one; or any error
+    /// of the exchange.
+    pub fn titles(&mut self, ids: &[&str], platform: Option<&str>) -> Result<Titles> {
+        if ids.is_empty() || ids.len() > crate::limits::TITLES_AT_ONCE {
+            return Err(Error::field(
+                "titles are asked for 1 to 100 ids at a time (SPEC.md § 7.2)",
+                "ids",
+            ));
+        }
+        for id in ids {
+            check_id(id, "ids")?;
+        }
+        let mut call = Call::get("titles", "/titles");
+        call.query = Self::platform_query(platform);
+        call.query.push(("ids".to_owned(), ids.join(",")));
+        let reply = self.send(&call)?;
+        document(&reply.body, "titles")
+    }
+
+    /// The titles added, changed or removed since `since` (SPEC.md § 7.3).
+    /// `more` says to ask again with the new token.
+    ///
+    /// # Errors
+    ///
+    /// Any error of the exchange.
+    pub fn title_changes(
+        &mut self,
+        since: Option<&str>,
+        platform: Option<&str>,
+    ) -> Result<TitleChanges> {
+        let mut call = Call::get("title changes", "/titles/changes");
+        call.query = Self::platform_query(platform);
+        if let Some(token) = since {
+            call.query.push(("since".to_owned(), token.to_owned()));
+        }
+        let reply = self.send(&call)?;
+        document(&reply.body, "title changes")
+    }
+
     /// One page of apps; `next` is the cursor of the following page.
     ///
     /// # Errors
@@ -1020,6 +1110,18 @@ fn check_base(base: &str) -> Result<String> {
 
 /// A document read from a body within SPEC.md § 13's limits; a newer `schema`
 /// is [`Error::NewerSchema`].
+/// An id that goes in a path or a comma-separated list: not empty, short, no
+/// control character and no comma.
+fn check_id(id: &str, field: &str) -> Result<()> {
+    if id.is_empty()
+        || id.len() > crate::limits::STRING
+        || id.chars().any(|c| c.is_control() || c == ',')
+    {
+        return Err(Error::field("not an id the protocol allows", field));
+    }
+    Ok(())
+}
+
 fn document<D: DeserializeOwned>(body: &[u8], what: &str) -> Result<D> {
     let value = load_json(body, JSON_DOCUMENT, what)?;
     let schema = schema_of(&value, what)?;

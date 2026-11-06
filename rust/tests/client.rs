@@ -468,3 +468,74 @@ fn credentials_stay_on_the_servers_origin() {
         assert!(!sent.headers.contains(name), "{name} went to another host");
     }
 }
+
+fn library_server() -> Fake {
+    Fake::new(|r, _| {
+        let path = r.url.strip_prefix(URL).unwrap_or(&r.url);
+        let route = path.split('?').next().unwrap_or(path);
+        match route {
+            "/.well-known/lantern" => json_reply(200, &example("handshake")),
+            "/api/lantern/v1/changes" => json_reply(200, &example("changes")),
+            "/api/lantern/v1/sections" => json_reply(200, &example("sections")),
+            "/api/lantern/v1/titles" => json_reply(200, &example("titles")),
+            "/api/lantern/v1/titles/changes" => json_reply(200, &example("title-changes")),
+            p if p.starts_with("/api/lantern/v1/titles/") => json_reply(200, &example("title")),
+            _ => reply(404, "application/problem+json", b"{}", &[]),
+        }
+    })
+}
+
+#[test]
+fn changes_sections_and_titles_are_read() {
+    let fake = library_server();
+    let mut client = Client::new(URL, fake.clone(), options(0.0)).unwrap();
+    let changes = client.changes(Some("t1"), Some("switch")).unwrap();
+    assert!(!changes.since.is_empty());
+    assert!(!client.sections().unwrap().sections.is_empty());
+    let one = client.title("0100ABCD00010000", None).unwrap();
+    assert!(!one.name.is_empty());
+    let many = client
+        .titles(&["0100ABCD00010000", "x"], Some("switch"))
+        .unwrap();
+    assert!(!many.titles.is_empty());
+    let moved = client.title_changes(None, None).unwrap();
+    assert!(!moved.since.is_empty());
+    let urls: Vec<String> = fake.requests().into_iter().map(|r| r.url).collect();
+    assert!(urls.contains(&format!(
+        "{URL}/api/lantern/v1/changes?platform=switch&since=t1"
+    )));
+    assert!(urls.iter().any(|u| u.ends_with("/titles/0100ABCD00010000")));
+    assert!(urls.iter().any(
+        |u| u.contains("/titles?platform=switch&ids=0100ABCD00010000%2Cx")
+            || u.contains("/titles?platform=switch&ids=0100ABCD00010000,x")
+    ));
+}
+
+#[test]
+fn the_ids_of_titles_are_checked_before_anything_is_sent() {
+    let fake = library_server();
+    let mut client = Client::new(URL, fake.clone(), options(0.0)).unwrap();
+    assert!(client.titles(&[], None).is_err());
+    let many: Vec<String> = (0..101).map(|n| n.to_string()).collect();
+    let refs: Vec<&str> = many.iter().map(String::as_str).collect();
+    assert!(client.titles(&refs, None).is_err());
+    assert!(client.titles(&["a,b"], None).is_err());
+    assert!(client.title("", None).is_err());
+    assert!(client.title("a\nb", None).is_err());
+    assert!(fake.requests().is_empty());
+}
+
+#[test]
+fn a_title_with_a_newer_schema_is_absent() {
+    let mut newer = example("title");
+    newer["schema"] = json!(99);
+    let fake = Fake::new(move |r, _| {
+        if r.url.ends_with("/.well-known/lantern") {
+            return serve(r).unwrap();
+        }
+        json_reply(200, &newer)
+    });
+    let mut client = Client::new(URL, fake, options(0.0)).unwrap();
+    let err = client.title("0100ABCD00010000", None).unwrap_err();
+    assert!(matches!(err, Error::NewerSchema { .. }), "{err:?}");
+}
