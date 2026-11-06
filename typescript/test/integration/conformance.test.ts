@@ -13,7 +13,7 @@
 
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as http from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -24,6 +24,7 @@ import { promisify } from "node:util";
 import * as ed25519 from "../../src/ed25519.ts";
 import { bytes } from "../../src/index.ts";
 import { fetchHandler, type LanternApp, listen, type MemoryLibrary, PeerServer } from "../../src/server/index.ts";
+import { spkiSha256 } from "../../src/spki.ts";
 import { DEMO_ORIGIN, DEMO_SEED, DEMO_TOKEN, GRANT_SEED, makeLantern, UID } from "../demo.ts";
 import { PACKAGE, PYTHON, SPEC } from "../helpers.ts";
 
@@ -259,7 +260,12 @@ async function overFetch(app: LanternApp): Promise<{ url: string; close(): Promi
   };
 }
 
-async function suite(url: string, token: boolean, peer?: string): Promise<{ code: number; report: string }> {
+async function suite(
+  url: string,
+  token: boolean,
+  peer?: string,
+  extra: string[] = [],
+): Promise<{ code: number; report: string }> {
   const args = [
     join(SPEC, "conformance", "run.py"),
     url,
@@ -267,6 +273,7 @@ async function suite(url: string, token: boolean, peer?: string): Promise<{ code
     ...(peer !== undefined ? ["--peer", peer] : []),
     "--origin",
     DEMO_ORIGIN,
+    ...extra,
   ];
   try {
     const { stdout } = await run(PYTHON, args, { maxBuffer: 1 << 24, timeout: 300_000 });
@@ -318,6 +325,54 @@ for (const adapter of ["node:http", "fetchHandler"]) {
     }
   });
 }
+
+describe("the conformance suite against the demo, served over TLS", () => {
+  test("§ 2's transport checks and the fingerprint on the approval page pass", async () => {
+    const cert = join(folder, "cert.pem");
+    const key = join(folder, "key.pem");
+    await run("openssl", [
+      "req",
+      "-x509",
+      "-newkey",
+      "ec",
+      "-pkeyopt",
+      "ec_paramgen_curve:prime256v1",
+      "-nodes",
+      "-days",
+      "1",
+      "-subj",
+      "/CN=127.0.0.1",
+      "-addext",
+      "subjectAltName=IP:127.0.0.1",
+      "-keyout",
+      key,
+      "-out",
+      cert,
+    ]);
+    const pem = readFileSync(cert, "utf8");
+    // The approval page shows the short fingerprint of the key the certificate carries (§ 5.3)
+    const app = await makeLantern({ spki: spkiSha256(pem) }, { deltas: true, variants: true });
+    const served = await listen(app, { tls: { key: readFileSync(key), cert: pem } });
+    let result: { code: number; report: string };
+    try {
+      assert.ok(served.url.startsWith("https://"));
+      result = await suite(served.url, false, undefined, ["--cafile", cert]);
+    } finally {
+      app.shutdown(1);
+      await served.close();
+    }
+    const { code, report } = result;
+    const status = new Map([...report.matchAll(/^(PASS|FAIL|WARN|SKIP)\s+§ \S+\s+(\S+)/gm)].map((m) => [m[2], m[1]]));
+    assert.equal(code, 0, report);
+    assert.deepEqual(
+      report.split("\n").filter((l) => l.startsWith("FAIL")),
+      [],
+      report,
+    );
+    for (const check of ["transport.https", "transport.tls", "transport.hsts", "pairing.verify-page"])
+      assert.equal(status.get(check), "PASS", `${check}\n${report}`);
+  });
+});
 
 describe("lantern-static: the demo as a static library, checked by the suite's --static", () => {
   test("Lantern Static reached, nothing failed", async () => {
