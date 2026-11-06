@@ -23,6 +23,8 @@ env:
   # The tools run from their pinned versions, and nothing else is fetched
   STATICCHECK_VERSION: 2025.1.1
   GOVULNCHECK_VERSION: v1.9.0
+  PYTHON_VERSION: "3.15"
+  UV_VERSION: 0.13.6
 
 jobs:
   lint:
@@ -118,6 +120,31 @@ jobs:
               echo "::endgroup::"
             done
           done
+
+  reference:
+    name: the client against the reference server
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.mod
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          activate-environment: true
+      - name: Install the reference server's requirements
+        run: uv pip install "cryptography>=42" -r ../spec/tools/requirements.txt
+      - name: Reading, pairing over a pinned TLS key, signed requests, verified and resumed downloads
+        env:
+          LANTERN_PYTHON: python
+        run: go test -race -count=1 -run '^TestReference' -v ./client
 
   cross:
     name: it compiles for the platforms servers run on
