@@ -43,6 +43,8 @@ pub const ACCEPT: usize = 32;
 pub const CHEAT_SET: usize = 1 << 20;
 /// A discovery datagram, in bytes.
 pub const DATAGRAM: usize = 1200;
+/// Pages a client follows in one listing before it gives up.
+pub const PAGES: usize = 10_000;
 /// A signature header, in bytes.
 pub const SIGNATURE_HEADER: usize = 1024;
 /// Chunks in a chunk index (SPEC.md § 22.1).

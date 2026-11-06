@@ -54,6 +54,11 @@ README says what is there.
   `discover()` over a `Datagram` socket the caller can supply (`UdpDatagram`
   is the standard library's).
 
+- **A server that means harm** (`tests/hostile.rs`): a body that never ends,
+  a document nested without end, something that is not JSON, a listing that
+  never stops (a client follows at most 10 000 pages), a download that never
+  ends. Each ends in an error, none hangs or exhausts memory.
+
 What follows, a slice at a time, the same as the other languages: DNS-SD and
 the peers' replies, the rest of the client (titles, homebrew, saves, deltas),
 then the server toolkit. The table of families in the repository's README says where each
