@@ -76,7 +76,7 @@ from lantern._generated.models import (
 from lantern.digest import digest_sha256, sha256_hex
 from lantern.grants import LIFETIME_LIMIT, make_grant
 from lantern.http import Headers, media_type
-from lantern.limits import CHEAT_SET, NAME, NOTE, PROFILE, STRING_CAPS, TITLES_AT_ONCE, printable
+from lantern.limits import CHEAT_SET, NAME, NOTE, PROFILE, STRING_CAPS, TITLES_AT_ONCE, WORDS, printable
 from lantern.missing import missing
 from lantern.profiles import profile, served, title_id_ok
 from lantern.server.accounts import (
@@ -125,7 +125,17 @@ from lantern.server.saves import (
 from lantern.server.sync import SyncStore
 from lantern.server.title_requests import OPEN_LIMIT, STATUSES, RequestStore, StoredRequest, new_request_id
 from lantern.spki import short as spki_short
-from lantern.vocabulary import BUILD_ID, CORE_ID, FAMILIES, HOMEBREW_ID, PLATFORM, SHA256, WORD
+from lantern.vocabulary import (
+    BUILD_ID,
+    CORE_ID,
+    FAMILIES,
+    FORMAT_WORD,
+    HOMEBREW_ID,
+    PLATFORM,
+    REQUIRES_TOKEN,
+    SHA256,
+    WORD,
+)
 
 #: The scope each family needs (SPEC.md § 4.2); pairing needs none.
 SCOPE_OF = {
@@ -864,6 +874,7 @@ class LanternApp:
             raise bad_request("type is a lower-case word, such as base, update or dlc.")
         if title_id is not None and not CORE_ID.match(title_id):
             raise bad_request("title_id is 1 to 128 letters, digits, '.', '_' and '-'.")
+        fmt = q.get("format")  # a format no app has gives an empty list, never an error (L-6.2-7)
         sort = self._sort(request)
         hide = self.hides(account)
         apps = [
@@ -872,15 +883,34 @@ class LanternApp:
             if not hide(a.platform, a.title_id)
             and (platform is None or a.platform == platform)
             and (kind is None or a.type == kind)
+            and (fmt is None or a.format == fmt)
             and (title_id is None or a.title_id == title_id)
             and (not text or text.casefold() in (a.name or "").casefold())
         ]
-        scope = self.cursors.scope("apps", platform, kind, title_id, text, sort)
+        scope = self.cursors.scope("apps", platform, kind, fmt, title_id, text, sort)
         return self._apps_page(request, apps, scope, sort)
 
+    @staticmethod
+    def _words(doc: JSONObject, name: str, pattern: re.Pattern[str]) -> set[str] | None:
+        """The words of an optional array of a missing request (`formats`, `satisfies`: SPEC.md § 6.3): None when
+        absent; 400 when it is not an array of at most 16 words of `pattern`. An empty array is a filter."""
+        if name not in doc:
+            return None
+        words = doc[name]
+        if not (
+            isinstance(words, list)
+            and len(words) <= WORDS
+            and all(isinstance(w, str) and pattern.fullmatch(w) for w in words)
+        ):
+            raise bad_request(f"{name} is an array of at most {WORDS} words of the form {pattern.pattern}.")
+        return {w for w in words if isinstance(w, str)}
+
     def h_missing(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        raw = read_document(request)
+        formats = self._words(raw, "formats", FORMAT_WORD)
+        satisfies = self._words(raw, "satisfies", REQUIRES_TOKEN)
         try:
-            doc = MissingRequest.from_json(read_document(request), "the body")
+            doc = MissingRequest.from_json(raw, "the body")
         except DocumentError as e:
             raise bad_request(f"installed is a list of {{app_id, version_code}}, want a list: {e}") from None
         platform = platform_of(request, required=True)
@@ -896,9 +926,17 @@ class LanternApp:
             platform,
             [(i.app_id, i.version_code) for i in doc.installed],
             set(doc.want),
+            formats=formats,
+            satisfies=satisfies,
         )
         scope = self.cursors.scope(
-            "missing", platform, sorted((i.app_id, i.version_code) for i in doc.installed), sorted(set(doc.want)), sort
+            "missing",
+            platform,
+            sorted((i.app_id, i.version_code) for i in doc.installed),
+            sorted(set(doc.want)),
+            None if formats is None else sorted(formats),
+            None if satisfies is None else sorted(satisfies),
+            sort,
         )
         return self._apps_page(request, found, scope, sort)
 

@@ -24,7 +24,7 @@ def test_client_and_adapters(framework: str, tmp_path: Path) -> None:
     with serve(framework) as url, LanternClient(url, user_agent="DemoTest/1.0", token=DEMO_TOKEN) as c:
         assert c.handshake().account.name == "mira"
         apps = list(c.iter_apps(page_size=2))
-        assert len(apps) == 8
+        assert len(apps) == 10
         biggest = max(apps, key=lambda a: a.size)
         whole = c.download_app(biggest, tmp_path / f"{framework}.nsp").read_bytes()
         (tmp_path / f"{framework}-2.nsp.part").write_bytes(whole[:1000])

@@ -283,7 +283,7 @@ def test_origins_with_a_port_or_an_address() -> None:
 def test_nothing_is_served_of_web() -> None:
     """[L-A.7-1] A library refuses an app, a title, a homebrew or a cheat set of `web`; the handshake never lists it."""
     lib = MemoryLibrary()
-    web = {"platform": "web", "title_id": "org.example.game", "app_id": "org.example.game"}
+    web: dict[str, Any] = {"platform": "web", "title_id": "org.example.game", "app_id": "org.example.game"}
     with pytest.raises(ValueError, match="web"):
         lib.add_app_file(data=b"x", type="base", version_code=0, name="Game", format="zip", **web)
     with pytest.raises(ValueError, match="web"):

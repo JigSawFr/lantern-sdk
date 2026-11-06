@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -83,10 +84,10 @@ from lantern.errors import (
 from lantern.events import ServerEvent, event_of
 from lantern.grants import grant_key, read_grant
 from lantern.http import JSON, PLATFORM_HEADER, Headers, media_type, origin, plain_http_allowed
-from lantern.limits import CHEAT_SET, JSON_DOCUMENT, NOTE, PROFILE, TITLES_AT_ONCE, load_json, printable
+from lantern.limits import CHEAT_SET, JSON_DOCUMENT, NOTE, PROFILE, TITLES_AT_ONCE, WORDS, load_json, printable
 from lantern.pinning import ServerRecord
 from lantern.signatures import SKEW, DeviceKey
-from lantern.vocabulary import BUILD_ID, CORE_ID, FAMILIES, HOMEBREW_ID, is_platform
+from lantern.vocabulary import BUILD_ID, CORE_ID, FAMILIES, FORMAT_WORD, HOMEBREW_ID, REQUIRES_TOKEN, is_platform
 
 T = TypeVar("T")
 ERROR_BODY = 1 << 16
@@ -230,6 +231,19 @@ def _listing(page_size: int | None, cursor: str | None, **filters: str | None) -
         out.append(("page_size", str(page_size)))
     if cursor is not None:
         out.append(("cursor", cursor))
+    return out
+
+
+def _words(name: str, words: Iterable[str] | None, pattern: re.Pattern[str]) -> list[str] | None:
+    """A missing request's `formats` or `satisfies` (SPEC.md § 6.3): None leaves it out (no filter), an empty
+    list keeps it (nothing is installable that needs one); at most 16 distinct words of `pattern`."""
+    if words is None:
+        return None
+    if isinstance(words, str):
+        raise ValueError(f"{name} is a list of words, not a string")
+    out = list(dict.fromkeys(words))
+    if len(out) > WORDS or not all(isinstance(w, str) and pattern.fullmatch(w) for w in out):
+        raise ValueError(f"{name} is at most {WORDS} words of the form {pattern.pattern}")
     return out
 
 
@@ -456,10 +470,13 @@ class ClientCore:
         sort: str | None,
         page_size: int | None,
         cursor: str | None,
+        format: str | None = None,
     ) -> Call[AppsPage]:
         if sort is not None and sort not in ("name", "added", "release"):
             raise ValueError("sort is name, added or release")
-        query = _platform(platform) + _listing(page_size, cursor, type=type, title_id=title_id, q=q, sort=sort)
+        query = _platform(platform) + _listing(
+            page_size, cursor, type=type, format=format, title_id=title_id, q=q, sort=sort
+        )
         return Call("GET", "/apps", _model(AppsPage), "apps", query)
 
     def missing(
@@ -470,6 +487,8 @@ class ClientCore:
         platform: str | None,
         page_size: int | None,
         cursor: str | None,
+        formats: Iterable[str] | None = None,
+        satisfies: Iterable[str] | None = None,
     ) -> Call[AppsPage]:
         if platform is None and self.platform is None:
             raise ValueError("what is missing needs a platform (SPEC.md § 6.3)")
@@ -477,7 +496,13 @@ class ClientCore:
         if not wants or any(w not in MISSING_WANTS for w in wants):
             raise ValueError("want lists base, update or dlc")
         items = [i if isinstance(i, InstalledApp) else InstalledApp(app_id=i[0], version_code=i[1]) for i in installed]
-        doc = MissingRequest(schema=SCHEMA, installed=items, want=wants).to_json()
+        doc = MissingRequest(
+            schema=SCHEMA,
+            installed=items,
+            want=wants,
+            formats=_words("formats", formats, FORMAT_WORD),
+            satisfies=_words("satisfies", satisfies, REQUIRES_TOKEN),
+        ).to_json()
         return Call(
             "POST", "/apps/missing", _model(AppsPage), "missing", _platform(platform) + _listing(page_size, cursor), doc
         )

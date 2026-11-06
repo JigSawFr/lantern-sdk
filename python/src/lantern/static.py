@@ -28,7 +28,8 @@ file (DIR/lantern-static.json by default, `schema` 1):
     {"schema": 1, "name": "Lea's library", "uid": "…", "language": "en",
      "apps": [{"path": "games/frostline.nsz", "platform": "switch", "title_id": "0100ABCD00010000",
                "app_id": "0100ABCD00010000", "type": "base", "version_code": 0,
-               "name": "Frostline Tales", "format": "nsz", "mirrors": ["https://…"]}],
+               "name": "Frostline Tales", "format": "nsz", "mirrors": ["https://…"],
+               "requires": ["fs-compression"], "includes": [{"app_id": "0100ABCD00010800", "version_code": 65536}]}],
      "titles": [{…a title, as SPEC.md § 7.1 gives it…}],
      "homebrew": [{"path": "homebrew/paperlamp.zip", "format": "zip", "arch": ["aarch64"],
                    "entry": {…a homebrew entry, § 8.1, without its package…}}],
@@ -53,7 +54,7 @@ import re
 import shutil
 import sys
 import uuid
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TypeVar
@@ -335,14 +336,22 @@ class StaticLibrary:
         return data.decode("utf-8")
 
     def missing(
-        self, installed: Iterable[tuple[str, int]], want: Iterable[str] = ("update", "dlc"), *, platform: str
+        self,
+        installed: Iterable[tuple[str, int]],
+        want: Iterable[str] = ("update", "dlc"),
+        *,
+        platform: str,
+        formats: Collection[str] | None = None,
+        satisfies: Collection[str] | None = None,
     ) -> list[App]:
         """What a device is missing (SPEC.md § 6.3), computed from the platform's whole listing by the rules a
-        server follows (L-21.3-2)."""
+        server follows (L-21.3-2); `formats` and `satisfies` as in § 6.3."""
         wants = set(want)
         if not wants or not wants <= {"base", "update", "dlc"}:
             raise ValueError("want lists base, update or dlc")
-        return missing(list(self.iter_apps(platform)), platform, list(installed), wants)
+        return missing(
+            list(self.iter_apps(platform)), platform, list(installed), wants, formats=formats, satisfies=satisfies
+        )
 
     def homebrew_updates(self, installed: Iterable[tuple[str, int]], *, platform: str) -> list[Homebrew]:
         """The entries newer than what is installed, (id, build), by comparing `build` (§ 8.5, § 21.3)."""
@@ -689,6 +698,23 @@ def build_library(folder: Path, meta: JSONObject) -> object:
             raise MetadataError(f"{key} is a list of objects")
         return [x for x in value if isinstance(x, dict)]
 
+    def _requires(a: JSONObject, where: str) -> list[str]:
+        value = a.get("requires", [])
+        if not isinstance(value, list) or not all(isinstance(t, str) for t in value):
+            raise MetadataError(f"{where}: requires is a list of tokens")
+        return [t for t in value if isinstance(t, str)]
+
+    def _includes(a: JSONObject, where: str) -> list[tuple[str, int]]:
+        value = a.get("includes", [])
+        out: list[tuple[str, int]] = []
+        for x in value if isinstance(value, list) else [None]:
+            app_id = x.get("app_id") if isinstance(x, dict) else None
+            version = x.get("version_code") if isinstance(x, dict) else None
+            if not isinstance(app_id, str) or not isinstance(version, int) or isinstance(version, bool):
+                raise MetadataError(f"{where}: includes is a list of {{app_id, version_code}}")
+            out.append((app_id, version))
+        return out
+
     try:
         for i, a in enumerate(items("apps")):
             mirrors = a.get("mirrors", [])
@@ -704,6 +730,8 @@ def build_library(folder: Path, meta: JSONObject) -> object:
                 version_name=a["version_name"] if isinstance(a.get("version_name"), str) else None,  # type: ignore[arg-type]
                 added=a["added"] if isinstance(a.get("added"), str) else None,  # type: ignore[arg-type]
                 mirrors=[str(m) for m in mirrors] if isinstance(mirrors, list) else [],
+                requires=_requires(a, f"apps[{i}]"),
+                includes=_includes(a, f"apps[{i}]"),
             )
         for t in items("titles"):
             lib.add_title(Title.from_json(t, "titles[]"))

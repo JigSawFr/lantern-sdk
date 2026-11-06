@@ -17,6 +17,8 @@ console homebrews and the game library servers people run at home.
 - lantern.events, lantern.grants, lantern.sync, lantern.e2e, lantern.static:
   event streams, grants and mirrors, sync's merge rule and consent,
   encrypted saves, and static libraries (read, and generated);
+- lantern.variants: whether a client installs an app (format, requires,
+  includes), and the variant it prefers;
 - lantern.canonical, lantern.chunks: canonical JSON (RFC 8785), and
   differential updates: the chunker, chunk indexes, and a file put together
   from the chunks of an older one;

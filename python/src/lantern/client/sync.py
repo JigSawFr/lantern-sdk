@@ -258,16 +258,25 @@ class LanternClient:
         *,
         platform: str | None = None,
         type: str | None = None,
+        format: str | None = None,
         title_id: str | None = None,
         q: str | None = None,
         sort: str | None = None,
         page_size: int | None = None,
         cursor: str | None = None,
     ) -> AppsPage:
-        """One page of apps; `next` is the cursor of the following page."""
+        """One page of apps; `next` is the cursor of the following page. `format` keeps the apps of one package
+        format (an unknown format gives an empty list, SPEC.md § 6.2)."""
         return self._send(
             self.core.apps(
-                platform=platform, type=type, title_id=title_id, q=q, sort=sort, page_size=page_size, cursor=cursor
+                platform=platform,
+                type=type,
+                format=format,
+                title_id=title_id,
+                q=q,
+                sort=sort,
+                page_size=page_size,
+                cursor=cursor,
             )
         )
 
@@ -276,6 +285,7 @@ class LanternClient:
         *,
         platform: str | None = None,
         type: str | None = None,
+        format: str | None = None,
         title_id: str | None = None,
         q: str | None = None,
         sort: str | None = None,
@@ -283,7 +293,14 @@ class LanternClient:
     ) -> Iterator[App]:
         """Every app, page by page. An expired cursor raises Gone: read the list again from its start."""
         call = self.core.apps(
-            platform=platform, type=type, title_id=title_id, q=q, sort=sort, page_size=page_size, cursor=None
+            platform=platform,
+            type=type,
+            format=format,
+            title_id=title_id,
+            q=q,
+            sort=sort,
+            page_size=page_size,
+            cursor=None,
         )
         return self._pages(call, lambda p: p.items, lambda p: p.next)
 
@@ -293,11 +310,28 @@ class LanternClient:
         want: Iterable[str] = ("update", "dlc"),
         *,
         platform: str | None = None,
+        formats: Iterable[str] | None = None,
+        satisfies: Iterable[str] | None = None,
         page_size: int | None = None,
         cursor: str | None = None,
     ) -> AppsPage:
-        """What the device is missing (SPEC.md § 6.3): `installed` as (app_id, version_code)."""
-        return self._send(self.core.missing(installed, want, platform=platform, page_size=page_size, cursor=cursor))
+        """What the device is missing (SPEC.md § 6.3): `installed` as (app_id, version_code).
+
+        `formats`: the package formats the device reads, `satisfies`: the `requires` tokens it provides; the
+        server leaves out the apps the device cannot install. None sends no filter, an empty list filters out every
+        app (none has no format). Whatever you install, check it with lantern.variants.install_decision: a client
+        MUST NOT install a format or a token it does not know (L-6.1-3, L-6.1-4)."""
+        return self._send(
+            self.core.missing(
+                installed,
+                want,
+                platform=platform,
+                page_size=page_size,
+                cursor=cursor,
+                formats=formats,
+                satisfies=satisfies,
+            )
+        )
 
     def iter_missing(
         self,
@@ -305,9 +339,19 @@ class LanternClient:
         want: Iterable[str] = ("update", "dlc"),
         *,
         platform: str | None = None,
+        formats: Iterable[str] | None = None,
+        satisfies: Iterable[str] | None = None,
         page_size: int | None = None,
     ) -> Iterator[App]:
-        call = self.core.missing(list(installed), want, platform=platform, page_size=page_size, cursor=None)
+        call = self.core.missing(
+            list(installed),
+            want,
+            platform=platform,
+            page_size=page_size,
+            cursor=None,
+            formats=formats,
+            satisfies=satisfies,
+        )
         return self._pages(call, lambda p: p.items, lambda p: p.next)
 
     def changes(self, since: str | None = None, *, platform: str | None = None) -> Changes:

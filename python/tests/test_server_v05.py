@@ -560,7 +560,7 @@ def test_export_and_read_back(tmp_path: Path) -> None:
     with static.StaticLibrary(out) as s:
         assert s.handshake().static is not None
         apps = list(s.iter_apps("switch"))
-        assert len(apps) == 7 and all(static.relative_ok(a.file) for a in apps)
+        assert len(apps) == 9 and all(static.relative_ok(a.file) for a in apps)
         assert [a.name for a in s.missing([("0100AB1200010000", 0)], ["update", "dlc"], platform="switch")] == [
             "Lumen Drift",
             "Lumen Drift: Comet Pack",
@@ -577,7 +577,7 @@ def test_export_and_read_back(tmp_path: Path) -> None:
         assert got.stat().st_size == apps[0].size
         assert list(s.iter_apps("ps4")) == []  # not one of its platforms
     with static.StaticLibrary(out.as_uri()) as s:
-        assert len(list(s.iter_apps("switch"))) == 7
+        assert len(list(s.iter_apps("switch"))) == 9
 
 
 def test_the_reader_refuses(tmp_path: Path) -> None:

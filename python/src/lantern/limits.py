@@ -24,6 +24,9 @@ TAGS = 32  #: the tags of a title or a homebrew
 TAG = 64  #: a tag, in bytes
 REQUIRED_DATA = 256  #: the files of a port's requires_data, alternatives included
 ACCEPT = 32  #: the accepted versions of a port's data file
+REQUIRES = 8  #: the tokens of an app's `requires` (SPEC.md § 6.1)
+INCLUDES = 16  #: the versions an app `includes` (SPEC.md § 6.1)
+WORDS = 16  #: the words of a missing request's `formats` and of its `satisfies` (SPEC.md § 6.3)
 CHEAT_SET = 1 << 20  #: a cheat set's text, in bytes
 DATAGRAM = 1200  #: a discovery datagram, in bytes
 

@@ -7,9 +7,9 @@ servers people run at home for their own games
 a client, a toolkit to add Lantern to an existing server, the checks both
 sides share, a minimal peer, the generator of static libraries, and a
 malicious test server for clients. It follows the specification's **draft
-0.7**.
+0.9**.
 
-**Status: early, complete for draft 0.7's client and server toolkit.** The client speaks every
+**Status: early, complete for draft 0.9's client and server toolkit.** The client speaks every
 route of the protocol: pairing with a device key, requests signed by it
 (RFC 9421), the writes, LAN discovery; event streams and long polls, files
 from mirrors and peers, newer versions put together from older ones by
@@ -233,6 +233,34 @@ megabytes a second, which is why a server cuts a file once.
 A resumed upload (`upload_save(…, resume=address)`) asks HEAD for the
 upload's `Lantern-Chunk-Size` and goes on in chunks of that size
 (`upload_state()` gives it).
+
+### Variants, and packages a device cannot use
+
+```python
+from lantern.variants import install_decision, prefer_variant
+
+formats = {"nsp", "nsz"}  # the package formats this client reads
+satisfies = {"fs-compression"}  # the `requires` tokens it knows and the device provides
+page = client.missing(installed_ids, ["base", "update"], formats=formats, satisfies=satisfies)
+for app in client.iter_apps(format="nsz"):  # an unknown format gives an empty list, never an error
+    verdict, why = install_decision(app, formats, satisfies, installed=on_device)
+    if verdict == "unavailable":
+        print(app.name, "cannot be installed:", "; ".join(why))
+best = prefer_variant(variants)  # Annex B.15: the fewest requires, then the smallest size, then the smaller id
+```
+
+An app lists the `format` it is in, the `requires` tokens a device must
+provide (on the Switch `fs-compression`, `sigpatch`, `ncz-sparse`,
+`ncz-lz4`), and the versions it `includes`. One game may be listed in
+several variants (the same `app_id` and `version_code`). Three rules are the
+client's to keep, and `lantern.variants` applies them: it MUST NOT install a
+format or a `requires` token it does not know or cannot satisfy (L-6.1-3,
+L-6.1-4; list it as unavailable and say why), and MUST NOT install an
+update that an installed app `includes` at its version or above (L-6.1-5).
+`formats` and `satisfies` of `missing()` ask the server to leave such apps
+out (None sends nothing; an empty list filters everything that needs one),
+but the client checks anyway. `included(app, installed)` is the L-6.1-5
+test alone.
 
 ### Sync
 
@@ -502,6 +530,34 @@ app = LanternApp(library, uid=SERVER_UID, name="Living room shelf", cors_origins
   toolkit.
 - An upload's `HEAD` says its `Lantern-Chunk-Size` (§ 9.3).
 
+### Variants
+
+```python
+library.add_app_file(
+    "games/frostline.nsz",
+    platform="switch",
+    title_id="0100ABCD00010000",
+    app_id="0100ABCD00010000",
+    type="base",
+    version_code=0,
+    name="Frostline Tales",
+    format="nsz",
+    requires=["fs-compression"],  # at most 8 tokens, a-z, 0-9 and -, listed once
+    includes=[("0100ABCD00010800", 65536)],  # at most 16 (app_id, version_code)
+)
+```
+
+The same game may be added several times as variants (the same `app_id`
+and `version_code`, another `format` or `requires`): all are listed.
+`GET /v1/apps?format=` keeps one format (an unknown one gives an empty list),
+and `POST /v1/apps/missing` takes `formats` and `satisfies` (an array of at
+most 16 words, `400` otherwise; absent is no filter, empty filters
+everything), applied last. An installed app also installs what it
+`includes`, so its update is not offered again (L-6.3-4). The cursors and
+ETags depend on the filters. `lantern.missing.missing()` and the static
+generator (`requires` and `includes` in `lantern-static.json`) follow the
+same rules.
+
 ### Save backups, requests, cheat sets written, sections
 
 ```python
@@ -711,7 +767,7 @@ runs the specification's conformance suite against the demo server
 (`tests/demo.py`), through Flask and FastAPI, anonymously and with a token
 bound to its key, with a peer of the toolkit and LAN discovery: it reaches
 Lantern Core +titles +homebrew +saves +cheats +requests +admin +events
-+peers +sync +encrypted_saves +deltas, every level of the draft 0.7, the
++peers +sync +encrypted_saves +deltas, every level of the draft 0.9, the
 origin of a page being allowed for the browser checks (`--origin`); and
 against the static library the generator writes (`--static`): Lantern
 Static. `tests/test_hostile.py` runs the client against the malicious test

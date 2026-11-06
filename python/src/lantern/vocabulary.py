@@ -42,6 +42,10 @@ CORE_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 HOMEBREW_ID = re.compile(r"^(?=.{1,128}$)[a-z][a-z0-9_-]*(?:\.[a-z0-9][a-z0-9_-]*)+$")
 #: A lower-case word: a filter's kind or genre, an app's type (SPEC.md § 6.1, § 8.5).
 WORD = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+#: A package format (SPEC.md § 6.1): the `format` filter, and the words of a missing request's `formats`.
+FORMAT_WORD = re.compile(r"^[a-z0-9]{1,16}$")
+#: A token of an app's `requires` (SPEC.md § 6.1), and of a missing request's `satisfies` (§ 6.3).
+REQUIRES_TOKEN = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 #: A cheat set's build id, the core's form (SPEC.md § 10).
 BUILD_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 #: A SHA-256, lower-case hex.

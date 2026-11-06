@@ -25,6 +25,7 @@ from lantern import homebrew as hb
 from lantern import schema
 from lantern._generated.models import (
     App,
+    AppIncludes,
     CheatSet,
     ChunksRef,
     Homebrew,
@@ -376,9 +377,16 @@ class MemoryLibrary:
         version_name: str | None = None,
         added: str | None = None,
         mirrors: Sequence[str] = (),
+        requires: Sequence[str] = (),
+        includes: Sequence[tuple[str, int]] = (),
     ) -> App:
         """An app from a file (hashed now) or bytes, given its identity (SPEC.md § 6.1), and the other
-        addresses of its exact bytes, `mirrors` (§ 19.2: HTTPS, or HTTP at a private network's address)."""
+        addresses of its exact bytes, `mirrors` (§ 19.2: HTTPS, or HTTP at a private network's address).
+
+        `requires`: the tokens a device must provide to use the package (at most 8, a-z, 0-9 and -, listed once
+        each), `includes`: the (app_id, version_code) of the versions it contains (at most 16). The same game may
+        be added several times, as variants: the same app_id and version_code, another format or requires."""
+        tokens = list(dict.fromkeys(requires))
         if len(mirrors) > MIRRORS_LIMIT or not all(mirror_ok(m) for m in mirrors):
             raise ValueError(f"mirrors: {MIRRORS_LIMIT} at most, HTTPS or HTTP on a private network (SPEC.md § 19.2)")
         if (path is None) == (data is None):
@@ -399,6 +407,8 @@ class MemoryLibrary:
             added=added or now(),
             file="",
             mirrors=[Mirror(url=m) for m in mirrors] or None,
+            requires=tokens or None,
+            includes=[AppIncludes(app_id=a, version_code=v) for a, v in includes] or None,
         )
         return self.add_app(app, file)
 
