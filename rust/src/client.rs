@@ -16,8 +16,9 @@ use crate::documents::{SCHEMA, schema_of};
 use crate::download::{DownloadSink, Expected, Verifier};
 use crate::error::{Error, Result};
 use crate::generated::models::{
-    AppsPage, Changes, Handshake, Homebrew, HomebrewPage, PairingCode, PairingToken, Sections,
-    Title, TitleChanges, Titles,
+    AppsPage, Changes, CheatSet, CheatSets, CheatWrite, Handshake, Homebrew, HomebrewPage,
+    PairingCode, PairingToken, Save, Saves, Sections, Title, TitleChanges, TitleRequest,
+    TitleRequests, Titles, Upload, UploadRequest,
 };
 use crate::http::{
     JSON_TYPE, Origin, PLATFORM_HEADER, media_type, on_origin, origin, plain_http_allowed, quote,
@@ -148,6 +149,7 @@ impl<'a> Call<'a> {
 /// An answer the client accepted: its status, headers and body.
 struct Reply {
     status: u16,
+    headers: Headers,
     body: Vec<u8>,
 }
 
@@ -187,6 +189,72 @@ pub struct HomebrewOptions {
     pub kind: Option<String>,
     /// `genre`: a lower-case word.
     pub genre: Option<String>,
+}
+
+/// What a save backup says of itself (SPEC.md § 9.1), all optional.
+#[derive(Debug, Clone, Default)]
+pub struct SaveMeta {
+    /// `account`, `device`, `bcat`, `cache` or `other`.
+    pub kind: Option<String>,
+    /// Which of the title's save folders (1 to 64 letters, digits, `.`, `_`, `-`).
+    pub slot: Option<String>,
+    /// The game's `version_code` when it was saved.
+    pub game_version_code: Option<i64>,
+    /// The profile's name as the device shows it, never an identifier.
+    pub profile: Option<String>,
+    /// A note, 120 bytes at most.
+    pub note: Option<String>,
+}
+
+impl SaveMeta {
+    fn check(&self) -> Result<()> {
+        if let Some(kind) = &self.kind
+            && !["account", "device", "bcat", "cache", "other"].contains(&kind.as_str())
+        {
+            return Err(Error::field(
+                "kind is account, device, bcat, cache or other",
+                "kind",
+            ));
+        }
+        if let Some(slot) = &self.slot
+            && (slot.is_empty()
+                || slot.len() > crate::limits::PROFILE
+                || !slot
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')))
+        {
+            return Err(Error::field(
+                "a slot is 1 to 64 letters, digits, . _ and -",
+                "slot",
+            ));
+        }
+        if self.game_version_code.is_some_and(|c| c < 0) {
+            return Err(Error::field(
+                "a version code is not negative",
+                "game_version_code",
+            ));
+        }
+        for (name, value, cap) in [
+            ("profile", &self.profile, crate::limits::PROFILE),
+            ("note", &self.note, crate::limits::NOTE),
+        ] {
+            if value.as_ref().is_some_and(|v| v.len() > cap) {
+                return Err(Error::field(format!("{name} is {cap} bytes at most"), name));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Where a resumable upload stands (SPEC.md § 9.3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UploadState {
+    /// Bytes the server holds.
+    pub offset: u64,
+    /// The size announced.
+    pub length: u64,
+    /// The chunk size to send.
+    pub chunk_size: u64,
 }
 
 /// Options of `missing`.
@@ -575,11 +643,16 @@ impl<T: Transport> Client<T> {
             if call.well_known {
                 self.accept_handshake(&body, &headers).map_err(&fail)?;
             }
-            return Ok(Reply { status, body });
+            return Ok(Reply {
+                status,
+                headers,
+                body,
+            });
         }
         if call.empty_statuses.contains(&status) {
             return Ok(Reply {
                 status,
+                headers,
                 body: Vec::new(),
             });
         }
@@ -960,6 +1033,476 @@ impl<T: Transport> Client<T> {
         call.json_body = true;
         let reply = self.send(&call)?;
         document(&reply.body, "homebrew updates")
+    }
+
+    // Cheats (SPEC.md § 10).
+
+    /// The cheat sets of a build (SPEC.md § 10): a build may have several,
+    /// from several sources.
+    ///
+    /// # Errors
+    ///
+    /// When `title_id` is not an id, or any error of the exchange.
+    pub fn cheat_sets(
+        &mut self,
+        title_id: &str,
+        build_id: Option<&str>,
+        platform: Option<&str>,
+    ) -> Result<CheatSets> {
+        check_id(title_id, "title_id")?;
+        let mut call = Call::get("cheats", "/cheats");
+        call.query = Self::platform_query(platform);
+        call.query
+            .push(("title_id".to_owned(), title_id.to_owned()));
+        if let Some(build) = build_id {
+            check_id(build, "build_id")?;
+            call.query.push(("build_id".to_owned(), build.to_owned()));
+        }
+        let reply = self.send(&call)?;
+        document(&reply.body, "cheats")
+    }
+
+    /// The text of a cheat set, checked against its `size` and `sha256`, at
+    /// most 1 MiB (SPEC.md § 10). Write it where the profile says
+    /// ([`crate::profiles::cheat_path`]).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Integrity`] when it is not what the set says, or any error of
+    /// the exchange.
+    pub fn cheat_text(&mut self, set: &CheatSet) -> Result<Vec<u8>> {
+        let size = u64::try_from(set.size).map_err(|_| Error::field("a negative size", "size"))?;
+        if size > crate::limits::CHEAT_SET as u64 {
+            return Err(Error::field("a cheat set is 1 MiB at most", "size"));
+        }
+        check_id(&set.id, "id")?;
+        let mut sink = crate::download::MemorySink::new();
+        let path = format!("/cheats/{}", quote(&set.id));
+        if self.base.is_none() {
+            self.handshake()?;
+        }
+        let url = self.v1(&path)?;
+        self.download(
+            &url,
+            &mut sink,
+            Expected {
+                sha256: &set.sha256,
+                size,
+            },
+            false,
+        )?;
+        Ok(sink.bytes().to_vec())
+    }
+
+    fn check_cheat_write(write: &CheatWrite) -> Result<()> {
+        if write.text.len() > crate::limits::CHEAT_SET {
+            return Err(Error::field("a cheat set is 1 MiB at most", "text"));
+        }
+        if write
+            .note
+            .as_deref()
+            .is_some_and(|n| n.len() > crate::limits::NOTE)
+        {
+            return Err(Error::field("a note is 120 bytes at most", "note"));
+        }
+        check_id(&write.title_id, "title_id")
+    }
+
+    /// Adds a cheat set (scope `cheats.write`): `201` with the new set, `409`
+    /// [`ProblemKind::Conflict`] when it exists (then replace it).
+    ///
+    /// # Errors
+    ///
+    /// When the set breaks a limit, or any error of the exchange.
+    pub fn cheat_add(&mut self, write: &CheatWrite) -> Result<CheatSet> {
+        Self::check_cheat_write(write)?;
+        let mut call = Call::get("cheat add", "/cheats");
+        call.method = "POST";
+        call.statuses = &[201];
+        call.body = Some(serde_json::to_vec(write).map_err(|e| Error::document(e.to_string()))?);
+        call.json_body = true;
+        let reply = self.send(&call)?;
+        document(&reply.body, "cheat add")
+    }
+
+    /// Replaces a cheat set (scope `cheats.write`).
+    ///
+    /// # Errors
+    ///
+    /// When the set breaks a limit, or any error of the exchange.
+    pub fn cheat_replace(&mut self, id: &str, write: &CheatWrite) -> Result<()> {
+        Self::check_cheat_write(write)?;
+        check_id(id, "id")?;
+        let path = format!("/cheats/{}", quote(id));
+        let mut call = Call::get("cheat replace", &path);
+        call.method = "PUT";
+        call.statuses = &[];
+        call.empty_statuses = &[204];
+        call.body = Some(serde_json::to_vec(write).map_err(|e| Error::document(e.to_string()))?);
+        call.json_body = true;
+        self.send(&call).map(|_| ())
+    }
+
+    /// Deletes a cheat set (scope `cheats.write`).
+    ///
+    /// # Errors
+    ///
+    /// Any error of the exchange.
+    pub fn cheat_delete(&mut self, id: &str) -> Result<()> {
+        check_id(id, "id")?;
+        let path = format!("/cheats/{}", quote(id));
+        let mut call = Call::get("cheat delete", &path);
+        call.method = "DELETE";
+        call.statuses = &[];
+        call.empty_statuses = &[204];
+        self.send(&call).map(|_| ())
+    }
+
+    // Requests (SPEC.md § 11).
+
+    /// The account's own requests of the platform, newest first.
+    ///
+    /// # Errors
+    ///
+    /// Any error of the exchange.
+    pub fn requests(&mut self, platform: Option<&str>) -> Result<TitleRequests> {
+        let mut call = Call::get("requests", "/requests");
+        call.query = Self::platform_query(platform);
+        let reply = self.send(&call)?;
+        document(&reply.body, "requests")
+    }
+
+    /// Asks for a game the server does not have: `201` with the new request,
+    /// or `200` with the open one for the same title.
+    ///
+    /// # Errors
+    ///
+    /// When `title_id` is not an id, or any error of the exchange.
+    pub fn request_title(
+        &mut self,
+        title_id: &str,
+        platform: Option<&str>,
+    ) -> Result<TitleRequest> {
+        check_id(title_id, "title_id")?;
+        let mut body = json!({ "schema": SCHEMA, "title_id": title_id });
+        if let Some(p) = platform {
+            set(&mut body, "platform", json!(p));
+        }
+        let mut call = Call::get("request", "/requests");
+        call.method = "POST";
+        call.statuses = &[200, 201];
+        call.body = Some(serde_json::to_vec(&body).map_err(|e| Error::document(e.to_string()))?);
+        call.json_body = true;
+        let reply = self.send(&call)?;
+        document(&reply.body, "request")
+    }
+
+    /// Withdraws the account's own request, whatever its status.
+    ///
+    /// # Errors
+    ///
+    /// Any error of the exchange; `404` for another account's request.
+    pub fn request_withdraw(&mut self, id: &str) -> Result<()> {
+        check_id(id, "id")?;
+        let path = format!("/requests/{}", quote(id));
+        let mut call = Call::get("request withdraw", &path);
+        call.method = "DELETE";
+        call.statuses = &[];
+        call.empty_statuses = &[204];
+        self.send(&call).map(|_| ())
+    }
+
+    // Save backups (SPEC.md § 9).
+
+    fn save_platform(&self, platform: Option<&str>) -> Result<Vec<(String, String)>> {
+        if platform.is_none() && self.options.platform.is_none() {
+            return Err(Error::field(
+                "a save needs a platform (SPEC.md § 4.3)",
+                "platform",
+            ));
+        }
+        Ok(Self::platform_query(platform))
+    }
+
+    /// The account's backups, newest first per title (SPEC.md § 9.1).
+    ///
+    /// # Errors
+    ///
+    /// Any error of the exchange.
+    pub fn saves(&mut self, title_id: Option<&str>, platform: Option<&str>) -> Result<Saves> {
+        let mut call = Call::get("saves", "/saves");
+        call.query = Self::platform_query(platform);
+        if let Some(id) = title_id {
+            check_id(id, "title_id")?;
+            call.query.push(("title_id".to_owned(), id.to_owned()));
+        }
+        let reply = self.send(&call)?;
+        document(&reply.body, "saves")
+    }
+
+    /// A backup's archive, checked against its `size` and `sha256`.
+    ///
+    /// # Errors
+    ///
+    /// As [`download`](Self::download).
+    pub fn save_download(
+        &mut self,
+        save: &Save,
+        sink: &mut dyn DownloadSink,
+        resume: bool,
+    ) -> Result<()> {
+        check_id(&save.title_id, "title_id")?;
+        check_id(&save.save_id, "save_id")?;
+        let size = u64::try_from(save.size).map_err(|_| Error::field("a negative size", "size"))?;
+        if self.base.is_none() {
+            self.handshake()?;
+        }
+        let path = format!("/saves/{}/{}", quote(&save.title_id), quote(&save.save_id));
+        let mut url = self.v1(&path)?;
+        let query = Self::platform_query(Some(&save.platform));
+        if let Some((k, v)) = query.first() {
+            url.push('?');
+            url.push_str(k);
+            url.push('=');
+            url.push_str(&quote(v));
+        }
+        self.download(
+            &url,
+            sink,
+            Expected {
+                sha256: &save.sha256,
+                size,
+            },
+            resume,
+        )
+    }
+
+    /// Removes a backup (`204`).
+    ///
+    /// # Errors
+    ///
+    /// Any error of the exchange.
+    pub fn save_delete(
+        &mut self,
+        title_id: &str,
+        save_id: &str,
+        platform: Option<&str>,
+    ) -> Result<()> {
+        check_id(title_id, "title_id")?;
+        check_id(save_id, "save_id")?;
+        let path = format!("/saves/{}/{}", quote(title_id), quote(save_id));
+        let mut call = Call::get("save delete", &path);
+        call.method = "DELETE";
+        call.query = self.save_platform(platform)?;
+        call.statuses = &[];
+        call.empty_statuses = &[204];
+        self.send(&call).map(|_| ())
+    }
+
+    /// Sends a backup in one request (SPEC.md § 9.2): the zip as the body,
+    /// with its `Content-Digest`.
+    ///
+    /// # Errors
+    ///
+    /// When a field of `meta` breaks the specification, or any error of the
+    /// exchange (`413` above the server's `limits.save_body`).
+    pub fn save_upload(
+        &mut self,
+        title_id: &str,
+        archive: &[u8],
+        meta: &SaveMeta,
+        platform: Option<&str>,
+    ) -> Result<Save> {
+        check_id(title_id, "title_id")?;
+        meta.check()?;
+        let path = format!("/saves/{}", quote(title_id));
+        let mut call = Call::get("save upload", &path);
+        call.method = "POST";
+        call.query = self.save_platform(platform)?;
+        call.statuses = &[201];
+        call.body = Some(archive.to_vec());
+        call.headers
+            .push(("Content-Type", "application/zip".to_owned()));
+        call.headers
+            .push(("Content-Digest", crate::digest::content_digest(archive)));
+        if let Some(v) = &meta.kind {
+            call.headers.push(("Lantern-Save-Kind", v.clone()));
+        }
+        if let Some(v) = &meta.slot {
+            call.headers.push(("Lantern-Save-Slot", v.clone()));
+        }
+        if let Some(v) = meta.game_version_code {
+            call.headers.push(("Lantern-Game-Version", v.to_string()));
+        }
+        if let Some(v) = &meta.profile {
+            call.headers.push(("Lantern-Profile", quote(v)));
+        }
+        if let Some(v) = &meta.note {
+            call.headers.push(("Lantern-Note", quote(v)));
+        }
+        let reply = self.send(&call)?;
+        document(&reply.body, "save upload")
+    }
+
+    /// Opens a resumable upload (SPEC.md § 9.3) for `archive`.
+    ///
+    /// # Errors
+    ///
+    /// When a field of `meta` breaks the specification, or any error of the
+    /// exchange (`413` above the server's `limits.save_size`).
+    pub fn upload_start(
+        &mut self,
+        title_id: &str,
+        archive: &[u8],
+        meta: &SaveMeta,
+        platform: Option<&str>,
+    ) -> Result<Upload> {
+        check_id(title_id, "title_id")?;
+        meta.check()?;
+        let request = UploadRequest {
+            schema: SCHEMA,
+            size: i64::try_from(archive.len()).map_err(|_| Error::field("too large", "size"))?,
+            sha256: crate::digest::sha256_hex(archive),
+            kind: meta.kind.clone(),
+            slot: meta.slot.clone(),
+            game_version_code: meta.game_version_code,
+            profile: meta.profile.clone(),
+            note: meta.note.clone(),
+            ..UploadRequest::default()
+        };
+        let path = format!("/saves/{}/uploads", quote(title_id));
+        let mut call = Call::get("upload start", &path);
+        call.method = "POST";
+        call.query = self.save_platform(platform)?;
+        call.statuses = &[201];
+        call.body = Some(serde_json::to_vec(&request).map_err(|e| Error::document(e.to_string()))?);
+        call.json_body = true;
+        let reply = self.send(&call)?;
+        let upload: Upload = document(&reply.body, "upload start")?;
+        // The upload's address is on the server's origin, or it is refused.
+        self.on_origin_url(&upload.upload, "upload start")?;
+        Ok(upload)
+    }
+
+    /// Where an upload stands (`HEAD`): to resume after an interruption.
+    ///
+    /// # Errors
+    ///
+    /// When the server's answer lacks `Upload-Offset`, `Upload-Length` or
+    /// `Lantern-Chunk-Size`, or any error of the exchange.
+    pub fn upload_state(&mut self, upload: &str) -> Result<UploadState> {
+        let mut call = Call::get("upload state", "");
+        call.method = "HEAD";
+        call.url = Some(self.on_origin_url(upload, "upload state")?);
+        call.statuses = &[];
+        call.empty_statuses = &[204];
+        let reply = self.send(&call)?;
+        let number = |name: &str| -> Result<u64> {
+            reply
+                .headers
+                .get(name)
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .ok_or_else(|| Error::UnexpectedResponse {
+                    message: format!("upload state: no {name}"),
+                    status: Some(reply.status),
+                })
+        };
+        Ok(UploadState {
+            offset: number("Upload-Offset")?,
+            length: number("Upload-Length")?,
+            chunk_size: number("Lantern-Chunk-Size")?,
+        })
+    }
+
+    /// Sends one chunk at `offset`: `Ok(None)` while the upload goes on (the
+    /// server's new offset is `offset` plus the chunk), the save once the last
+    /// chunk is in. A `409` is an offset other than the server's: ask
+    /// [`upload_state`](Self::upload_state).
+    ///
+    /// # Errors
+    ///
+    /// Any error of the exchange.
+    pub fn upload_chunk(
+        &mut self,
+        upload: &str,
+        offset: u64,
+        chunk: &[u8],
+    ) -> Result<Option<Save>> {
+        let mut call = Call::get("upload chunk", "");
+        call.method = "PATCH";
+        call.url = Some(self.on_origin_url(upload, "upload chunk")?);
+        call.statuses = &[201];
+        call.empty_statuses = &[204];
+        call.body = Some(chunk.to_vec());
+        call.headers.push(("Upload-Offset", offset.to_string()));
+        call.headers
+            .push(("Content-Type", "application/offset+octet-stream".to_owned()));
+        let reply = self.send(&call)?;
+        if reply.status == 201 {
+            return document(&reply.body, "upload chunk").map(Some);
+        }
+        Ok(None)
+    }
+
+    /// Abandons an upload (`204`).
+    ///
+    /// # Errors
+    ///
+    /// Any error of the exchange.
+    pub fn upload_abandon(&mut self, upload: &str) -> Result<()> {
+        let mut call = Call::get("upload abandon", "");
+        call.method = "DELETE";
+        call.url = Some(self.on_origin_url(upload, "upload abandon")?);
+        call.statuses = &[];
+        call.empty_statuses = &[204];
+        self.send(&call).map(|_| ())
+    }
+
+    /// Sends a whole backup in chunks that survive a lost connection: opens an
+    /// upload, sends from the server's offset, and asks where it stands after
+    /// a conflict or a cut connection (at most `retries` times). Returns the
+    /// saved entry.
+    ///
+    /// # Errors
+    ///
+    /// The last error when it keeps failing, or any other error of the
+    /// exchange.
+    pub fn save_upload_resumable(
+        &mut self,
+        title_id: &str,
+        archive: &[u8],
+        meta: &SaveMeta,
+        platform: Option<&str>,
+        retries: u32,
+    ) -> Result<Save> {
+        let started = self.upload_start(title_id, archive, meta, platform)?;
+        let chunk_size = usize::try_from(started.chunk_size)
+            .ok()
+            .filter(|n| *n > 0)
+            .ok_or_else(|| Error::document("upload start: chunk_size"))?;
+        let mut offset = u64::try_from(started.offset).unwrap_or(0);
+        let mut failures = 0;
+        loop {
+            let from = usize::try_from(offset).unwrap_or(usize::MAX);
+            let end = archive.len().min(from.saturating_add(chunk_size));
+            let chunk = archive.get(from..end).unwrap_or_default();
+            match self.upload_chunk(&started.upload, offset, chunk) {
+                Ok(Some(save)) => return Ok(save),
+                Ok(None) => offset = end as u64,
+                Err(e @ (Error::Transport(_) | Error::Problem(_))) => {
+                    let retry = match &e {
+                        Error::Problem(p) => p.kind == ProblemKind::Conflict,
+                        _ => true,
+                    };
+                    failures += 1;
+                    if !retry || failures > retries {
+                        return Err(e);
+                    }
+                    offset = self.upload_state(&started.upload)?.offset;
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     // Pairing (SPEC.md § 5.2).

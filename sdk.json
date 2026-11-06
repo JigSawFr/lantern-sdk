@@ -468,7 +468,7 @@
           "server": "yes"
         },
         "go": {
-          "client": "no",
+          "client": "yes",
           "server": "no"
         },
         "rust": {
@@ -497,7 +497,7 @@
           "server": "yes"
         },
         "go": {
-          "client": "no",
+          "client": "yes",
           "server": "no"
         },
         "rust": {
@@ -555,7 +555,7 @@
           "server": "yes"
         },
         "go": {
-          "client": "no",
+          "client": "yes",
           "server": "no"
         },
         "rust": {

@@ -39,6 +39,9 @@ type reference struct {
 	AdminTok  string `json:"admin_token"`
 	AdminSeed string `json:"admin_seed"`
 	OldToken  string `json:"old_token"`
+	LeaTok    string `json:"lea_token"`
+	LeaSeed   string `json:"lea_seed"`
+	UID       string `json:"uid"`
 }
 
 func startReference(t *testing.T, args ...string) *reference {
@@ -934,5 +937,108 @@ func TestReferenceEvents(t *testing.T) {
 			t.Fatalf("%v", err)
 		}
 		break
+	}
+}
+
+func TestReferenceGrants(t *testing.T) {
+	ref := startReference(t, "--public")
+	ctx := context.Background()
+	c, err := client.New(ref.URL, client.Options{Token: ref.Token})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for app, err := range c.Apps(ctx, client.ListOptions{PageSize: 1}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		g, err := c.Grant(ctx, app.SHA256)
+		if err != nil || g.SHA256 != app.SHA256 || g.Size != app.Size {
+			t.Fatalf("%+v %v", g, err)
+		}
+		// the grant names this server and verifies with its handshake's key
+		hello := c.Hello()
+		if p := lantern.VerifyGrant(g.Grant, map[string]string{hello.UID: hello.Peers.Key}, time.Now().Unix()); p == nil || p.SHA256 != app.SHA256 {
+			t.Fatalf("%+v", p)
+		}
+		break
+	}
+	if _, err := c.Grant(ctx, strings.Repeat("0", 64)); !errors.Is(err, lantern.ErrNotFound) {
+		t.Errorf("a file the library does not have: %v", err)
+	}
+}
+
+func TestReferenceSync(t *testing.T) {
+	ref := startReference(t, "--v05")
+	key, err := lantern.SigningKeyFromBase64(ref.LeaSeed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := client.New(ref.URL, client.Options{Token: ref.LeaTok, Key: key, Platform: "switch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	hello, err := c.Handshake(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	title := "0100ABCD00010000"
+	state := lantern.SyncOff(hello.UID, "lea")
+	s := c.Syncer(state)
+	// nothing of /v1/sync before the user agreed, and a collection on its own (L-20.1-1, L-20.1-2)
+	if _, err := s.Pull(ctx, "wishes"); !errors.Is(err, lantern.ErrConsentRequired) {
+		t.Fatalf("before consent: %v", err)
+	}
+	state.Agree("wishes")
+	if _, err := s.Pull(ctx, "installed"); !errors.Is(err, lantern.ErrConsentRequired) {
+		t.Fatalf("a collection not agreed to: %v", err)
+	}
+	info, err := s.Info(ctx)
+	if err != nil || info.Device == nil {
+		t.Fatalf("%+v %v", info, err)
+	}
+	fresh := lantern.SyncOff(hello.UID, "lea")
+	fresh.Agree("wishes")
+	if _, err := c.Syncer(fresh).Push(ctx, "wishes", nil, client.PushOptions{}); err == nil {
+		t.Fatal("a write before anything was read: the generation is not known")
+	}
+	first, err := s.Pull(ctx, "wishes")
+	if err != nil || !first.Whole || len(first.Items) != 0 {
+		t.Fatalf("%+v %v", first, err)
+	}
+	now := time.Now().UnixMilli()
+	wish := lantern.SyncValue(lantern.WishKey("switch", title), map[string]any{"platform": "switch", "title_id": title, "note": "Lea's"}, now)
+	kept, err := s.Push(ctx, "wishes", []lantern.SyncItem{wish}, client.PushOptions{})
+	if err != nil || len(kept) != 1 || kept[0].Rev == nil || *kept[0].Rev == 0 {
+		t.Fatalf("%+v %v", kept, err)
+	}
+	// a read since the revision gives the change; the state moves on
+	second, err := s.Pull(ctx, "wishes")
+	if err != nil || second.Whole || len(second.Items) != 1 || second.Items[0].Key != wish.Key {
+		t.Fatalf("%+v %v", second, err)
+	}
+	if state.Revs["wishes"] != second.Rev {
+		t.Errorf("revision %d, the read gave %d", state.Revs["wishes"], second.Rev)
+	}
+	// a deletion made from the whole collection is all or nothing: it holds once
+	gone := lantern.SyncDeletion(wish.Key, time.Now().UnixMilli()+1)
+	if out, err := s.Push(ctx, "wishes", []lantern.SyncItem{gone}, client.PushOptions{Whole: true}); err != nil || !out[0].IsDeleted() {
+		t.Fatalf("%+v %v", out, err)
+	}
+	if _, err := s.Push(ctx, "wishes", []lantern.SyncItem{gone}, client.PushOptions{Whole: true}); !errors.Is(err, lantern.ErrPreconditionFailed) {
+		t.Fatalf("a write against a collection that changed: %v", err)
+	}
+	// her other device deletes her data at her word: nothing is written back (L-20.3-2)
+	other := c.Syncer(lantern.SyncOff(hello.UID, "phone"))
+	if err := other.Delete(ctx, ""); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.Push(ctx, "wishes", []lantern.SyncItem{wish}, client.PushOptions{})
+	var changed *lantern.GenerationChangedError
+	if !errors.As(err, &changed) || !errors.Is(err, lantern.ErrGenerationChanged) {
+		t.Fatalf("a write of an old generation: %v", err)
+	}
+	if state.Allows("wishes") || state.Generation != nil || len(state.Revs) != 0 {
+		t.Errorf("sync is not off: %+v", state)
 	}
 }

@@ -81,3 +81,57 @@ func TestReferenceHostileEvents(t *testing.T) {
 		t.Fatalf("%d events, then %v: %s", events, failure, h.Expect)
 	}
 }
+
+func hostileClient(t *testing.T, scenario string) (*client.Client, *hostile) {
+	t.Helper()
+	h := startHostile(t, scenario)
+	c, err := client.New(h.URL, client.Options{Token: h.Token, Platform: "switch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c, h
+}
+
+func TestReferenceHostileGrants(t *testing.T) {
+	for _, scenario := range []string{"forged-grant", "expired-grant"} {
+		t.Run(scenario, func(t *testing.T) {
+			c, h := hostileClient(t, scenario)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			var sha string
+			for app, err := range c.Apps(ctx, client.ListOptions{}) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				sha = app.SHA256
+				break
+			}
+			if _, err := c.Grant(ctx, sha); !errors.Is(err, lantern.ErrUnexpectedResponse) {
+				t.Fatalf("%v: %s", err, h.Expect)
+			}
+		})
+	}
+}
+
+func TestReferenceHostileMirror(t *testing.T) {
+	c, h := hostileClient(t, "mirror-wrong-bytes")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var app *lantern.App
+	for a, err := range c.Apps(ctx, client.ListOptions{}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		app = a
+		break
+	}
+	if app == nil || len(app.Mirrors) != 1 {
+		t.Fatalf("%+v", app)
+	}
+	path := filepath.Join(t.TempDir(), "frost.nsp")
+	// the mirror serves other bytes: the check fails, and the file comes from the server
+	from, err := c.DownloadVia(ctx, app, path, client.Sources{Mirrors: true}, nil)
+	if err != nil || from != "server" {
+		t.Fatalf("%q %v: %s", from, err, h.Expect)
+	}
+}
