@@ -22,6 +22,36 @@ specification is pinned here as a submodule):
 | [`typescript/`](typescript/README.md) | TypeScript | Client in the browser and Node, and a server toolkit for Node (`lantern-protocol`): draft 0.6, the whole client (pairing with a WebCrypto device key, signed requests, writes, pinning in Node, discovery, events over fetch streams, grants, mirrors and peers, sync, end-to-end encrypted saves, static libraries) with no runtime dependency, and a server toolkit at Lantern Core +titles +homebrew +cheats +admin +events +peers +sync, on `node:http` or any framework of web Requests (Hono), with a peer server and the `lantern-static` generator |
 | [`c/`](c/README.md) | C | A thin, stable C ABI over the C++ library, for Swift and Kotlin (JNI): draft 0.6, the whole client (events, grants, mirrors and peers with a peer's gate, sync, encrypted saves, static libraries included), its documents read through accessors generated from the schemas, the app's HTTP stack, random source, keychain and stores as callbacks, an ABI kept and checked; a Swift package and a JNI sketch as examples |
 
+## Families by language
+
+Each family of the specification (SPEC.md § 4.2), read as a client and served
+(client / server): ✓ yes, – no, ◐ part of it. C++ has a peer's side
+(`PeerGate`, § 19.4) but no server core, and the C API wraps the C++ client.
+CI checks the rows against the Python and TypeScript libraries' families and
+against what their demo servers offer
+([`tools/check_matrix.py`](tools/check_matrix.py)); a server marked ✓ is one
+whose conformance suite runs in CI.
+
+<!-- families:start -->
+| Family | C++ | C | Python | TypeScript |
+|---|---|---|---|---|
+| `library` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ |
+| `titles` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ |
+| `changes` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ |
+| `sections` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ |
+| `homebrew` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ |
+| `saves` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ |
+| `cheats` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ |
+| `requests` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ |
+| `pairing` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ |
+| `signatures` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ |
+| `admin` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ |
+| `events` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ |
+| `peers` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ |
+| `sync` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ |
+| `encrypted_saves` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ |
+<!-- families:end -->
+
 Every server in it passes the specification's conformance suite, and every
 client passes a deliberately malicious test server, in CI, for every
 language.

@@ -3,7 +3,8 @@
 # each library's workflow runs when its files changed (cpp.yml, c.yml,
 # python.yml, typescript.yml, as reusable workflows), the release's
 # reproducibility when a part of a release changed (release-check.yml), the
-# workflows' own lint when .github/ changed, the licences always; then
+# workflows' own lint when .github/ changed, the licences and the README's
+# table of families always; then
 # `all green` passes when every one of them passed or was skipped for want of
 # a change. Branch protection requires `all green` alone (CONTRIBUTING.md),
 # so a pull request that touches only Python is not left waiting for C++
@@ -101,12 +102,17 @@ jobs:
       contents: read
     uses: ./.github/workflows/reuse.yml
 
+  matrix:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/matrix.yml
+
   # The one check branch protection requires. A job of a called workflow
   # that may fail (continue-on-error: macOS, iOS, PS4) does not fail it.
   all-green:
     name: all green
     if: always()
-    needs: [ changes, cpp, c, python, typescript, release, workflows, reuse ]
+    needs: [ changes, cpp, c, python, typescript, release, workflows, reuse, matrix ]
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions: {}
