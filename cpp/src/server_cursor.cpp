@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <limits>
 
 #include <lantern/encoding.hpp>
 #include <lantern/hkdf.hpp>
@@ -25,6 +26,26 @@ namespace
 constexpr std::string_view prefix        = "c_";
 constexpr std::size_t mac_bytes          = 16;
 constexpr std::size_t max_minor_in_token = 100;
+
+// A listing's page_size (§ 6.2): a positive integer, lowered to the limit.
+std::expected<std::uint32_t, ProblemError> page_size_param(
+    const ServerState& state, const ServerRequest& request)
+{
+    const auto text = request.param("page_size");
+    if (!text)
+        return std::min(state.default_page_size, state.page_limit);
+    std::uint64_t value = 0;
+    for (const char c : *text)
+    {
+        if (c < '0' || c > '9')
+            return std::unexpected(bad_request(state, "page_size is a positive integer."));
+        value = std::min<std::uint64_t>(
+            value * 10 + static_cast<std::uint64_t>(c - '0'), std::numeric_limits<std::uint32_t>::max());
+    }
+    if (value < 1)
+        return std::unexpected(bad_request(state, "page_size is a positive integer."));
+    return static_cast<std::uint32_t>(std::min<std::uint64_t>(value, state.page_limit));
+}
 
 std::span<const std::uint8_t> bytes_of(std::string_view text) noexcept
 {
@@ -187,6 +208,46 @@ std::expected<CursorPosition, ProblemError> open_cursor(
         position.key.minor.assign(n->text());
     position.by_id = n == nullptr;
     return position;
+}
+
+std::expected<PageWindow, ProblemError> page_window(const ServerState& state, const ServerRequest& request,
+    std::span<const SortKey> keys, std::string_view scope)
+{
+    const auto size = page_size_param(state, request);
+    if (!size)
+        return std::unexpected(size.error());
+    PageWindow window(state.allocator);
+    window.order.reserve(keys.size());
+    for (std::size_t i = 0; i < keys.size(); ++i)
+        window.order.push_back(i);
+    std::ranges::sort(
+        window.order, [&](std::size_t a, std::size_t b) { return compare(keys[a], keys[b]) < 0; });
+
+    if (const auto cursor = request.param("cursor"))
+    {
+        auto position = open_cursor(state, *cursor, scope);
+        if (!position)
+            return std::unexpected(std::move(position.error()));
+        if (position->by_id)
+        {
+            const auto found = std::ranges::find_if(
+                window.order, [&](std::size_t i) { return keys[i].id == position->key.id; });
+            if (found == window.order.end())
+                return std::unexpected(gone(state, "Cursor expired: read the list again from its start."));
+            window.from = static_cast<std::size_t>(found - window.order.begin()) + 1;
+        }
+        else
+        {
+            // After the item the last page ended with, whether or not it is still there
+            const auto after = std::ranges::partition_point(
+                window.order, [&](std::size_t i) { return compare(keys[i], position->key) <= 0; });
+            window.from = static_cast<std::size_t>(after - window.order.begin());
+        }
+    }
+    window.count = std::min<std::size_t>(*size, window.order.size() - window.from);
+    if (window.from + window.count < window.order.size())
+        window.next = seal_cursor(state, scope, keys[window.order[window.from + window.count - 1]]);
+    return window;
 }
 
 String seal_since(const ServerState& state, char kind, std::string_view epoch, std::uint64_t position)

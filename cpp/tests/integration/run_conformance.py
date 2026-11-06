@@ -15,9 +15,9 @@ pairing and invitation checks leave their address rate limited for a while):
 Each run starts the demo (examples/demo_server.cpp, on a free loopback port,
 which the demo prints as its URL), runs `run.py URL --origin ORIGIN`, and stops
 the demo. It fails when a check fails, when a check of the families the demo
-serves (the library with its titles, changes and sections, pairing, signatures) is
+serves (the library with its titles, changes and sections, homebrew, cheats, pairing, signatures) is
 not a pass, when an unexpected
-warning is raised, or, with the token, when Lantern Core and +titles are not among the
+warning is raised, or, with the token, when Lantern Core, +titles, +homebrew and +cheats are not among the
 levels reached (without one the suite cannot check signed requests, and says
 so).
 Warnings allowed: plain HTTP on loopback, JSON that is not compressed. Standard
@@ -61,6 +61,14 @@ CATALOG = [
     "titles.known", "titles.unknown", "titles.bulk", "titles.bulk-limit", "titles.images", "titles.changes",
     "titles.bad-token",
 ]
+# Homebrew (§ 8, read with the scope library) and cheat sets (§ 10, whose scope everyone holds on a
+# public server).
+HOMEBREW = [
+    "features.homebrew", "homebrew.pages", "homebrew.entries", "homebrew.manifests", "homebrew.kinds",
+    "homebrew.filters", "homebrew.requires", "homebrew.ports", "homebrew.packages", "homebrew.signatures",
+    "homebrew.updates", "homebrew.updates-platform", "homebrew.unknown", "schema.refused.homebrew",
+]
+CHEATS = ["features.cheats", "cheats.sets", "cheats.text", "cheats.unknown"]
 # Pairing (§ 5.2, § 5.4) is offered to every caller, anonymous included.
 PAIRING = [
     "handshake.auth", "pairing.offered", "pairing.code", "pairing.verify-complete", "pairing.waiting",
@@ -68,21 +76,25 @@ PAIRING = [
     "invitations.rate-limit", "pairing.rate-limit", "schema.refused.pairing", "features.pairing",
     "admin.refused", "features.admin",
 ]
-# With the console's token, bound to its key.
+# With the console's token, bound to its key: it holds cheats.write, so a set is written, replaced and
+# deleted; anonymously, writing is refused.
 WITH_TOKEN = [
+    "cheats.write-cycle",
     "handshake.account", "features.anonymous", "caching.private", "auth.tokens",
     "signatures.unsigned", "signatures.invalid", "signatures.stale", "signatures.replayed",
     "signatures.digest", "signatures.accept-signature",
 ]
 # What only a private server shows.
 PRIVATE = ["auth.missing"]
+# Anonymous callers: writing a cheat set is refused
+ANONYMOUS = ["cheats.write"]
 # Plain HTTP on loopback, and JSON that the server does not compress (§ 2.1).
 WARNINGS = ["transport.https", "compression.json"]
 
 RUNS = [
-    ("anonymous", False, False, LIBRARY + CATALOG + PAIRING),
-    ("token", False, True, LIBRARY + CATALOG + PAIRING + WITH_TOKEN),
-    ("private, with a token", True, True, LIBRARY + CATALOG + PAIRING + WITH_TOKEN + PRIVATE),
+    ("anonymous", False, False, LIBRARY + CATALOG + HOMEBREW + CHEATS + PAIRING + ANONYMOUS),
+    ("token", False, True, LIBRARY + CATALOG + HOMEBREW + CHEATS + PAIRING + WITH_TOKEN),
+    ("private, with a token", True, True, LIBRARY + CATALOG + HOMEBREW + CHEATS + PAIRING + WITH_TOKEN + PRIVATE),
 ]
 
 
@@ -115,7 +127,7 @@ def run_once(args, key_file, name, private, token, required):
     if int(summary.group(2)):
         problems.append(f"{summary.group(2)} check(s) failed")
     # Anonymously, the checks of signed requests are left out (a server that signs needs a token for them)
-    if token and not all(level in levels.group(1) for level in ("Lantern Core", "+titles")):
+    if token and not all(level in levels.group(1) for level in ("Lantern Core", "+titles", "+homebrew", "+cheats")):
         problems.append(f"levels reached: {levels.group(1)}")
     problems += [f"{check}: {status.get(check, 'absent')}, expected PASS" for check in required
                  if status.get(check) != "PASS"]

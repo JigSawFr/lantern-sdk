@@ -5,9 +5,13 @@
 #include <charconv>
 #include <chrono>
 
+#include <lantern/ed25519.hpp>
+#include <lantern/homebrew.hpp>
+#include <lantern/paths.hpp>
 #include <lantern/peers.hpp>
 #include <lantern/profiles.hpp>
 #include <lantern/server.hpp>
+#include <lantern/sync.hpp>
 #include <lantern/url.hpp>
 
 #include "server_internal.hpp"
@@ -199,6 +203,172 @@ Result<void> check_draft(const AppDraft& draft)
     return {};
 }
 
+// `^[a-z][a-z0-9_-]{0,31}$`: a homebrew's kind.
+bool is_kind(std::string_view text) noexcept
+{
+    return !text.empty() && text.size() <= 32 && text.front() >= 'a' && text.front() <= 'z'
+        && std::ranges::all_of(text, [](char c) { return lower_alnum(c) || c == '_' || c == '-'; });
+}
+
+constexpr std::uint64_t max_safe_integer = 9007199254740991ULL;
+
+bool is_dotted(std::string_view text) noexcept
+{
+    if (text.empty() || text.size() > 64 || text.front() == '.' || text.back() == '.')
+        return false;
+    return std::ranges::all_of(text, [](char c) { return (c >= '0' && c <= '9') || c == '.'; })
+        && !text.contains("..");
+}
+
+// The value of a `requires.min` key, as JSON: "1.7.0", 512.
+bool min_value_ok(std::string_view key, std::string_view json) noexcept
+{
+    const bool quoted            = json.size() >= 2 && json.front() == '"' && json.back() == '"';
+    const std::string_view inner = quoted ? json.substr(1, json.size() - 2) : json;
+    if (key == "ram_mb")
+        return !quoted && !inner.empty() && inner.size() <= 8 && is_decimal(inner) && inner.front() != '0';
+    if (key == "screen")
+    {
+        const std::size_t cross = inner.find('x');
+        if (!quoted || cross == std::string_view::npos)
+            return false;
+        const auto size_ok = [](std::string_view part)
+        { return !part.empty() && part.size() <= 6 && is_decimal(part) && part.front() != '0'; };
+        return size_ok(inner.substr(0, cross)) && size_ok(inner.substr(cross + 1));
+    }
+    // The profile's keys and glibc are dotted versions; a key this library does not know is the author's
+    static constexpr std::array<std::string_view, 6> dotted { "glibc", "firmware", "atmosphere", "luma",
+        "goldhen", "sdk" };
+    return !std::ranges::contains(dotted, key) || (quoted && is_dotted(inner));
+}
+
+// § 8.7: the shapes of the keys this library knows.
+Result<void> check_requires(const Requires& requires_)
+{
+    if (requires_.text.empty() || requires_.text.size() > 4096)
+        return fail(Category::usage, "requires has a text of 4096 bytes at most");
+    if (requires_.min)
+    {
+        for (const auto& [key, value] : requires_.min->members)
+        {
+            if (!min_value_ok(key, value))
+                return fail(Category::usage, "a requires.min value that is not of its key's form (§ 8.7)");
+        }
+    }
+    if (requires_.gpu.size() > 8
+        || std::ranges::any_of(requires_.gpu, [](const String& name) { return name.empty(); }))
+        return fail(Category::usage, "requires.gpu lists 8 names at most");
+    if (requires_.homebrew.size() > 32
+        || std::ranges::any_of(requires_.homebrew, [](const Dependency& needed)
+            { return !is_homebrew_id(needed.id) || needed.min_build > max_safe_integer; }))
+        return fail(
+            Category::usage, "requires.homebrew lists 32 homebrew at most, each by its id and min_build");
+    return {};
+}
+
+// § 8.1: an entry's own fields, before its packages.
+Result<void> check_homebrew_fields(const Homebrew& entry)
+{
+    if (!is_served_platform(entry.platform))
+        return fail(Category::usage, "a platform that is not served (not a name, or web)");
+    if (!is_homebrew_id(entry.id) || entry.system_id.size() > 128)
+        return fail(
+            Category::usage, "a homebrew id is reverse-DNS and lower-case, 128 bytes at most (§ 8.1)");
+    if (!is_kind(entry.kind))
+        return fail(Category::usage, "kind is a lower-case word, such as app, game, port or tool");
+    if (entry.name.empty() || entry.name.size() > max_text || entry.author.size() > max_text
+        || entry.version.empty() || entry.version.size() > max_text)
+        return fail(
+            Category::usage, "a homebrew has a name and a version, and its names are 512 bytes at most");
+    if (entry.build > max_safe_integer)
+        return fail(Category::usage, "build is an integer below 2^53");
+    for (std::size_t i = 0; i < entry.genres.size(); ++i)
+    {
+        bool twice = false;
+        for (std::size_t j = 0; j < i; ++j)
+            twice = twice || entry.genres[j] == entry.genres[i];
+        if (!is_genre(entry.genres[i]) || twice)
+            return fail(Category::usage, "genres are from the list of § 7.1, each once");
+    }
+    if (entry.tags.size() > 32
+        || std::ranges::any_of(entry.tags, [](const String& tag) { return tag.empty() || tag.size() > 64; }))
+        return fail(Category::usage, "tags are 32 at most, 1 to 64 bytes each");
+    if (entry.license.size() > 256 || entry.assets_license.size() > 256 || entry.source.size() > 4096
+        || (!entry.source.empty() && !is_absolute_web_url(entry.source)))
+        return fail(Category::usage, "license is 256 bytes at most, source an address");
+    if (entry.language.size() > 35 || entry.summary.size() > 4096 || entry.description.size() > 4096)
+        return fail(Category::usage, "language is 35 bytes at most, summary and description 4096");
+    if ((!entry.summary.empty() || !entry.description.empty()) && entry.language.empty())
+        return fail(Category::usage, "a homebrew with a summary or a description says its language (§ 2.2)");
+    if ((entry.icon && !image_ok(*entry.icon)) || entry.screenshots.size() > 16
+        || std::ranges::any_of(entry.screenshots, [](const Image& image) { return !image_ok(image); }))
+        return fail(Category::usage,
+            "images: 16 screenshots at most, each a path of this server or an absolute URL marked external");
+    if (!entry.updated.empty() && !detail::parse_time(entry.updated))
+        return fail(Category::usage, "updated is a UTC time: 2026-10-10T12:00:00Z");
+    if (!entry.atlas.empty() && !is_atlas_id(entry.atlas))
+        return fail(Category::usage, "atlas is a Wikidata item: Q900001");
+    if (std::ranges::any_of(entry.ratings,
+            [](const Rating& rating) {
+                return !is_rating_system(rating.system) || rating.rating.empty() || rating.rating.size() > 16;
+            }))
+        return fail(Category::usage, "a rating is an organisation's short name and 1 to 16 bytes");
+    if (entry.requires_)
+    {
+        if (auto checked = check_requires(*entry.requires_); !checked)
+            return checked;
+    }
+    if (entry.port && entry.kind != "port")
+        return fail(Category::usage, "only a homebrew of kind port has a port (§ 8.6)");
+    return check_port(entry);
+}
+
+// One package of `entry` (the library's own copy: a signature is told apart
+// by the address of its package) and its bytes: § 8.2, § 8.3, § 8.4.
+Result<PackageSignature> check_package(
+    const Homebrew& entry, const Package& package, std::span<const std::byte> content, bool is_main)
+{
+    if (!is_format(package.format))
+        return fail(Category::usage, "a package's format is 1 to 16 letters or digits");
+    if (package.size != content.size() || package.sha256 != Sha256::of(content))
+        return fail(Category::usage, "a package's size and sha256 are those of its bytes (they are signed)");
+    if (package.arch.size() > 8
+        || std::ranges::any_of(package.arch, [](const String& name) { return !is_arch_name(name); }))
+        return fail(Category::usage, "arch lists 8 architectures at most, each named as § 8.2 says");
+    const Profile* profile = find_profile(entry.platform);
+    if (profile != nullptr && profile->arches.empty() && !package.arch.empty())
+        return fail(Category::usage, "a platform of one architecture has packages without arch (§ 8.2)");
+    if (!is_main && package.arch.empty())
+        return fail(Category::usage, "each of packages has its arch (§ 8.2)");
+    if (package.mirrors.size() > max_mirrors)
+        return fail(Category::usage, "a package has 8 mirrors at most");
+    for (const Mirror& mirror : package.mirrors)
+    {
+        const auto parts = split_url(mirror.url);
+        if (!parts || !check_untrusted_scheme(*parts))
+            return fail(
+                Category::usage, "a mirror is HTTPS, or HTTP at a private network's address (§ 19.2)");
+    }
+    if (profile != nullptr)
+    {
+        // Paths, roots, the format's place and the manifest's digest (§ 8.2, § 8.3)
+        if (auto plan = plan_install(entry, package); !plan)
+            return std::unexpected(plan.error());
+    }
+    else
+    {
+        if (package.manifest.size() > 4096 || manifest_digest(package.manifest) != package.manifest_sha256)
+            return fail(
+                Category::usage, "a manifest has 4096 files at most and the digest manifest_sha256 says");
+        for (const ManifestEntry& file : package.manifest)
+        {
+            if (check_device_path(file.path) != PathProblem::none)
+                return fail(Category::usage, "a manifest path breaks § 8.2's rules");
+        }
+    }
+    return verify_package_signature(entry, package);
+}
+
 } // namespace
 
 MemoryLibrary::MemoryLibrary(std::string_view base, const Allocator& allocator)
@@ -209,6 +379,9 @@ MemoryLibrary::MemoryLibrary(std::string_view base, const Allocator& allocator)
     , media_(allocator)
     , titles_(allocator)
     , sections_(allocator)
+    , homebrew_(allocator)
+    , cheats_(allocator)
+    , cheat_files_(allocator)
     , epoch_(allocator)
     , entries_(allocator)
 {
@@ -302,13 +475,10 @@ bool MemoryLibrary::remove_app(std::string_view id)
             continue;
         const App gone = apps_[i];
         apps_.erase(apps_.begin() + static_cast<std::ptrdiff_t>(i));
-        // The package goes with the last app that names it
+        // The package goes with the last app (or homebrew) that names it
         const std::string_view name = std::string_view(gone.file).substr(gone.file.rfind('/') + 1);
-        if (std::ranges::none_of(
-                apps_, [&](const App& other) { return std::string_view(other.file).ends_with(name); }))
-        {
+        if (!uses_file(name))
             std::erase_if(files_, [&](const Stored& stored) { return stored.name == name; });
-        }
         record(Entry::Kind::app_removed, gone.platform, gone.id);
         return true;
     }
@@ -463,6 +633,254 @@ bool MemoryLibrary::remove_section(std::string_view id)
     return std::erase_if(sections_, [&](const Section& section) { return section.id == id; }) > 0;
 }
 
+String MemoryLibrary::keep_file(std::span<const std::byte> content, const Digest& sha256)
+{
+    const auto hex = to_hex(sha256);
+    String name("f_", allocator_);
+    name.append(hex.data(), 24);
+    if (std::ranges::none_of(files_, [&](const Stored& stored) { return stored.name == name; }))
+    {
+        Stored stored;
+        stored.name   = name;
+        stored.sha256 = sha256;
+        stored.reader = std::allocate_shared<MemoryFileReader>(
+            std::pmr::polymorphic_allocator<MemoryFileReader>(allocator_), content, allocator_);
+        files_.push_back(std::move(stored));
+    }
+    String path(base_, allocator_);
+    path.append("/v1/files/");
+    path.append(name);
+    return path;
+}
+
+bool MemoryLibrary::uses_file(std::string_view name) const noexcept
+{
+    const auto serves = [&](std::string_view file) { return file.ends_with(name); };
+    if (std::ranges::any_of(apps_, [&](const App& app) { return serves(app.file); }))
+        return true;
+    return std::ranges::any_of(homebrew_,
+        [&](const Homebrew& entry)
+        {
+            return serves(entry.package.file)
+                || std::ranges::any_of(
+                    entry.packages, [&](const Package& package) { return serves(package.file); });
+        });
+}
+
+void MemoryLibrary::drop_unused_files(const Homebrew& gone)
+{
+    const auto drop = [&](const Package& package)
+    {
+        const std::string_view name = std::string_view(package.file).substr(package.file.rfind('/') + 1);
+        if (!uses_file(name))
+            std::erase_if(files_, [&](const Stored& stored) { return stored.name == name; });
+    };
+    drop(gone.package);
+    for (const Package& package : gone.packages)
+        drop(package);
+}
+
+Result<Homebrew> MemoryLibrary::add_homebrew(
+    const Homebrew& entry, std::span<const std::span<const std::byte>> contents)
+{
+    if (auto checked = check_homebrew_fields(entry); !checked)
+        return std::unexpected(checked.error());
+    if (entry.packages.size() > 16 || contents.size() != 1 + entry.packages.size())
+        return fail(Category::usage, "an entry has 16 more packages at most, and the bytes of each");
+    // The library's own copy: verify_package_signature() tells the package of the entry from the others by
+    // address
+    Homebrew result(entry, allocator_);
+    std::optional<PublicKey> signer;
+    for (std::size_t i = 0; i < contents.size(); ++i)
+    {
+        const Package& package = i == 0 ? result.package : result.packages[i - 1];
+        const auto checked     = check_package(result, package, contents[i], i == 0);
+        if (!checked)
+            return std::unexpected(checked.error());
+        if (!checked->is_signed)
+            continue;
+        if (signer && *signer != checked->public_key)
+            return fail(Category::usage, "the packages of an entry are signed by one key (§ 8.4)");
+        signer = checked->public_key;
+    }
+    if (!result.system_id.empty())
+    {
+        for (const Homebrew& other : homebrew_)
+        {
+            if (other.platform == result.platform && other.system_id == result.system_id
+                && other.id != result.id)
+                return fail(Category::usage, "two homebrew of a platform have the same system_id (§ 8.3)");
+        }
+    }
+    // Everything is right: the files are served
+    for (std::size_t i = 0; i < contents.size(); ++i)
+    {
+        Package& package = i == 0 ? result.package : result.packages[i - 1];
+        package.file     = keep_file(contents[i], package.sha256);
+    }
+    for (Homebrew& other : homebrew_)
+    {
+        if (other.platform == result.platform && other.id == result.id)
+        {
+            const Homebrew replaced = std::move(other);
+            other                   = result;
+            drop_unused_files(replaced);
+            homebrew_offered_ = true;
+            return result;
+        }
+    }
+    homebrew_.push_back(result);
+    homebrew_offered_ = true;
+    return result;
+}
+
+bool MemoryLibrary::remove_homebrew(std::string_view platform, std::string_view id)
+{
+    for (std::size_t i = 0; i < homebrew_.size(); ++i)
+    {
+        if (homebrew_[i].platform == platform && homebrew_[i].id == id)
+        {
+            const Homebrew gone = homebrew_[i];
+            homebrew_.erase(homebrew_.begin() + static_cast<std::ptrdiff_t>(i));
+            drop_unused_files(gone);
+            return true;
+        }
+    }
+    return false;
+}
+
+Result<CheatSet> MemoryLibrary::put_cheat(const CheatWrite& given, std::string_view replacing)
+{
+    CheatWrite set(given, allocator_);
+    if (set.source.empty())
+        set.source.assign("Lantern");
+    if (const std::string_view problem = detail::cheat_problem(set); !problem.empty())
+        return fail(Category::usage, problem);
+
+    CheatSet* same = nullptr;
+    for (CheatSet& other : cheats_)
+    {
+        const bool key = other.platform == set.platform && other.title_id == set.title_id
+            && other.build_id == set.build_id && other.source == set.source;
+        if (replacing.empty() ? key : other.id == replacing)
+            same = &other;
+    }
+    if (!replacing.empty() && same == nullptr)
+        return fail(Category::usage, "no cheat set of that id");
+
+    CheatSet made(allocator_);
+    if (same != nullptr)
+        made.id = same->id;
+    else
+    {
+        // From what identifies the set: the same set, the same id
+        Sha256 identity;
+        for (const std::string_view part : { std::string_view(set.platform), std::string_view(set.title_id),
+                 std::string_view(set.build_id), std::string_view(set.source) })
+        {
+            identity.update(part);
+            identity.update(std::string_view("\x1f", 1));
+        }
+        const auto hex = to_hex(identity.finish());
+        made.id.assign("cs_");
+        made.id.append(hex.data(), 18);
+    }
+    made.platform  = set.platform;
+    made.title_id  = set.title_id;
+    made.build_id  = set.build_id;
+    made.source    = set.source;
+    made.note      = set.note;
+    const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch());
+    String when(allocator_);
+    format_sync_time(static_cast<std::int64_t>(now.count()), when);
+    when.erase(19, 4); // whole seconds: 2026-10-10T12:00:00Z
+    made.updated    = when;
+    made.size       = set.text.size();
+    const auto text = std::as_bytes(std::span(set.text.data(), set.text.size()));
+    made.sha256     = Sha256::of(text);
+
+    Stored stored;
+    stored.name         = made.id;
+    stored.sha256       = made.sha256;
+    stored.content_type = String("text/plain; charset=utf-8", allocator_);
+    stored.reader       = std::allocate_shared<MemoryFileReader>(
+        std::pmr::polymorphic_allocator<MemoryFileReader>(allocator_), text, allocator_);
+    if (same != nullptr)
+    {
+        *same = made;
+        for (Stored& file : cheat_files_)
+        {
+            if (file.name == made.id)
+                file = std::move(stored);
+        }
+    }
+    else
+    {
+        cheats_.push_back(made);
+        cheat_files_.push_back(std::move(stored));
+    }
+    cheats_offered_ = true;
+    return made;
+}
+
+Result<CheatSet> MemoryLibrary::add_cheat(const CheatWrite& set)
+{
+    return put_cheat(set, {});
+}
+
+bool MemoryLibrary::remove_cheat(std::string_view id)
+{
+    std::erase_if(cheat_files_, [&](const Stored& stored) { return stored.name == id; });
+    return std::erase_if(cheats_, [&](const CheatSet& set) { return set.id == id; }) > 0;
+}
+
+Result<Vector<Homebrew>> MemoryLibrary::homebrew(std::string_view /*languages*/, const Allocator& allocator)
+{
+    Vector<Homebrew> out(allocator);
+    for (const Homebrew& entry : homebrew_)
+        out.emplace_back(entry);
+    return out;
+}
+
+Result<Vector<CheatSet>> MemoryLibrary::cheats(const Allocator& allocator)
+{
+    Vector<CheatSet> out(allocator);
+    for (const CheatSet& set : cheats_)
+        out.emplace_back(set);
+    return out;
+}
+
+Result<std::optional<LibraryFile>> MemoryLibrary::cheat_file(std::string_view id, const Allocator& allocator)
+{
+    for (const Stored& stored : cheat_files_)
+    {
+        if (stored.name != id)
+            continue;
+        LibraryFile out(allocator);
+        out.size         = stored.reader->bytes().size();
+        out.sha256       = stored.sha256;
+        out.content_type = stored.content_type;
+        out.reader       = stored.reader;
+        return std::optional<LibraryFile>(std::move(out));
+    }
+    return std::optional<LibraryFile> {};
+}
+
+Result<CheatSet> MemoryLibrary::write_cheat(
+    const CheatWrite& set, std::string_view replacing, const Allocator& allocator)
+{
+    auto made = put_cheat(set, replacing);
+    if (!made)
+        return std::unexpected(made.error());
+    return CheatSet(*made, allocator);
+}
+
+Result<bool> MemoryLibrary::delete_cheat(std::string_view id)
+{
+    return remove_cheat(id);
+}
+
 Result<Vector<Title>> MemoryLibrary::titles(std::string_view /*languages*/, const Allocator& allocator)
 {
     Vector<Title> out(allocator);
@@ -576,6 +994,16 @@ Result<Vector<String>> MemoryLibrary::platforms(const Allocator& allocator)
     {
         if (std::ranges::none_of(out, [&](const String& platform) { return platform == title.platform; }))
             out.emplace_back(title.platform);
+    }
+    for (const Homebrew& entry : homebrew_)
+    {
+        if (std::ranges::none_of(out, [&](const String& platform) { return platform == entry.platform; }))
+            out.emplace_back(entry.platform);
+    }
+    for (const CheatSet& set : cheats_)
+    {
+        if (std::ranges::none_of(out, [&](const String& platform) { return platform == set.platform; }))
+            out.emplace_back(set.platform);
     }
     std::ranges::sort(out);
     return out;

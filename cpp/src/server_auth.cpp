@@ -385,12 +385,14 @@ std::optional<ProblemError> check_request_signature(
     return std::nullopt;
 }
 
-std::optional<ProblemError> check_library(const ServerState& state, const Caller& caller)
+std::optional<ProblemError> check_scope(
+    const ServerState& state, const Caller& caller, std::string_view scope)
 {
     switch (caller.state)
     {
         case Caller::State::anonymous:
-            if (state.require_auth)
+            // Everyone holds `library` and `cheats`, unless the server asks for a token
+            if (state.require_auth || (scope != "library" && scope != "cheats"))
                 return unauthorized(state, "This server asks for a token.", false);
             return std::nullopt;
         case Caller::State::frozen:
@@ -399,9 +401,19 @@ std::optional<ProblemError> check_library(const ServerState& state, const Caller
         case Caller::State::active:
             break;
     }
-    if (!caller.has("library"))
-        return make_problem(state, 403, Code::forbidden, "This account lacks the scope library.");
+    if (!caller.has(scope))
+    {
+        String why("This account lacks the scope ", state.allocator);
+        why.append(scope);
+        why.push_back('.');
+        return make_problem(state, 403, Code::forbidden, why);
+    }
     return std::nullopt;
+}
+
+std::optional<ProblemError> check_library(const ServerState& state, const Caller& caller)
+{
+    return check_scope(state, caller, "library");
 }
 
 Answer pairing_start(const ServerState& state, const ServerRequest& request)

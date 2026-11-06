@@ -4,9 +4,10 @@
 //     lantern_demo_server [port] [--private]
 //     python3 spec/conformance/run.py http://127.0.0.1:PORT/ --origin https://app.example.org
 //
-// It serves the library read-only (Lantern Core: the handshake, the apps,
-// what a device is missing, the files, with its changes and sections, and
-// its titles with their images) to anyone, and pairs devices: the
+// It serves the library (Lantern Core: the handshake, the apps, what a
+// device is missing, the files, with its changes and sections, its titles
+// with their images, its homebrew and its cheat sets) to anyone, takes cheat
+// sets from a token with the scope cheats.write, and pairs devices: the
 // accounts of demo_accounts.hpp, a token bound to a key, signed requests.
 // `--private` asks for a token on the library. Plain HTTP on 127.0.0.1; it
 // prints its URL and serves until it is stopped. No port, or 0: a free one.
@@ -90,8 +91,10 @@ int main(int argc, char** argv)
         return report(server.error());
 
     lantern::posix::ListenOptions listen;
-    listen.port   = static_cast<std::uint16_t>(port);
-    auto listener = lantern::posix::HttpListener::listen(*server, listen);
+    listen.port = static_cast<std::uint16_t>(port);
+    // A cheat set is 1 MiB of text at most (§ 13), escaped in its JSON body
+    listen.max_body = std::size_t { 3 } << 20U;
+    auto listener   = lantern::posix::HttpListener::listen(*server, listen);
     if (!listener)
         return report(listener.error());
 

@@ -127,7 +127,9 @@ TEST_CASE("server over HTTP: the client reads the handshake, the listing and wha
     CHECK((*hello)->base == demo::base);
     CHECK((*hello)->features.library == 1);
     CHECK((*hello)->features.pairing == 0);
-    REQUIRE((*hello)->platforms.size() == 2);
+    REQUIRE((*hello)->platforms.size() == 3);
+    CHECK((*hello)->features.homebrew == 1);
+    CHECK((*hello)->features.cheats == 1);
 
     AppsQuery query;
     query.page_size = 3;
@@ -159,6 +161,67 @@ TEST_CASE("server over HTTP: the client reads the handshake, the listing and wha
     for (const App& app : (*missing)->items)
         newest = newest || (app.app_id == "0100AB1200010800" && app.version_code == 131072);
     CHECK(newest);
+}
+
+TEST_CASE("server over HTTP: the client reads the homebrew, checks what it installs, and the cheat sets")
+{
+    Running running;
+    posix::LoopbackTransport transport;
+    ClientConfig config;
+    config.origin     = running.origin();
+    config.user_agent = "ServerTests/1";
+    config.platform   = "switch";
+    auto client       = Client::create(transport, config);
+    REQUIRE(client);
+    REQUIRE(client->handshake());
+
+    const auto page = client->homebrew();
+    REQUIRE(page);
+    REQUIRE(*page);
+    REQUIRE((*page)->items.size() == 4);
+    std::size_t signed_entries = 0;
+    for (const Homebrew& listed : (*page)->items)
+    {
+        // The entry, with its manifests: what installing writes is the profile's and the manifest's
+        const auto read = client->homebrew_entry(listed.id);
+        REQUIRE(read);
+        REQUIRE(*read);
+        const Homebrew& entry = **read;
+        const auto package    = pick_package(entry, "aarch64");
+        REQUIRE(package);
+        const auto plan = plan_install(entry, **package);
+        REQUIRE(plan);
+        CHECK_FALSE(plan->files.empty());
+        REQUIRE(check_port(entry));
+        const auto signature = verify_package_signature(entry, **package);
+        REQUIRE(signature);
+        if (signature->is_signed)
+            ++signed_entries;
+
+        // The package is a file, checked by its size and SHA-256
+        Collecting whole;
+        DownloadState state;
+        REQUIRE(client->download({ (*package)->file, (*package)->size, (*package)->sha256 }, state, whole));
+        CHECK(whole.bytes.size() == (*package)->size);
+    }
+    CHECK(signed_entries == 1);
+
+    // The entry of the other platform carries a package per architecture
+    HomebrewQuery linux_query;
+    linux_query.platform  = "linux";
+    const auto linux_page = client->homebrew(linux_query);
+    REQUIRE(linux_page);
+    REQUIRE(*linux_page);
+    REQUIRE((*linux_page)->items.size() == 1);
+    CHECK((*linux_page)->items[0].packages.size() == 1);
+
+    const auto sets = client->cheats();
+    REQUIRE(sets);
+    REQUIRE(*sets);
+    REQUIRE((*sets)->cheats.size() == 3);
+    const auto text = client->cheat_text((*sets)->cheats[0]);
+    REQUIRE(text);
+    CHECK(text->starts_with("[Endless lamp oil]"));
 }
 
 TEST_CASE("server over HTTP: a download is checked by its size and SHA-256, and resumes with a range")

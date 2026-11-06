@@ -68,26 +68,6 @@ std::expected<std::optional<std::string_view>, ProblemError> platform_of(
     return std::optional<std::string_view>(name);
 }
 
-// A listing's page_size (§ 6.2): a positive integer, lowered to the limit.
-std::expected<std::uint32_t, ProblemError> page_size_of(
-    const ServerState& state, const ServerRequest& request)
-{
-    const auto text = request.param("page_size");
-    if (!text)
-        return std::min(state.default_page_size, state.page_limit);
-    std::uint64_t value = 0;
-    for (const char c : *text)
-    {
-        if (c < '0' || c > '9')
-            return std::unexpected(detail::bad_request(state, "page_size is a positive integer."));
-        value = std::min<std::uint64_t>(
-            value * 10 + static_cast<std::uint64_t>(c - '0'), std::numeric_limits<std::uint32_t>::max());
-    }
-    if (value < 1)
-        return std::unexpected(detail::bad_request(state, "page_size is a positive integer."));
-    return static_cast<std::uint32_t>(std::min<std::uint64_t>(value, state.page_limit));
-}
-
 std::expected<std::string_view, ProblemError> sort_of(const ServerState& state, const ServerRequest& request)
 {
     const std::string_view sort = request.param("sort").value_or("name");
@@ -172,8 +152,13 @@ Answer handshake(const ServerState& state, const ServerRequest& request, const d
     w.begin_array();
     if (caller.state == detail::Caller::State::anonymous)
     {
+        // What everyone holds on a server that asks for no token (§ 4.2)
         if (!state.require_auth)
+        {
             w.string("library");
+            if (state.library->offers_cheats())
+                w.string("cheats");
+        }
     }
     else
     {
@@ -188,12 +173,16 @@ Answer handshake(const ServerState& state, const ServerRequest& request, const d
     }
     w.end_object();
     // Per family, the schema it is written in, or 0: `library` and the
-    // families the library offers (titles, changes, sections) for a caller
-    // who may read it, and `pairing` and `signatures` for every caller (§ 4.2,
-    // L-4.2-5) when the server has accounts; nothing else is here yet
+    // families the library offers (titles, changes, sections, homebrew) for a
+    // caller who may read it, `cheats` for one with that scope, and `pairing`
+    // and `signatures` for every caller (§ 4.2, L-4.2-5) when the server has
+    // accounts; nothing else is here yet
     const bool titles   = reads_library && state.library->offers_titles();
     const bool changes  = reads_library && state.library->journal() != nullptr;
     const bool sections = reads_library && state.library->offers_sections();
+    const bool homebrew = reads_library && state.library->offers_homebrew();
+    const bool cheats
+        = !detail::check_scope(state, caller, "cheats").has_value() && state.library->offers_cheats();
     w.key("features");
     w.begin_object();
     constexpr std::array families { std::string_view { "library" }, std::string_view { "titles" },
@@ -206,6 +195,7 @@ Answer handshake(const ServerState& state, const ServerRequest& request, const d
     {
         const bool offered = (family == "library" && reads_library) || (family == "titles" && titles)
             || (family == "changes" && changes) || (family == "sections" && sections)
+            || (family == "homebrew" && homebrew) || (family == "cheats" && cheats)
             || ((family == "pairing" || family == "signatures") && state.accounts != nullptr);
         w.key(family);
         w.number(offered ? known_schema : std::uint64_t { 0 });
@@ -342,45 +332,13 @@ detail::SortKey sort_key(const App& app, std::string_view sort, const Allocator&
 Answer apps_page(const ServerState& state, const ServerRequest& request, std::span<const App* const> items,
     std::string_view scope, std::string_view sort)
 {
-    const auto size = page_size_of(state, request);
-    if (!size)
-        return std::unexpected(size.error());
     Vector<detail::SortKey> keys(state.allocator);
     keys.reserve(items.size());
     for (const App* app : items)
         keys.push_back(sort_key(*app, sort, state.allocator));
-    Vector<std::size_t> order(state.allocator);
-    order.reserve(items.size());
-    for (std::size_t i = 0; i < items.size(); ++i)
-        order.push_back(i);
-    std::ranges::sort(
-        order, [&](std::size_t a, std::size_t b) { return detail::compare(keys[a], keys[b]) < 0; });
-
-    std::size_t from = 0;
-    if (const auto cursor = request.param("cursor"))
-    {
-        auto position = detail::open_cursor(state, *cursor, scope);
-        if (!position)
-            return std::unexpected(std::move(position.error()));
-        if (position->by_id)
-        {
-            const auto found = std::ranges::find_if(
-                order, [&](std::size_t i) { return items[i]->id == position->key.id; });
-            if (found == order.end())
-                return std::unexpected(
-                    detail::gone(state, "Cursor expired: read the list again from its start."));
-            from = static_cast<std::size_t>(found - order.begin()) + 1;
-        }
-        else
-        {
-            // After the item the last page ended with, whether or not it is still there
-            const auto after = std::ranges::partition_point(
-                order, [&](std::size_t i) { return detail::compare(keys[i], position->key) <= 0; });
-            from = static_cast<std::size_t>(after - order.begin());
-        }
-    }
-    const std::size_t count = std::min<std::size_t>(*size, order.size() - from);
-    const bool more         = from + count < order.size();
+    const auto window = detail::page_window(state, request, keys, scope);
+    if (!window)
+        return std::unexpected(window.error());
 
     String out(state.allocator);
     json::Writer w(out);
@@ -389,16 +347,16 @@ Answer apps_page(const ServerState& state, const ServerRequest& request, std::sp
     w.number(known_schema);
     w.key("items");
     w.begin_array();
-    for (std::size_t i = from; i < from + count; ++i)
-        write_app(w, *items[order[i]]);
+    for (std::size_t i = window->from; i < window->from + window->count; ++i)
+        write_app(w, *items[window->order[i]]);
     w.end_array();
     w.key("total");
     w.number(static_cast<std::uint64_t>(items.size()));
     w.key("next");
-    if (more)
-        w.string(detail::seal_cursor(state, scope, keys[order[from + count - 1]]));
-    else
+    if (window->next.empty())
         w.null();
+    else
+        w.string(window->next);
     w.end_object();
     return detail::json_response(state, request, std::move(out));
 }
@@ -763,6 +721,11 @@ struct Route
         title,
         media,
         sections,
+        homebrew_list,
+        homebrew_updates,
+        homebrew,
+        cheats,
+        cheat,
         pairing_start,
         pairing_poll,
     };
@@ -804,6 +767,16 @@ Route route_of(std::string_view rest) noexcept
         return { Route::Kind::media, "GET, HEAD", segments[1] };
     if (count == 1 && segments[0] == "sections")
         return { Route::Kind::sections, "GET, HEAD", {} };
+    if (count == 1 && segments[0] == "homebrew")
+        return { Route::Kind::homebrew_list, "GET, HEAD", {} };
+    if (count == 2 && segments[0] == "homebrew" && segments[1] == "updates")
+        return { Route::Kind::homebrew_updates, "POST", {} };
+    if (count == 2 && segments[0] == "homebrew" && !segments[1].empty())
+        return { Route::Kind::homebrew, "GET, HEAD", segments[1] };
+    if (count == 1 && segments[0] == "cheats")
+        return { Route::Kind::cheats, "GET, HEAD, POST", {} };
+    if (count == 2 && segments[0] == "cheats" && !segments[1].empty())
+        return { Route::Kind::cheat, "GET, HEAD, PUT, DELETE", segments[1] };
     if (count == 1 && segments[0] == "pairing")
         return { Route::Kind::pairing_start, "POST", {} };
     if (count == 2 && segments[0] == "pairing" && !segments[1].empty())
@@ -879,22 +852,40 @@ Answer route(const ServerState& state, const ServerRequest& request)
         case Route::Kind::sections:
             offered = state.library->offers_sections();
             break;
+        case Route::Kind::homebrew_list:
+        case Route::Kind::homebrew_updates:
+        case Route::Kind::homebrew:
+            offered = state.library->offers_homebrew();
+            break;
+        case Route::Kind::cheats:
+        case Route::Kind::cheat:
+            offered = state.library->offers_cheats();
+            break;
         default:
             break;
     }
     if (!offered)
         return std::unexpected(detail::not_found(state, "This server does not offer it."));
+    // A server that takes no cheat set writes answers 405 to a write (§ 10)
+    const bool cheat_route = chosen.kind == Route::Kind::cheats || chosen.kind == Route::Kind::cheat;
+    const std::string_view allowed
+        = cheat_route && !state.library->writes_cheats() ? std::string_view { "GET, HEAD" } : chosen.allowed;
     const auto caller = detail::identify(state, request);
     if (!caller)
         return std::unexpected(caller.error());
     if (auto refused = detail::check_request_signature(state, request, *caller))
         return std::unexpected(std::move(*refused));
-    if (!takes(chosen.allowed, request.method))
-        return std::unexpected(detail::method_not_allowed(state, chosen.allowed));
+    if (!takes(allowed, request.method))
+        return std::unexpected(detail::method_not_allowed(state, allowed));
     if (!pairing)
     {
-        // Whoever reaches the server may ask to pair; the library asks for its scope (§ 5.1)
-        if (auto refused = detail::check_library(state, *caller))
+        // Whoever reaches the server may ask to pair; the library asks for its scope (§ 5.1), the
+        // cheat sets for theirs (writing: another)
+        const bool reading           = request.method == "GET" || request.method == "HEAD";
+        const std::string_view scope = cheat_route
+            ? (reading ? std::string_view { "cheats" } : std::string_view { "cheats.write" })
+            : std::string_view { "library" };
+        if (auto refused = detail::check_scope(state, *caller, scope))
             return std::unexpected(std::move(*refused));
     }
     switch (chosen.kind)
@@ -917,6 +908,19 @@ Answer route(const ServerState& state, const ServerRequest& request)
             return media_route(state, request, chosen.name);
         case Route::Kind::sections:
             return detail::sections_route(state, request);
+        case Route::Kind::homebrew_list:
+            return detail::homebrew_list_route(state, request);
+        case Route::Kind::homebrew_updates:
+            return detail::homebrew_updates_route(state, request);
+        case Route::Kind::homebrew:
+            return detail::homebrew_route(state, request, chosen.name);
+        case Route::Kind::cheats:
+            return request.method == "POST" ? detail::cheat_post_route(state, request)
+                                            : detail::cheats_route(state, request);
+        case Route::Kind::cheat:
+            if (request.method == "PUT" || request.method == "DELETE")
+                return detail::cheat_write_route(state, request, chosen.name);
+            return detail::cheat_text_route(state, request, chosen.name);
         case Route::Kind::pairing_start:
             return detail::pairing_start(state, request);
         case Route::Kind::pairing_poll:
@@ -943,6 +947,11 @@ void write_app_json(json::Writer& w, const App& app)
     write_app(w, app);
 }
 
+Answer serve_library_file(const ServerState& state, const ServerRequest& request, const LibraryFile& file)
+{
+    return serve_file(state, request, file);
+}
+
 String number_text(std::uint64_t value, const Allocator& allocator)
 {
     std::array<char, 24> text {};
@@ -951,17 +960,26 @@ String number_text(std::uint64_t value, const Allocator& allocator)
 }
 
 std::expected<RequestDocument, ProblemError> request_document(
-    const ServerState& state, const ServerRequest& request)
+    const ServerState& state, const ServerRequest& request, std::size_t limit)
 {
-    if (request.body.size() > body_limit)
-        return std::unexpected(make_problem(state, 413, Code::too_large, "At most 1048576 bytes here."));
+    if (limit == 0)
+        limit = body_limit;
+    if (request.body.size() > limit)
+    {
+        String why("At most ", state.allocator);
+        why.append(number_text(limit, state.allocator));
+        why.append(" bytes here.");
+        return std::unexpected(make_problem(state, 413, Code::too_large, why));
+    }
     if (!is_json_media_type(request.header("Content-Type").value_or(std::string_view {})))
         return std::unexpected(bad_request(state, "The body is application/json."));
     RequestDocument out;
     out.text = std::string_view(reinterpret_cast<const char*>(request.body.data()), request.body.size());
-    out.options.limits.max_document = body_limit;
-    out.options.memory              = state.allocator.resource();
-    const auto document             = json::parse(out.text, out.options.limits, state.allocator.resource());
+    out.options.limits.max_document = limit;
+    if (limit > body_limit)
+        out.options.limits.max_string = limit;
+    out.options.memory  = state.allocator.resource();
+    const auto document = json::parse(out.text, out.options.limits, state.allocator.resource());
     if (!document || !is_i_json(document->root()))
         return std::unexpected(bad_request(state, "The body is not a document this server can read."));
     const json::Value* schema = document->root().is_object() ? document->root().find("schema") : nullptr;
