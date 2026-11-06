@@ -3,6 +3,7 @@
 package client_test
 
 import (
+	"archive/zip"
 	"bufio"
 	"bytes"
 	"context"
@@ -646,6 +647,131 @@ func TestReferenceAdmin(t *testing.T) {
 		}
 		if _, err := admin.AdminCompleteRequest(ctx, req.ID); !errors.Is(err, lantern.ErrConflict) {
 			t.Errorf("a request no longer open: %v", err)
+		}
+	})
+}
+
+// failingAt reads from data and fails once past a limit, as a connection that is lost.
+type failingAt struct {
+	data  []byte
+	limit int64
+}
+
+func (f *failingAt) ReadAt(p []byte, off int64) (int, error) {
+	if off+int64(len(p)) > f.limit {
+		return 0, errors.New("the device went to sleep")
+	}
+	return copy(p, f.data[off:]), nil
+}
+
+func zipOf(t *testing.T, size int) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	w := zip.NewWriter(&b)
+	f, err := w.CreateHeader(&zip.FileHeader{Name: "save.dat", Method: zip.Store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rnd := make([]byte, size)
+	for i := range rnd {
+		rnd[i] = byte(i*7 + i>>8)
+	}
+	f.Write(rnd)
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
+func TestReferenceSaves(t *testing.T) {
+	ref := startReference(t)
+	ctx := context.Background()
+	key, err := lantern.SigningKeyFromBase64(ref.AdminSeed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := client.New(ref.URL, client.Options{Token: ref.AdminTok, Key: key, Platform: "switch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	title := "0100ABCD00010000"
+	version := int64(196608)
+	meta := client.SaveMeta{Kind: "account", GameVersionCode: &version, Profile: "Léa", Note: "Chapter 4"}
+
+	t.Run("one request", func(t *testing.T) {
+		archive := zipOf(t, 5000)
+		save, err := c.UploadSave(ctx, title, meta, archive)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if save.Size != int64(len(archive)) || save.SHA256 != lantern.SHA256Hex(archive) || save.Profile == nil || *save.Profile != "Léa" {
+			t.Fatalf("%+v", save)
+		}
+		list, err := c.Saves(ctx, "", title)
+		if err != nil || len(list.Saves) == 0 || list.Saves[0].SaveID != save.SaveID {
+			t.Fatalf("the newest is not first: %+v %v", list, err)
+		}
+		f, err := c.OpenSave(ctx, save)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := io.ReadAll(f)
+		f.Close()
+		if err != nil || !bytes.Equal(got, archive) {
+			t.Errorf("the archive came back different: %v", err)
+		}
+		dest := filepath.Join(t.TempDir(), "save.zip")
+		if err := c.DownloadSave(ctx, save, dest, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.DeleteSave(ctx, save); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.DeleteSave(ctx, save); !errors.Is(err, lantern.ErrNotFound) {
+			t.Errorf("deleted twice: %v", err)
+		}
+	})
+	t.Run("resumable, and resumed", func(t *testing.T) {
+		archive := zipOf(t, 3<<20)
+		up, err := c.StartSaveUpload(ctx, title, meta, int64(len(archive)), lantern.SHA256Hex(archive))
+		if err != nil {
+			t.Fatal(err)
+		}
+		cut := up.ChunkSize + up.ChunkSize/2
+		if _, err := c.ContinueSaveUpload(ctx, up.Upload, &failingAt{archive, cut}, nil); err == nil {
+			t.Fatal("an upload went through a lost connection")
+		}
+		state, err := c.SaveUploadState(ctx, up.Upload)
+		if err != nil || state.Offset == 0 || state.Offset >= state.Length {
+			t.Fatalf("where to resume: %+v %v", state, err)
+		}
+		save, err := c.ContinueSaveUpload(ctx, up.Upload, bytes.NewReader(archive), nil)
+		if err != nil || save.SHA256 != lantern.SHA256Hex(archive) {
+			t.Fatalf("%+v %v", save, err)
+		}
+		c.DeleteSave(ctx, save)
+	})
+	t.Run("an archive that is not the one announced", func(t *testing.T) {
+		archive := zipOf(t, 2000)
+		up, err := c.StartSaveUpload(ctx, title, meta, int64(len(archive)), strings.Repeat("0", 64))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.ContinueSaveUpload(ctx, up.Upload, bytes.NewReader(archive), nil); err == nil {
+			t.Error("an archive of another SHA-256 was kept")
+		}
+	})
+	t.Run("abandoned", func(t *testing.T) {
+		archive := zipOf(t, 2000)
+		up, err := c.StartSaveUpload(ctx, title, meta, int64(len(archive)), lantern.SHA256Hex(archive))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.AbandonSaveUpload(ctx, up.Upload); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.SaveUploadState(ctx, up.Upload); err == nil {
+			t.Error("an abandoned upload answers")
 		}
 	})
 }
