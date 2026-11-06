@@ -13,6 +13,13 @@
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
     },
+    "served_platform": {
+      "description": "The platform of what a server serves (SPEC.md § 4.3): any platform's name but web, which has nothing to install in this version (Annex A.7).",
+      "$ref": "common.json#/$defs/platform",
+      "not": {
+        "const": "web"
+      }
+    },
     "id": {
       "description": "A title or app id (SPEC.md § 6.1): opaque, of the form its platform's profile gives (Annex A), compared exactly.",
       "type": "string",
@@ -122,7 +129,7 @@
           "$ref": "common.json#/$defs/opaque"
         },
         "platform": {
-          "$ref": "common.json#/$defs/platform"
+          "$ref": "common.json#/$defs/served_platform"
         },
         "title_id": {
           "$ref": "common.json#/$defs/id"
@@ -168,6 +175,10 @@
         },
         "mirrors": {
           "$ref": "common.json#/$defs/mirrors"
+        },
+        "chunks": {
+          "$ref": "common.json#/$defs/chunks_ref",
+          "description": "Its chunk index, for a differential update (SPEC.md § 22), when the server cut the file."
         }
       },
       "required": [
@@ -353,7 +364,7 @@
       "type": "object",
       "properties": {
         "platform": {
-          "$ref": "common.json#/$defs/platform"
+          "$ref": "common.json#/$defs/served_platform"
         },
         "title_id": {
           "$ref": "common.json#/$defs/id"
@@ -636,6 +647,10 @@
         },
         "mirrors": {
           "$ref": "common.json#/$defs/mirrors"
+        },
+        "chunks": {
+          "$ref": "common.json#/$defs/chunks_ref",
+          "description": "Its chunk index, for a differential update (SPEC.md § 22), when the server cut the file."
         }
       },
       "required": [
@@ -685,7 +700,7 @@
           "maxLength": 128
         },
         "platform": {
-          "$ref": "common.json#/$defs/platform"
+          "$ref": "common.json#/$defs/served_platform"
         },
         "kind": {
           "description": "What it is (SPEC.md § 8.1): app, game, port, emulator, tool, overlay, sysmodule or theme. A reader reads one it does not know as app.",
@@ -912,7 +927,7 @@
       "type": "object",
       "properties": {
         "platform": {
-          "$ref": "common.json#/$defs/platform"
+          "$ref": "common.json#/$defs/served_platform"
         },
         "title_id": {
           "$ref": "common.json#/$defs/id"
@@ -992,7 +1007,7 @@
           "$ref": "common.json#/$defs/opaque"
         },
         "platform": {
-          "$ref": "common.json#/$defs/platform"
+          "$ref": "common.json#/$defs/served_platform"
         },
         "title_id": {
           "$ref": "common.json#/$defs/id"
@@ -1124,7 +1139,7 @@
           "$ref": "common.json#/$defs/opaque"
         },
         "platform": {
-          "$ref": "common.json#/$defs/platform"
+          "$ref": "common.json#/$defs/served_platform"
         },
         "title_id": {
           "$ref": "common.json#/$defs/id"
@@ -2149,6 +2164,28 @@
       "items": {
         "$ref": "common.json#/$defs/mirror"
       }
+    },
+    "chunks_ref": {
+      "description": "Where a file's chunk index is (SPEC.md § 22.1): its url (a route of the server, or a path relative to a static library's root), and the index's size and SHA-256, which a client checks before it uses it.",
+      "type": "object",
+      "properties": {
+        "url": {
+          "$ref": "common.json#/$defs/url"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8388608
+        },
+        "sha256": {
+          "$ref": "common.json#/$defs/sha256"
+        }
+      },
+      "required": [
+        "url",
+        "size",
+        "sha256"
+      ]
     },
     "key_id": {
       "description": "A save key's id (SPEC.md § 9.4): the first 8 bytes of HKDF-SHA-256(key, info \"lantern-save-e2e-1 key id\"), 16 lower-case hex digits.",

@@ -443,6 +443,7 @@ export interface App {
   atlas?: string;
   installed_size?: number;
   mirrors?: Mirror[];
+  chunks?: ChunksRef;
 }
 
 export function readApp(value: unknown, where = "App"): App {
@@ -463,6 +464,7 @@ export function readApp(value: unknown, where = "App"): App {
   m.opt(o, "atlas", where, m.str);
   m.opt(o, "installed_size", where, m.int);
   m.opt(o, "mirrors", where, m.list(readMirror));
+  m.opt(o, "chunks", where, readChunksRef);
   return o as unknown as App;
 }
 
@@ -479,6 +481,25 @@ export function readMirror(value: unknown, where = "Mirror"): Mirror {
   const o = m.obj(value, where);
   m.req(o, "url", where, m.str);
   return o as unknown as Mirror;
+}
+
+/**
+ * Where a file's chunk index is (SPEC.md § 22.1): its url (a route of the server, or a path relative to a static library's root), and the index's size and SHA-256, which a client checks before it uses it.
+ *
+ * From common.json#/$defs/chunks_ref.
+ */
+export interface ChunksRef {
+  url: string;
+  size: number;
+  sha256: string;
+}
+
+export function readChunksRef(value: unknown, where = "ChunksRef"): ChunksRef {
+  const o = m.obj(value, where);
+  m.req(o, "url", where, m.str);
+  m.req(o, "size", where, m.int);
+  m.req(o, "sha256", where, m.str);
+  return o as unknown as ChunksRef;
 }
 
 /**
@@ -613,6 +634,46 @@ export function readCheatSets(value: unknown, where = "CheatSets"): CheatSets {
   m.req(o, "schema", where, m.int);
   m.req(o, "cheats", where, m.list(readCheatSet));
   return o as unknown as CheatSets;
+}
+
+/**
+ * GET <base>/v1/chunks/sha256/{hex}, or a static library's v1/chunks/sha256/<hex>.json (SPEC.md § 22.1): the file whose SHA-256 and size it gives, cut into chunks by the chunker it names, each chunk its size and SHA-256, in the file's order.
+ *
+ * From chunk-index.
+ */
+export interface ChunkIndex {
+  schema: number;
+  sha256: string;
+  size: number;
+  chunker: ChunkIndexChunker;
+  chunks: unknown[][];
+}
+
+export function readChunkIndex(value: unknown, where = "ChunkIndex"): ChunkIndex {
+  const o = m.obj(value, where);
+  m.req(o, "schema", where, m.int);
+  m.req(o, "sha256", where, m.str);
+  m.req(o, "size", where, m.int);
+  m.req(o, "chunker", where, readChunkIndexChunker);
+  m.req(o, "chunks", where, m.list(m.list(m.any)));
+  return o as unknown as ChunkIndex;
+}
+
+/**
+ * How the file was cut (SPEC.md § 22.2): lantern-cdc-1, with a size from 64 KiB to 4 MiB, a power of two; a chunk is at most 4 times it.
+ *
+ * From chunk-index/chunker.
+ */
+export interface ChunkIndexChunker {
+  alg: string;
+  size: number;
+}
+
+export function readChunkIndexChunker(value: unknown, where = "ChunkIndexChunker"): ChunkIndexChunker {
+  const o = m.obj(value, where);
+  m.req(o, "alg", where, m.str);
+  m.req(o, "size", where, m.int);
+  return o as unknown as ChunkIndexChunker;
 }
 
 /**
@@ -1024,6 +1085,7 @@ export interface Package {
   signer_sha256?: string;
   installed_size?: number;
   mirrors?: Mirror[];
+  chunks?: ChunksRef;
 }
 
 export function readPackage(value: unknown, where = "Package"): Package {
@@ -1040,6 +1102,7 @@ export function readPackage(value: unknown, where = "Package"): Package {
   m.opt(o, "signer_sha256", where, m.str);
   m.opt(o, "installed_size", where, m.int);
   m.opt(o, "mirrors", where, m.list(readMirror));
+  m.opt(o, "chunks", where, readChunksRef);
   return o as unknown as Package;
 }
 
@@ -2041,6 +2104,7 @@ export interface Documents {
   "cheat": CheatSet;
   "cheat-write": CheatWrite;
   "cheats": CheatSets;
+  "chunk-index": ChunkIndex;
   "discovery": Discovery;
   "discovery-peer": DiscoveryPeer;
   "discovery-request": DiscoveryRequest;
@@ -2090,6 +2154,7 @@ export const DOCUMENTS: { readonly [K in keyof Documents]: m.Check<Documents[K]>
   "cheat": readCheatSet,
   "cheat-write": readCheatWrite,
   "cheats": readCheatSets,
+  "chunk-index": readChunkIndex,
   "discovery": readDiscovery,
   "discovery-peer": readDiscoveryPeer,
   "discovery-request": readDiscoveryRequest,

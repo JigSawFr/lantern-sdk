@@ -3,10 +3,10 @@
 The C++23 client library of the [Lantern protocol](https://lantern.boreale.dev/?utm_source=github&utm_medium=readme),
 for the consoles and the apps built with [Aurore](https://github.com/JigSawFr/Aurore):
 `Lantern::lantern`, and two optional TLS transports, `Lantern::curl` and
-`Lantern::mbedtls`. It follows the specification's **draft 0.6**
+`Lantern::mbedtls`. It follows the specification's **draft 0.7**
 (`spec/`, pinned as a submodule of this repository).
 
-**Status: draft 0.6, the client whole.** Pairing with a device key, signed
+**Status: draft 0.7, the client whole.** Pairing with a device key, signed
 requests, invitations, the routes that write and the administration API,
 over TLS with the server's key pinned; events, grants with mirrors and
 peers, sync, end-to-end encrypted saves and static libraries. Of a server,

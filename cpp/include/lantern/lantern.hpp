@@ -1,4 +1,4 @@
-// Lantern: the client library of the Lantern protocol (draft 0.6).
+// Lantern: the client library of the Lantern protocol (draft 0.7).
 // Everything at once; each header can also be included alone.
 #pragma once
 
@@ -38,6 +38,6 @@ namespace lantern
 {
 
 // The specification's draft this version follows.
-inline constexpr std::string_view spec_draft = "0.6";
+inline constexpr std::string_view spec_draft = "0.7";
 
 } // namespace lantern
