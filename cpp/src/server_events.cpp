@@ -272,10 +272,10 @@ Snapshot snapshot(const ServerState& state)
 class StreamBody final : public EventStream
 {
   public:
-    StreamBody(std::shared_ptr<const ServerState> state, const Caller& caller, std::string_view platform,
+    StreamBody(std::shared_ptr<const ServerState> state, Caller caller, std::string_view platform,
         std::string_view authorization, std::string_view slot, std::uint64_t after, std::string_view ready_id)
         : state_(std::move(state))
-        , caller_(caller)
+        , caller_(std::move(caller))
         , platform_(platform, state_->allocator)
         , authorization_(authorization, state_->allocator)
         , slot_(slot, state_->allocator)
@@ -319,7 +319,7 @@ class StreamBody final : public EventStream
             // L-18.2-2: the client connects again after `retry` seconds at least
             const JournalPosition now = journal_now(*state_);
             const String id           = detail::seal_event_since(*state_, now.epoch, now.position, hub.seq);
-            String data("{\"schema\":1,\"retry\":", state_->allocator);
+            String data(R"({"schema":1,"retry":)", state_->allocator);
             append_number(data, std::max<std::uint64_t>(1, retry_ms / 1000));
             data.push_back('}');
             append_event(out, id, "shutdown", data);
