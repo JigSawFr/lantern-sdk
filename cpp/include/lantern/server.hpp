@@ -897,6 +897,12 @@ struct ServerOptions
     // proxy). `hsts_max_age`: 15552000 seconds (six months) or more.
     bool hsts                  = false;
     std::uint32_t hsts_max_age = 31536000;
+    // JSON answers of `compression_min` bytes or more go out as gzip
+    // (`Content-Encoding`, `Vary: Accept-Encoding` and an ETag of their own,
+    // § 2.1) to a client whose Accept-Encoding allows it. Never a file, a
+    // stream, a range or a 304.
+    bool compression              = true;
+    std::uint32_t compression_min = 256;
     // The largest page, 1 to 1000 (§ 13); `limits.page_size` says it.
     std::uint32_t page_limit        = 500;
     std::uint32_t default_page_size = 100;

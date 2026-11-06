@@ -155,11 +155,24 @@ for peers and the sync: see
 ## Server core
 
 `lantern/server.hpp`: what answers the protocol's routes, with no HTTP
-framework and no socket of its own, as `PeerGate` is for a peer. Nine slices so
+framework and no socket of its own, as `PeerGate` is for a peer. Ten slices so
 far: **Lantern Core, read-only**, **tokens, pairing and signatures**, the
 library's **changes, sections, titles, homebrew and cheat sets**, the
 **save backups**, the **requests and the administration**, the **events**, and the
-**peers and sync**, and the **chunk indexes** of differential updates.
+**peers and sync**, the **chunk indexes** of differential updates, and the
+**compression** of JSON answers.
+
+- gzip (§ 2.1, L-2.1-1 to L-2.1-3): a JSON answer of `compression_min` bytes
+  (256) or more goes out with `Content-Encoding: gzip` when the client's
+  `Accept-Encoding` allows it (q-values, `*` and `identity` read as RFC 9110
+  says; `accepts_gzip()`), written by `gzip()` (`lantern/deflate.hpp`: LZ77 over
+  a 32 KiB window and the fixed Huffman code, CRC-32, no zlib, the same bytes
+  for the same input, read back by `gunzip()`). It carries `Vary:
+  Accept-Encoding` and an ETag of its own (`"tag-gzip"`, which answers
+  If-None-Match; a HEAD says what the GET would). A file, a range, a stream, a
+  304 and an answer that would not be smaller are never encoded.
+  `ServerOptions::compression` turns it off. `zstd` and `br` are not offered,
+  so the suite's `compression.json` check warns.
 
 - the handshake at `/.well-known/lantern` and `<base>/v1` (§ 4.2), which lists
   only what the server serves: `features` says `library`, `titles`, `changes`,
@@ -943,8 +956,9 @@ if (done)
 - **Compression** (§ 2.1) beyond gzip: the client asks for `gzip` on its JSON
   calls (never on a file or a stream) and reads it with `gunzip()`
   (`lantern/inflate.hpp`, no dependency, the limits of § 13 applying once
-  decompressed); `zstd` and `br` need a decoder of their own, which a
-  platform brings by an adapter later.
+  decompressed), the server writes it with `gzip()` (`lantern/deflate.hpp`);
+  `zstd` and `br` need a coder of their own, which a platform brings by an
+  adapter later.
 - **The mbedTLS adapter's connections**: one per request; keeping them is
   for a later version.
 - **Annex B's retries** (backoff with jitter, `Retry-After` as a floor):

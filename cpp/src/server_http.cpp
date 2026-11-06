@@ -4,8 +4,10 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <span>
 #include <system_error>
 
+#include <lantern/deflate.hpp>
 #include <lantern/hkdf.hpp>
 #include <lantern/json.hpp>
 #include <lantern/server.hpp>
@@ -484,12 +486,22 @@ ServerResponse json_response(const ServerState& state, const ServerRequest& requ
     caching_headers(response.headers, request);
     response.headers.set("Vary", "Authorization, Lantern-Platform, Accept-Language, Accept-Encoding");
     response.headers.set("Content-Type", "application/json");
+    // gzip (§ 2.1), when the server offers it, the body is not small and the client allows it
+    bool zip = false;
+    if (state.compression && body.size() >= state.compression_min)
+    {
+        const auto accepted = request.header("Accept-Encoding");
+        zip                 = accepted && accepts_gzip(*accepted);
+    }
     if (status == 200 && validators && (request.method == "GET" || request.method == "HEAD"))
     {
         const auto tag = short_hex(Sha256::of(std::string_view(body)));
         String etag(state.allocator);
         etag.push_back('"');
         etag.append(tag.data(), tag.size());
+        // not the uncompressed one's (L-2.1-3)
+        if (zip)
+            etag.append("-gzip");
         etag.push_back('"');
         response.headers.set("ETag", etag);
         if (const auto given = request.header("If-None-Match"); given && matches(*given, etag))
@@ -498,6 +510,16 @@ ServerResponse json_response(const ServerState& state, const ServerRequest& requ
             response.headers.erase("Content-Type");
             response.headers.set("Content-Length", "0");
             return response;
+        }
+    }
+    if (zip)
+    {
+        String packed(state.allocator);
+        gzip(std::as_bytes(std::span(body.data(), body.size())), packed);
+        if (packed.size() < body.size())
+        {
+            body = std::move(packed);
+            response.headers.set("Content-Encoding", "gzip");
         }
     }
     set_length(response.headers, body.size());

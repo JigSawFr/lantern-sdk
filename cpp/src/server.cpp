@@ -1309,6 +1309,8 @@ Result<Server> Server::create(Library& library, const ServerOptions& options, Ra
         state->cors_any = state->cors_any || origin == "*";
     }
     state->hsts              = options.hsts;
+    state->compression       = options.compression;
+    state->compression_min   = options.compression_min;
     state->hsts_max_age      = options.hsts_max_age;
     state->page_limit        = options.page_limit;
     state->default_page_size = options.default_page_size;
