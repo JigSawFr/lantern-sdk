@@ -65,8 +65,7 @@ Result<void> check_draft(const AppDraft& draft)
     for (std::size_t i = 0; i < draft.requires_.size(); ++i)
     {
         if (!is_requires_token(draft.requires_[i])
-            || std::ranges::find(draft.requires_.first(i), draft.requires_[i])
-                != draft.requires_.begin() + static_cast<std::ptrdiff_t>(i))
+            || std::ranges::contains(draft.requires_.first(i), draft.requires_[i]))
             return fail(
                 Category::usage, "requires lists each token once: lower-case letters, digits and '-'");
     }
