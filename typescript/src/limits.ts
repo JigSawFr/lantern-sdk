@@ -221,3 +221,8 @@ export function printable(text: string, limit: number = STRING): string {
   }
   return clip(kept, limit);
 }
+
+/** Chunks in a chunk index (SPEC.md § 13, § 22.1). */
+export const CHUNKS = 100000;
+/** A chunk index's bytes (SPEC.md § 13, § 22.1). */
+export const CHUNK_INDEX = 8 << 20;

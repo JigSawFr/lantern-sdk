@@ -13,6 +13,8 @@
  */
 
 import { DocumentError, LanternError, SCHEMA } from "./base.ts";
+import * as chunks from "./chunks.ts";
+import { type DeltaReport, deltaDownload } from "./client/delta.ts";
 import { type DownloadSink, MemorySink, Verifier } from "./client/download.ts";
 import { schemaOf } from "./documents.ts";
 import { InsecureTransport, NewerSchema, TransportError, UnexpectedResponse } from "./errors.ts";
@@ -21,6 +23,7 @@ import type {
   AppsPage,
   CheatSet,
   CheatSets,
+  ChunksRef,
   Handshake,
   Homebrew,
   HomebrewPage,
@@ -53,7 +56,17 @@ export const NOT_STATIC = [
 ] as const;
 
 /** The routes a static library has a file for. */
-export type LayoutKind = "handshake" | "apps" | "titles" | "homebrew" | "title" | "entry" | "cheats" | "cheat" | "blob";
+export type LayoutKind =
+  | "handshake"
+  | "apps"
+  | "titles"
+  | "homebrew"
+  | "title"
+  | "entry"
+  | "cheats"
+  | "cheat"
+  | "blob"
+  | "chunks";
 
 /** The file of a read route, relative to the root (SPEC.md § 21.1). */
 export function layoutPath(kind: LayoutKind, options: { platform?: string; id?: string; page?: number } = {}): string {
@@ -81,6 +94,10 @@ export function layoutPath(kind: LayoutKind, options: { platform?: string; id?: 
     case "blob":
       if (id === undefined || !/^[0-9a-f]{64}$/.test(id)) throw new RangeError("a blob is named by its SHA-256");
       return `v1/blobs/sha256/${id}`;
+    case "chunks":
+      if (id === undefined || !/^[0-9a-f]{64}$/.test(id))
+        throw new RangeError("a chunk index is named by its file's SHA-256");
+      return `v1/chunks/sha256/${id}.json`;
   }
 }
 
@@ -103,6 +120,11 @@ export interface StaticSource {
   read(rel: string, limit: number): Promise<Uint8Array | undefined>;
   /** A file's bytes as a stream; undefined when it is not there. */
   stream(rel: string): Promise<AsyncIterable<Uint8Array> | undefined>;
+  /**
+   * The bytes `start` to `end` (inclusive) of a file, exactly those; undefined when it is not there. Optional: a
+   * source without it reads a file whole (SPEC.md § 22.3, L-22.3-4).
+   */
+  range?(rel: string, start: number, end: number): Promise<Uint8Array | undefined>;
 }
 
 /**
@@ -127,7 +149,7 @@ export class HttpStaticSource implements StaticSource {
     this.timeout = options.timeout ?? 30;
   }
 
-  async #get(rel: string): Promise<Response | undefined> {
+  async #get(rel: string, headers?: Record<string, string>, ok = 200): Promise<Response | undefined> {
     if (!relativeOk(rel)) throw new DocumentError(`${JSON.stringify(rel.slice(0, 80))} is not a path below the root`);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
@@ -137,6 +159,7 @@ export class HttpStaticSource implements StaticSource {
         redirect: "manual",
         credentials: "omit",
         signal: controller.signal,
+        ...(headers !== undefined ? { headers } : {}),
       });
     } catch (e) {
       throw new TransportError(`${rel}: ${e instanceof Error ? e.message : String(e)}`, { cause: e });
@@ -147,7 +170,7 @@ export class HttpStaticSource implements StaticSource {
       await response.body?.cancel();
       return undefined;
     }
-    if (response.status !== 200) {
+    if (response.status !== ok) {
       await response.body?.cancel();
       throw new UnexpectedResponse(`${rel}: status ${response.status}`, response.status);
     }
@@ -176,6 +199,27 @@ export class HttpStaticSource implements StaticSource {
   async stream(rel: string): Promise<AsyncIterable<Uint8Array> | undefined> {
     const response = await this.#get(rel);
     return response === undefined ? undefined : streamOf(response);
+  }
+
+  /** A range of a file: a 206 whose Content-Range is the one asked, read up to its length and no more (L-22.3-3). */
+  async range(rel: string, start: number, end: number): Promise<Uint8Array | undefined> {
+    const response = await this.#get(rel, { Range: `bytes=${start}-${end}` }, 206);
+    if (response === undefined) return undefined;
+    const m = /^\s*bytes\s+(\d+)-(\d+)\/(\d+)\s*$/.exec(response.headers.get("Content-Range") ?? "");
+    if (m === null || Number(m[1]) !== start || Number(m[2]) !== end) {
+      await response.body?.cancel();
+      throw new UnexpectedResponse(`${rel}: Content-Range is not bytes ${start}-${end}`, 206);
+    }
+    const length = end - start + 1;
+    const out = new Uint8Array(length);
+    let at = 0;
+    for await (const chunk of streamOf(response)) {
+      if (at + chunk.length > length) throw new DocumentError(`more than the ${length} bytes asked for`, rel);
+      out.set(chunk, at);
+      at += chunk.length;
+    }
+    if (at !== length) throw new DocumentError(`${at} bytes for a range of ${length}`, rel);
+    return out;
   }
 }
 
@@ -415,5 +459,66 @@ export class StaticLibrary {
   /** An app's file. */
   downloadApp(app: App, sink: DownloadSink): Promise<void> {
     return this.download(app, sink);
+  }
+
+  /**
+   * A file's chunk index (SPEC.md § 22.1, § 21.1), its path read below the root and checked as a server's is
+   * (L-22.3-1). Undefined when the file carries none, the index is not there or cannot be used.
+   */
+  async chunkIndex(doc: {
+    sha256: string;
+    size: number;
+    chunks?: ChunksRef | undefined;
+  }): Promise<chunks.ChunkList | undefined> {
+    const raw = await this.#indexBytes(doc);
+    if (raw === undefined || doc.chunks === undefined) return undefined;
+    try {
+      return chunks.readChunkIndex(raw, doc.chunks, doc.sha256, doc.size, { hash: this.hash });
+    } catch (e) {
+      if (e instanceof chunks.UnusableIndex) return undefined;
+      throw e;
+    }
+  }
+
+  async #indexBytes(doc: { chunks?: ChunksRef | undefined }): Promise<Uint8Array | undefined> {
+    const ref = doc.chunks;
+    if (ref === undefined || !relativeOk(ref.url) || !Number.isInteger(ref.size) || ref.size < 0) return undefined;
+    if (ref.size > chunks.INDEX_LIMIT) return undefined;
+    return this.source.read(ref.url, ref.size);
+  }
+
+  /**
+   * A file with the bytes the caller holds (its `seeds`) and only the rest read as ranges (SPEC.md § 22.3), when
+   * the source gives ranges: the same checks as LanternClient.downloadWithSeeds(), and the file read whole on
+   * any failure (L-22.3-4).
+   */
+  async downloadWithSeeds(
+    doc: { file: string; sha256: string; size: number; chunks?: ChunksRef | undefined },
+    sink: DownloadSink,
+    seeds: readonly Uint8Array[],
+    options: { progress?: (done: number, total: number) => void; onDelta?: (report: DeltaReport) => void } = {},
+  ): Promise<void> {
+    const source = this.source;
+    if (doc.chunks !== undefined && seeds.length > 0 && source.range !== undefined && relativeOk(doc.file)) {
+      const report = await deltaDownload({
+        file: doc,
+        seeds,
+        sink,
+        hash: this.hash,
+        progress: options.progress,
+        readIndex: (ref) => this.#indexBytes({ chunks: ref }),
+        readRange: async (start, end) => {
+          const data = await (source.range as NonNullable<StaticSource["range"]>)(doc.file, start, end);
+          if (data === undefined) throw new UnexpectedResponse(`${doc.file}: not in the library`, 404);
+          return data;
+        },
+      });
+      if (report !== undefined) {
+        options.onDelta?.(report);
+        return;
+      }
+      await sink.reset();
+    }
+    await this.download(doc, sink);
   }
 }

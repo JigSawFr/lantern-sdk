@@ -108,6 +108,9 @@ describe("static-layout.json (SPEC.md § 21.1)", () => {
     "A title's cheat sets": layoutPath("cheats", { platform: "switch", id: "0100ABCD00010000" }),
     "A cheat set's text": layoutPath("cheat", { id: "cs_Jt3Vx0" }),
     "A file": layoutPath("blob", { id: "3a7bd3e2b4c1f0a9e8d7c6b5a4938271605f4e3d2c1b0a9f8e7d6c5b4a392817" }),
+    "A file's chunk index": layoutPath("chunks", {
+      id: "3a7bd3e2b4c1f0a9e8d7c6b5a4938271605f4e3d2c1b0a9f8e7d6c5b4a392817",
+    }),
   };
   test("every route of the vectors is known here", () => {
     assert.deepEqual(v.routes.map((r) => r.name).sort(), Object.keys(mine).sort());

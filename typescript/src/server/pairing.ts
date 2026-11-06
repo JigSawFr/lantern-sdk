@@ -204,9 +204,11 @@ export class PairingDesk {
     if (entry === undefined)
       throw new HttpProblem(410, "gone", "Refused, expired, already collected or unknown.", { title: "Gone" });
     const now = this.clock();
+    // `interval` counts from the last poll answered, never from one refused, and Retry-After is the time left
+    // until then: a client that waits it is answered (SPEC.md § 5.2, L-5.2-15).
     if (entry.polled !== undefined && now - entry.polled < entry.interval * 0.8) {
-      entry.polled = now;
-      throw slowDown(entry.interval, `Poll every ${entry.interval} seconds.`);
+      const left = entry.interval * 0.8 - (now - entry.polled);
+      throw slowDown(left, `Poll every ${entry.interval} seconds.`);
     }
     entry.polled = now;
     if (entry.state === "refused") {

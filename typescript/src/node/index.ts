@@ -36,26 +36,12 @@ import type { FileHashes } from "../homebrew.ts";
 import { DATAGRAM, loadJson } from "../limits.ts";
 import type { Peer } from "../peers.ts";
 import { type KeyPins, readServerRecord, type ServerRecord, type ServerStore } from "../pinning.ts";
-import type { Hasher, HasherFactory } from "../sha256.ts";
+import { nodeSha256 } from "./hash.ts";
 import { NodeTransport, type NodeTransportOptions } from "./transport.ts";
 
 export { NodeTransport, type NodeTransportOptions, socketSpki } from "./transport.ts";
 
-/** SHA-256 by node:crypto. */
-export const nodeSha256: HasherFactory = (): Hasher => {
-  const h = createHash("sha256");
-  let size = 0;
-  return {
-    update(data: Uint8Array): void {
-      h.update(data);
-      size += data.length;
-    },
-    digest: () => new Uint8Array(h.digest()),
-    get size() {
-      return size;
-    },
-  };
-};
+export { nodeSha256 };
 
 /** The hashes a client compares a port's data file with, for launchCheck() (SPEC.md § 8.6). */
 export function fileHashes(data: Uint8Array): FileHashes {

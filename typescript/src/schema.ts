@@ -2,7 +2,7 @@
  * Documents checked against the specification's JSON Schemas, without a
  * dependency: the subset of JSON Schema 2020-12 that spec/schemas/v1 uses
  * ($ref, allOf, anyOf, oneOf, not, if/then/else, properties, required,
- * additionalProperties, propertyNames, items, enum, const, pattern, lengths,
+ * additionalProperties, propertyNames, items, prefixItems, enum, const, pattern, lengths,
  * bounds, uniqueItems, and the formats date-time, date and uuid).
  *
  *     import { validate } from "lantern-protocol";
@@ -170,9 +170,13 @@ class Validator {
       out.push(`${path}: more than ${s["maxItems"]} items`);
     if (s["uniqueItems"] === true && new Set(value.map(canonical)).size !== value.length)
       out.push(`${path}: an item twice`);
+    const prefix = Array.isArray(s["prefixItems"]) ? (s["prefixItems"] as Schema[]) : [];
+    prefix.forEach((one, i) => {
+      if (i < value.length) out.push(...this.errors(value[i], one, `${path}[${i}]`, base));
+    });
     if (s["items"] !== undefined) {
       value.forEach((item, i) => {
-        out.push(...this.errors(item, s["items"] as Schema, `${path}[${i}]`, base));
+        if (i >= prefix.length) out.push(...this.errors(item, s["items"] as Schema, `${path}[${i}]`, base));
       });
     }
     return out;

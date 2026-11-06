@@ -3,17 +3,20 @@
  * (https://lantern.boreale.dev/), for a browser and Node. This entry holds
  * nothing of Node's: the client over fetch(), the documents and their checks,
  * signatures, pinning, profiles and homebrew rules, events, grants and peers,
- * sync, encrypted saves and static libraries. `lantern-protocol/node`
+ * sync, encrypted saves, static libraries, canonical JSON and differential updates. `lantern-protocol/node`
  * adds the Node transport that pins keys, files and discovery;
  * `lantern-protocol/server`, the server toolkit.
  */
 
 export * from "./base.ts";
 export * as bytes from "./bytes.ts";
+export { canonicalBytes, canonicalJson } from "./canonical.ts";
 export * as chacha from "./chacha.ts";
+export * as chunks from "./chunks.ts";
 export {
   type AppsOptions,
   type ClientOptions,
+  type DeltaOptions,
   type Deprecation,
   type DownloadOptions,
   type HomebrewOptions,
@@ -26,6 +29,7 @@ export {
   VERSION,
   whatFits,
 } from "./client/client.ts";
+export { type DeltaFile, type DeltaReport, deltaDownload } from "./client/delta.ts";
 export {
   blobSource,
   bytesSource,

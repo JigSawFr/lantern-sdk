@@ -5,7 +5,8 @@
  * included) and, with an Accounts store (MemoryAccounts is one), pairs
  * devices, checks signed requests, redeems invitations, applies rating caps,
  * answers the administration API (deleting accounts included), streams
- * events, signs grants, and keeps sync data, save backups (encrypted ones as
+ * events, signs grants, serves chunk indexes (differential updates, § 22),
+ * answers a browser's page (CORS, § 2.5), and keeps sync data, save backups (encrypted ones as
  * sent; MemorySaveStore, FileSaveStore) and requests (MemoryRequestStore);
  * PeerServer is a console's sharing (§ 19.4). The
  * pieces it is made of (problem+json, cursors, files with ranges and digests,
@@ -67,6 +68,8 @@ export {
   type Authenticate,
   type CheatInit,
   checkHomebrew,
+  DELTAS_MAX,
+  DELTAS_MIN,
   type Journal,
   LIBRARY_FAMILIES,
   type Library,

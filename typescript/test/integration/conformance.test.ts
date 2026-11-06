@@ -12,7 +12,7 @@
  */
 
 import assert from "node:assert/strict";
-import { execFile, spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -24,7 +24,7 @@ import { promisify } from "node:util";
 import * as ed25519 from "../../src/ed25519.ts";
 import { bytes } from "../../src/index.ts";
 import { fetchHandler, type LanternApp, listen, type MemoryLibrary, PeerServer } from "../../src/server/index.ts";
-import { DEMO_SEED, DEMO_TOKEN, GRANT_SEED, makeLantern, UID } from "../demo.ts";
+import { DEMO_ORIGIN, DEMO_SEED, DEMO_TOKEN, GRANT_SEED, makeLantern, UID } from "../demo.ts";
 import { PACKAGE, PYTHON, SPEC } from "../helpers.ts";
 
 const run = promisify(execFile);
@@ -113,6 +113,19 @@ const REQUIRED = [
   ...["library", "titles", "changes", "sections", "homebrew", "saves", "cheats", "requests", "pairing", "admin"].map(
     (f) => `features.${f}`,
   ),
+  // Draft 0.7: differential updates, the answers to a browser's page (with --origin), the web platform.
+  "features.deltas",
+  "deltas.index",
+  "deltas.cut",
+  "deltas.route",
+  "deltas.update",
+  "cors.preflight",
+  "cors.max-age",
+  "cors.responses",
+  "cors.other-origin",
+  "cors.credentials",
+  "platforms.web",
+  "pairing.after-slow-down",
 ];
 // Anonymously: the writes a caller without cheats.write is refused.
 const ANONYMOUS = ["cheats.write"];
@@ -175,14 +188,9 @@ const WITH_TOKEN = [
   "sync.limits",
   ...["events", "peers", "sync"].map((f) => `features.${f}`),
 ];
-/**
- * The demo compresses JSON with zstd when asked (Node has it); the suite reads it on Python 3.14 (CI), and leaves
- * the checks that read every document as skipped on an older Python: those two are then SKIP, for that reason alone.
- */
-const SUITE_READS_ZSTD = spawnSync(PYTHON, ["-c", "import compression.zstd"]).status === 0;
-const NEEDS_ZSTD = ["documents.schema", "documents.limits"];
 /** The levels the demo reaches with its token (SPEC.md § 17). */
-const LEVELS = "Lantern Core +titles +homebrew +saves +cheats +requests +admin +events +peers +sync +encrypted_saves";
+const LEVELS =
+  "Lantern Core +titles +homebrew +saves +cheats +requests +admin +events +peers +sync +encrypted_saves +deltas";
 
 /** A peer of the toolkit's holding the demo's files (written to disk), taking the demo's grants (SPEC.md § 19.4). */
 async function demoPeer(app: LanternApp): Promise<{ url: string; close(): Promise<void> }> {
@@ -248,6 +256,8 @@ async function suite(url: string, token: boolean, peer?: string): Promise<{ code
     url,
     ...(token ? ["--token", DEMO_TOKEN, "--key", keyFile, "--admin-writes"] : []),
     ...(peer !== undefined ? ["--peer", peer] : []),
+    "--origin",
+    DEMO_ORIGIN,
   ];
   try {
     const { stdout } = await run(PYTHON, args, { maxBuffer: 1 << 24, timeout: 300_000 });
@@ -262,7 +272,7 @@ for (const adapter of ["node:http", "fetchHandler"]) {
   describe(`the conformance suite against the demo, through ${adapter}`, () => {
     for (const token of [false, true]) {
       test(token ? "with a token bound to its key" : "anonymously", async () => {
-        const app = await makeLantern();
+        const app = await makeLantern({}, { deltas: true });
         const served = adapter === "node:http" ? await listen(app) : await overFetch(app);
         const peer = token ? await demoPeer(app) : undefined;
         let result: { code: number; report: string };
@@ -283,16 +293,10 @@ for (const adapter of ["node:http", "fetchHandler"]) {
         for (const check of [
           ...REQUIRED,
           ...(token ? WITH_TOKEN : ANONYMOUS),
-          ...(SUITE_READS_ZSTD ? NEEDS_ZSTD : []),
+          "documents.schema",
+          "documents.limits",
         ]) {
           assert.equal(status.get(check), "PASS", `${check}\n${report}`);
-        }
-        if (!SUITE_READS_ZSTD) {
-          for (const check of NEEDS_ZSTD)
-            assert.match(
-              report,
-              new RegExp(`SKIP .*${check.replace(".", "\\.")}.*\\n.*zstd, which this Python cannot read`),
-            );
         }
         // Plain HTTP on loopback is the one warning.
         assert.deepEqual(
@@ -308,7 +312,7 @@ for (const adapter of ["node:http", "fetchHandler"]) {
 
 describe("lantern-static: the demo as a static library, checked by the suite's --static", () => {
   test("Lantern Static reached, nothing failed", async () => {
-    const app = await makeLantern();
+    const app = await makeLantern({}, { deltas: true });
     const served = await listen(app);
     const out = join(folder, "static");
     try {

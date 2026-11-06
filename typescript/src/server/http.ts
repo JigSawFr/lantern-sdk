@@ -246,8 +246,14 @@ export const COMPRESS_FROM = 512;
  * If-None-Match with 304 (SPEC.md § 14), and the caching headers. It is
  * compressed as Accept-Encoding asks (zstd, gzip), with an ETag of its own (§ 2.1).
  */
-export function jsonResponse(request: ServerRequest, document: unknown, status = 200): ServerResponse {
-  let body: Uint8Array = encoder.encode(JSON.stringify(document));
+export function jsonResponse(
+  request: ServerRequest,
+  document: unknown,
+  status = 200,
+  /** The document's bytes as they are kept, served as they are (a chunk index's canonical JSON, SPEC.md § 22.1). */
+  raw?: Uint8Array,
+): ServerResponse {
+  let body: Uint8Array = raw ?? encoder.encode(JSON.stringify(document));
   const headers = cachingHeaders(request);
   headers.set("Vary", `${headers.get("Vary") ?? ""}, Accept-Encoding`);
   headers.set("Content-Type", JSON_TYPE);
