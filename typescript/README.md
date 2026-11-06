@@ -339,7 +339,14 @@ before the sink commits; the ranges come from peers, mirrors and the server
 in the order of `downloadFile()`, a source that does not honour a range or
 gives more or less than it was asked is passed by; and on any failure, or
 when no chunk is found in the seeds, the file is read whole, as without the
-family. `StaticLibrary.downloadWithSeeds()` does the same over a static
+family. What the sink still holds of a download cut before counts as one more
+seed: with a `FileSink`, the `<dest>.part` of verified pieces (moved to
+`<dest>.seed` while the call runs, the larger of the two kept when a resume was
+cut in turn, and deleted when the call ends) lets a retry take those chunks
+from the file instead of reading them again, even with no seeds of the caller's;
+each is still checked by its SHA-256, so a stale or foreign part is harmless
+(dropped when none of its chunks is the file's). `onDelta`'s report says how many
+bytes came from it (`resumed`, part of `reused`). `StaticLibrary.downloadWithSeeds()` does the same over a static
 library whose source gives ranges (`HttpStaticSource`, `FileStaticSource`).
 The pieces are public in `chunks`: `cut`, `chunkSizeFor`, `chunkIndex`,
 `chunksRef`, `readChunkIndex`, `deltaPlan`, `rangesOf`, `assemble`,

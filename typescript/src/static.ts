@@ -500,7 +500,7 @@ export class StaticLibrary {
     options: { progress?: (done: number, total: number) => void; onDelta?: (report: DeltaReport) => void } = {},
   ): Promise<void> {
     const source = this.source;
-    if (doc.chunks !== undefined && seeds.length > 0 && source.range !== undefined && relativeOk(doc.file)) {
+    if (doc.chunks !== undefined && source.range !== undefined && relativeOk(doc.file)) {
       const report = await deltaDownload({
         file: doc,
         seeds,

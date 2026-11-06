@@ -84,6 +84,22 @@ export interface DownloadSink {
   append(chunk: Uint8Array): Promise<void>;
   reset(): Promise<void>;
   commit(): Promise<void>;
+  /**
+   * Optional, for a differential download (SPEC.md § 22.3) that resumes from what a cut one left: how many bytes
+   * a leftover holds. A sink without it is asked `heldSize()`.
+   */
+  leftoverSize?(): Promise<number>;
+  /**
+   * Optional: the leftover as one more seed, set aside so that `reset()` and `append()` of the new download do not
+   * lose it if the process dies; undefined when there is none or it is over `max` bytes (it is no prefix of a file
+   * of that size). A sink without it gives what `held()` gives, left where it is.
+   */
+  takeLeftover?(max: number): Promise<Uint8Array | undefined>;
+  /**
+   * Optional: called once the download ended, whatever came of it, after `takeLeftover()`. Drops the leftover set
+   * aside; `restore` (nothing of the sink was touched) puts it back instead when the sink holds nothing else.
+   */
+  releaseLeftover?(restore: boolean): Promise<void>;
 }
 
 /** A download held in memory: `bytes()` once committed. */

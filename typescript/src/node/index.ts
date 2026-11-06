@@ -123,6 +123,50 @@ export class FileSink implements DownloadSink {
     }
   }
 
+  /** `dest + ".seed"`: the part a differential download set aside to take chunks from (see takeLeftover()). */
+  get seed(): string {
+    return `${this.dest}.seed`;
+  }
+
+  async #sizeOf(path: string): Promise<number> {
+    try {
+      return (await stat(path)).size;
+    } catch {
+      return 0;
+    }
+  }
+
+  async leftoverSize(): Promise<number> {
+    return Math.max(await this.#sizeOf(this.part), await this.#sizeOf(this.seed));
+  }
+
+  /**
+   * The part, or the `.seed` an interrupted resume left (the larger when both exist; the other is deleted), moved
+   * to `.seed` and read: a verified prefix of the file, or bytes of no use that the chunks' SHA-256 will not
+   * accept. Undefined when there is none, or it is over `max` bytes. `releaseLeftover()` deletes the `.seed`.
+   */
+  async takeLeftover(max: number): Promise<Uint8Array | undefined> {
+    await this.#close();
+    const [part, seed] = [await this.#sizeOf(this.part), await this.#sizeOf(this.seed)];
+    if (part >= seed && part > 0)
+      await rename(this.part, this.seed); // replaces a smaller .seed
+    else await unlink(this.part).catch(() => undefined); // empty, or smaller than the .seed
+    if (Math.max(part, seed) === 0 || Math.max(part, seed) > max) return undefined;
+    return new Uint8Array(await readFile(this.seed));
+  }
+
+  async releaseLeftover(restore: boolean): Promise<void> {
+    if (restore && (await this.#sizeOf(this.part)) === 0) {
+      try {
+        await rename(this.seed, this.part);
+        return;
+      } catch {
+        // no .seed: nothing to put back
+      }
+    }
+    await unlink(this.seed).catch(() => undefined);
+  }
+
   /** Closes the part's file (after a TransportError, before trying again). */
   async close(): Promise<void> {
     await this.#close();
