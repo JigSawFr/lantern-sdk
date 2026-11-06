@@ -3,7 +3,7 @@
 [Lantern](https://lantern.boreale.dev/?utm_source=github&utm_medium=readme) in Go: the documents of the protocol as typed values, and (being built, a family at a time) a client and a server that mounts on any `http.Handler` router.
 
 > [!NOTE]
-> **Not usable as a client or a server yet.** This is the first slice: the documents, their checks and the shared building blocks. The client and the server follow, in the order of [the plan](https://github.com/JigSawFr/lantern-sdk#-families-by-language); the README's table says which family each language has.
+> **A client that pairs, not a whole one yet.** The documents, the handshake, discovery, pairing, the pinned key and signed requests are there; the library, the contents and the server follow, in the order of [the plan](https://github.com/JigSawFr/lantern-sdk#-families-by-language); the README's table says which family each language has.
 
 ```sh
 go get github.com/JigSawFr/lantern-sdk/go
@@ -16,7 +16,19 @@ Go 1.24 or later, and nothing but the standard library.
 | Package | What it does |
 |---|---|
 | `lantern` | The specification's documents (`Handshake`, `Homebrew`, `AppsPage`…) generated from its JSON Schemas, with every field they do not know kept and written back; the vocabularies; the errors (`ProblemError`, tested with `errors.Is`); the `schema` rule; canonical JSON (RFC 8785); digests (`Repr-Digest`); the limits of SPEC.md § 13 and a JSON reader that keeps to them |
+| `lantern/client` | The handshake, pairing (a code the user approves on the server's side), the token and the device key, the server's key pinned by its SHA-256 (or read on the first use and pinned), requests signed as SPEC.md § 5.4 says, signed again once after `signature_expired` with the server's clock, deprecations noticed |
+| `lantern/discovery` | The UDP datagram on port 47115 and the replies it reads, and the TXT record of a DNS-SD advertisement |
 | `lantern/schema` | The specification's JSON Schemas, embedded, and a validator for them |
+
+```go
+c, _ := client.New("https://nas.local:8443/", client.Options{TrustOnFirstUse: true})
+p, _ := c.Pair(ctx, "Living room console", []string{"library"}, client.PairOptions{})
+fmt.Println(p.Code(), p.Verify(), p.Fingerprint()) // the user approves on the server's page
+record, _ := c.WaitForPairing(ctx, p, store)       // keep it: the token, the device key, the pinned key
+later, _ := client.Paired(record, client.Options{})
+```
+
+The token and the key are secrets: `lantern.FileServerStore` keeps them in a file only its owner reads; an application with a keychain implements `lantern.ServerStore` on it. Plain HTTP is spoken to a loopback address only, and the client never follows a redirect.
 
 ```go
 raw := []byte(`{"schema": 1, "uid": "…", …}`)
