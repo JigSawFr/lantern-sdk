@@ -9,8 +9,11 @@
 pub mod bytes;
 pub mod canonical;
 pub mod digest;
+pub mod documents;
 pub mod error;
 pub mod generated;
+pub mod limits;
+pub mod problem;
 pub mod spki;
 
 pub use error::{Error, Result};
