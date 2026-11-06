@@ -1,8 +1,8 @@
 """The server toolkit: what a server author needs to add Lantern to an
 existing app. LanternApp answers the routes over a Library the app
 implements (MemoryLibrary is one) and, with an Accounts store (MemoryAccounts
-is one), pairs devices, checks signed requests, redeems invitations, applies
-rating caps and answers the administration API; with a SaveStore
+is one; SqliteAccounts keeps its pairings across a restart), pairs devices,
+checks signed requests, redeems invitations, applies rating caps and answers the administration API; with a SaveStore
 (MemorySaveStore, FileSaveStore) it keeps save backups, encrypted ones
 among them, and with a RequestStore (MemoryRequests) requests for games. The pieces it is made of
 (problem+json, cursors, files with ranges and digests, the platform filter,
@@ -43,6 +43,7 @@ from lantern.server.library import (
 from lantern.server.paging import Cursors, Sealer, SinceTokens, page_size
 from lantern.server.pairing import Limiter, PairingDesk, Pending, approval_page
 from lantern.server.saves import FileSaveStore, MemorySaveStore, SaveLimits, SaveStore, UploadSession
+from lantern.server.sqlite_accounts import AccountsSchemaError, SqliteAccounts
 from lantern.server.title_requests import MemoryRequests, RequestStore, StoredRequest
 
 __all__ = [
@@ -51,6 +52,7 @@ __all__ = [
     "Account",
     "AccountError",
     "Accounts",
+    "AccountsSchemaError",
     "Authenticate",
     "CheatWriter",
     "ChunkSource",
@@ -80,6 +82,7 @@ __all__ = [
     "ServerRequest",
     "ServerResponse",
     "SinceTokens",
+    "SqliteAccounts",
     "StoredRequest",
     "UploadSession",
     "User",

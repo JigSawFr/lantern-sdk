@@ -448,13 +448,19 @@ FastAPI is the same with `lantern.server.fastapi.include(app, lantern_app)`.
 
 Rather than an `authenticate` hook over tokens of its own, a server can let
 the toolkit pair devices and issue their tokens: give it an `Accounts`
-store (`MemoryAccounts` is one; implement the interface over your
-database).
+store: `MemoryAccounts` for tests and demos, `SqliteAccounts` for a server
+that must remember its pairings across a restart (one SQLite file, the
+standard library only, readable by its owner alone, of a versioned
+`schema`: a file of a newer one is not opened, nor written to), or your own
+implementation of the interface over your database.
 
 ```python
-from lantern.server import LanternApp, MemoryAccounts, User
+from lantern.server import LanternApp, SqliteAccounts
 
-accounts = MemoryAccounts([User("lea", ("library", "saves")), User("ada", ("library", "admin"))])
+accounts = SqliteAccounts("accounts.sqlite3")
+for name, scopes in (("lea", ("library", "saves")), ("ada", ("library", "admin"))):
+    if accounts.user(name) is None:
+        accounts.create_user(name, scopes)
 app = LanternApp(
     library,
     uid=SERVER_UID,
