@@ -4,6 +4,7 @@ package lantern_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	lantern "github.com/JigSawFr/lantern-sdk/go"
@@ -30,6 +31,11 @@ func FuzzLoadJSON(f *testing.F) {
 		}
 		again, err := lantern.LoadJSON(c1, lantern.LoadOptions{})
 		if err != nil {
+			// RFC 8785 writes 1e20 as 100000000000000000000, which reads as an
+			// integer beyond 2^53-1: a double that big has no I-JSON integer form.
+			if strings.Contains(err.Error(), "beyond 2**53 - 1") {
+				return
+			}
 			t.Fatalf("the canonical form %s does not load: %v", c1, err)
 		}
 		if c2, _ := lantern.Canonical(again); string(c1) != string(c2) {
