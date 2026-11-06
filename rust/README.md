@@ -49,8 +49,13 @@ README says what is there.
   bounds connecting (and a TCP keep-alive); `reqwest`'s blocking client has no
   timeout between two reads of a body.
 
-What follows, a slice at a time, the same as the other languages: discovery
-(datagram, DNS-SD), the rest of the client (titles, homebrew, saves, deltas),
+- **LAN discovery** (SPEC.md § 4.1): the datagram on UDP 47115, the replies
+  read as hints (`read_reply`, fuzzed), the directed broadcast address, and
+  `discover()` over a `Datagram` socket the caller can supply (`UdpDatagram`
+  is the standard library's).
+
+What follows, a slice at a time, the same as the other languages: DNS-SD and
+the peers' replies, the rest of the client (titles, homebrew, saves, deltas),
 then the server toolkit. The table of families in the repository's README says where each
 stands.
 

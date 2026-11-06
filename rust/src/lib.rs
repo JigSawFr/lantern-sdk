@@ -10,6 +10,7 @@ pub mod bytes;
 pub mod canonical;
 pub mod client;
 pub mod digest;
+pub mod discovery;
 pub mod documents;
 pub mod download;
 pub mod error;
