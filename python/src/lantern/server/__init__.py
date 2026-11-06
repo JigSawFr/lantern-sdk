@@ -25,9 +25,12 @@ from lantern.server.http import (
     read_document,
 )
 from lantern.server.library import (
+    DELTAS_MAX,
+    DELTAS_MIN,
     Account,
     Authenticate,
     CheatWriter,
+    ChunkSource,
     Journal,
     Library,
     MemoryLibrary,
@@ -42,11 +45,14 @@ from lantern.server.saves import FileSaveStore, MemorySaveStore, SaveLimits, Sav
 from lantern.server.title_requests import MemoryRequests, RequestStore, StoredRequest
 
 __all__ = [
+    "DELTAS_MAX",
+    "DELTAS_MIN",
     "Account",
     "AccountError",
     "Accounts",
     "Authenticate",
     "CheatWriter",
+    "ChunkSource",
     "Cursors",
     "Device",
     "DiscoveryResponder",

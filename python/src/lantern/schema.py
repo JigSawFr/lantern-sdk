@@ -2,7 +2,7 @@
 dependency: the subset of JSON Schema 2020-12 that spec/schemas/v1 uses
 ($ref, allOf, anyOf, oneOf, not, if/then/else, properties, required,
 additionalProperties, propertyNames, items, enum, const, pattern, lengths,
-bounds, uniqueItems, and the formats date-time, date and uuid).
+bounds, prefixItems, uniqueItems, and the formats date-time, date and uuid).
 
     from lantern import schema
     problems = schema.validate("homebrew", document)   # [] when valid
@@ -169,8 +169,11 @@ class _Validator:
             seen = [json.dumps(v, sort_keys=True) for v in value]
             if len(set(seen)) != len(seen):
                 out.append(f"{path}: an item twice")
+        prefix = schema.get("prefixItems", ())
+        for i, sub in enumerate(prefix[: len(value)]):
+            out += self.errors(value[i], sub, f"{path}[{i}]", base)
         if "items" in schema:
-            for i, item in enumerate(value):
+            for i, item in enumerate(value[len(prefix) :], len(prefix)):
                 out += self.errors(item, schema["items"], f"{path}[{i}]", base)
         return out
 

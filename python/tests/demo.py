@@ -58,7 +58,15 @@ from lantern.models import (
     Signature,
     Title,
 )
-from lantern.server import Account, LanternApp, MemoryLibrary, ServerRequest, make_package
+from lantern.server import (
+    DELTAS_MAX,
+    DELTAS_MIN,
+    Account,
+    LanternApp,
+    MemoryLibrary,
+    ServerRequest,
+    make_package,
+)
 from lantern.server.accounts import SCOPES, MemoryAccounts, User
 from lantern.server.saves import MemorySaveStore
 from lantern.server.sync import MemorySync
@@ -110,8 +118,23 @@ def blob(label: str, size: int) -> bytes:
     return bytes(out[:size])
 
 
-def build_library() -> MemoryLibrary:
-    lib = MemoryLibrary(base=BASE)
+#: The origin of the page the conformance suite plays (SPEC.md § 2.5): the demo allows this one, none else.
+DEMO_ORIGIN = "https://app.example.org"
+
+
+def delta_pair() -> tuple[bytes, bytes]:
+    """(older, newer): two versions of one update whose bytes are mostly the same (SPEC.md § 22): the newer is the
+    older with 2,000 bytes inserted at 150,000 and 1,000 replaced at 260,000, so that most chunks are shared."""
+    old = blob("glass-orchard-old", 400_000)
+    new = old[:150_000] + blob("an insertion", 2_000) + old[150_000:260_000] + blob("a change", 1_000) + old[261_000:]
+    return old, new
+
+
+def build_library(delta: bool = False) -> MemoryLibrary:
+    """The demo's library. `delta`: with the two versions of an update that share most of their bytes
+    (delta_pair()), which the server cuts into chunks (SPEC.md § 22): the conformance suite and the tests of
+    differential updates ask for them, the other tests count the apps without."""
+    lib = MemoryLibrary(base=BASE, deltas=(DELTAS_MIN, DELTAS_MAX))
     # Switch games: a base, two updates and an add-on; a second game; an Android app.
     games = [
         ("Lumen Drift", "0100AB1200010000", "0100AB1200010000", "base", 0, "1.0.0", "nsp", 5000),
@@ -134,6 +157,29 @@ def build_library() -> MemoryLibrary:
             name=name,
             format=fmt,
             added=f"2026-10-{10 + i:02d}T12:00:00Z",
+        )
+    if delta:
+        for version, data, name in zip((65536, 196608), delta_pair(), ("1.1.0", "1.3.0"), strict=True):
+            lib.add_app_file(
+                data=data,
+                platform="switch",
+                title_id="0100AA7800040000",
+                app_id="0100AA7800040800",
+                type="update",
+                version_code=version,
+                version_name=name,
+                name="Glass Orchard",
+                format="nsz",
+                added="2026-10-18T12:00:00Z",
+            )
+        lib.add_title(
+            Title(
+                platform="switch",
+                title_id="0100AA7800040000",
+                name="Glass Orchard",
+                release="2025-09-12",
+                genres=["simulation"],
+            )
         )
     lib.add_app_file(
         data=blob("lumen-android", 2048),

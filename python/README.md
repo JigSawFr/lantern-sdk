@@ -7,19 +7,22 @@ servers people run at home for their own games
 a client, a toolkit to add Lantern to an existing server, the checks both
 sides share, a minimal peer, the generator of static libraries, and a
 malicious test server for clients. It follows the specification's **draft
-0.5**.
+0.7**.
 
-**Status: early, complete for draft 0.5's client.** The client speaks every
+**Status: early, complete for draft 0.7's client and server toolkit.** The client speaks every
 route of the protocol: pairing with a device key, requests signed by it
 (RFC 9421), the writes, LAN discovery; event streams and long polls, files
-from mirrors and peers, sync with its user's consent, backups encrypted on
-the device, and static libraries. The server toolkit offers every family
+from mirrors and peers, newer versions put together from older ones by
+their chunks (differential updates), sync with its user's consent, backups
+encrypted on the device, and static libraries. The server toolkit offers every family
 of the draft: it pairs devices, checks signed requests, serves the read
 routes and sections, takes cheat sets written, keeps save backups (by
 resumable upload too, and encrypted ones as sent) and requests, answers
 invitations, rating caps and the administration API, events, grants and
-sync; it reaches **Lantern Core +titles +homebrew +saves +cheats +requests
-+admin +events +peers +sync +encrypted_saves**, every level of the draft,
+sync, chunk indexes for differential updates, and the answers a browser's
+page needs (CORS); it reaches **Lantern Core +titles +homebrew +saves
++cheats +requests +admin +events +peers +sync +encrypted_saves +deltas**,
+every level of the draft,
 in the specification's conformance suite, its peer passes the suite's
 `--peer`, and what its generator writes, **Lantern Static**. See
 [What is not there yet](#what-is-not-there-yet). Nothing is published on
@@ -200,6 +203,37 @@ handshake's `peers.key` before it leaves), and plain HTTP goes only to a
 private network's address. `browse_dnssd_peers()` finds `_lantern-peer._tcp`
 with the `dnssd` extra.
 
+### Differential updates
+
+```python
+old = "downloads/frostline-1.1.0.nsz"  # what the device holds: the older version's bytes, or its path
+client.download_delta(app, "downloads/frostline-1.2.0.nsz", seeds=[old], peers=peers)
+print(client.last_delta)  # DeltaReport(used=True, reused=…, read=…, ranges=2) or why the whole file was read
+index = client.chunk_index(app)  # the index `app.chunks` points at, checked; chunk_index_of(sha256, size) by hash
+```
+
+A newer file is cut into chunks by `lantern-cdc-1` (§ 22.2), and its index
+(`GET <base>/v1/chunks/sha256/{hex}`, or `app.chunks.url`) lists each by its
+size and SHA-256. `download_delta()` checks the index before it uses it
+(its bytes against `chunks.size` and `chunks.sha256`, its schema, its
+chunker, its file, its chunks: `UnusableIndex`, `lantern.chunks.read_index`),
+cuts each seed the same way, takes the chunks it finds there, and reads the
+others as ranges from the mirrors, the peers and then the server (§ 19),
+without a credential for the first two. Each chunk is checked by its SHA-256
+as it comes, the whole file by the document's before `dest` exists, never
+more is written than the file's size, and never more is read of a source than
+the range asked. Whatever fails (no index, a seed that changed, a source
+that answers 200 to a range or sends too many or too few bytes, a chunk that
+is not the one named), the whole file is read as `download_from()` does
+(L-22.3-4), and `last_delta.reason` says why. `AsyncLanternClient` has the
+same, awaited. The pieces are in `lantern.chunks` (the chunker, `size_for()`,
+`build_index()`, `plan()`, `assemble()`; standard library only): cut at a few
+megabytes a second, which is why a server cuts a file once.
+
+A resumed upload (`upload_save(…, resume=address)`) asks HEAD for the
+upload's `Lantern-Chunk-Size` and goes on in chunks of that size
+(`upload_state()` gives it).
+
 ### Sync
 
 ```python
@@ -327,10 +361,17 @@ free space (`installed_size`, § 6.3).
 - `lantern.events`: the Server-Sent Events parser, bounded, and the reading
   rule of § 18.1; `lantern.grants`: grants made and checked (§ 19.3), and
   the addresses plain HTTP may reach (§ 19.2); `lantern.sync`: the merge
-  rule (§ 20.4) and consent; `lantern.e2e`: encrypted saves (§ 9.4);
+  rule (§ 20.4) and consent; `lantern.canonical`: canonical JSON (§ 2.3, RFC
+8785: members sorted by UTF-16 code units, numbers as ECMAScript writes
+them); `lantern.chunks`: differential updates (§ 22); `lantern.e2e`:
+encrypted saves (§ 9.4);
   `lantern.missing`: what a device is missing, for a server and for a
   static library's reader. The vectors `encrypted-saves`, `grants`,
-  `sync-merge` and `static-layout` pass byte for byte.
+  `sync-merge`, `static-layout`, `canonical-json` and `chunks` pass byte
+  for byte.
+- Nothing is served of the platform `web` (Annex A.7): a browser installs
+  nothing. `MemoryLibrary` and `LanternApp(platforms=…)` refuse it, and the
+  handshake never lists it.
 
 ## Adding Lantern to a Flask app
 
@@ -436,6 +477,31 @@ Draft 0.5's families, each an option of `LanternApp`:
   of `installed` only (`d_` and 16 hex digits, the ids MemoryAccounts
   gives).
 
+### Differential updates, and browsers
+
+```python
+library = MemoryLibrary(base="/api/lantern", deltas=(128 << 10, 64 << 20))  # the sizes of the files it cuts
+app = LanternApp(library, uid=SERVER_UID, name="Living room shelf", cors_origins=["https://app.example.org"])
+```
+
+- `deltas` (§ 22): each app and package of those sizes carries `chunks`,
+  its index is cut once per SHA-256 by `lantern-cdc-1` and kept in canonical
+  JSON, `GET <base>/v1/chunks/sha256/{hex}` serves its bytes to whoever may
+  read the file (`404` otherwise, rating caps included), and the handshake
+  offers `features.deltas`. A library of the server's own sets the family
+  `"deltas"` in its `families`, `chunks` on its apps (`lantern.chunks.ref()`)
+  and gives the bytes by `chunk_index(sha256)` (a `ChunkSource`). The
+  static generator writes them at `v1/chunks/sha256/<hex>.json`.
+- `cors_origins` (§ 2.5): the origins whose pages may read the server, or
+  `"*"`; none by default. An allowed origin gets `Access-Control-Allow-Origin`
+  (with `Vary: Origin`) and the headers a page reads on every answer, errors
+  included, and its preflights (`OPTIONS` on any route of the text, without a
+  token) are answered `204` with the methods and headers asked, kept ten
+  minutes. `Access-Control-Allow-Credentials` is never sent and no cookie is
+  ever read or set. The Flask and FastAPI adapters pass `OPTIONS` to the
+  toolkit.
+- An upload's `HEAD` says its `Lantern-Chunk-Size` (§ 9.3).
+
 ### Save backups, requests, cheat sets written, sections
 
 ```python
@@ -514,7 +580,8 @@ builds a static library (§ 21) from a folder of files and a metadata file
 (its form is in `lantern/static.py`), or, in a program, from any `Library`
 (`lantern.static.export(library, out, uid=…, name=…)`): the handshake with
 `static`, the pages of apps, titles and homebrew per platform, each title,
-entry and cheat set, and every file by its SHA-256. It never writes over a
+entry and cheat set, every file by its SHA-256, and the chunk index of each
+file the library cut (`features.deltas`). It never writes over a
 `lantern.json` of a newer schema and keeps the keys it does not know of
 the one it replaces; the suite's `--static` checks what it writes.
 
@@ -644,7 +711,8 @@ runs the specification's conformance suite against the demo server
 (`tests/demo.py`), through Flask and FastAPI, anonymously and with a token
 bound to its key, with a peer of the toolkit and LAN discovery: it reaches
 Lantern Core +titles +homebrew +saves +cheats +requests +admin +events
-+peers +sync +encrypted_saves, every level of the draft 0.5; and
++peers +sync +encrypted_saves +deltas, every level of the draft 0.7, the
+origin of a page being allowed for the browser checks (`--origin`); and
 against the static library the generator writes (`--static`): Lantern
 Static. `tests/test_hostile.py` runs the client against the malicious test
 server.

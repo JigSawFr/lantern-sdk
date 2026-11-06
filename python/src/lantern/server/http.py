@@ -271,7 +271,14 @@ def json_response(request: ServerRequest, document: JSONObject, status: int = 20
     to an authenticated caller, varying on Authorization, Lantern-Platform,
     Accept-Language and Accept-Encoding. It is compressed as Accept-Encoding
     asks (zstd on Python 3.14, gzip), with an ETag of its own (SPEC.md § 2.1)."""
-    body = json.dumps(document, ensure_ascii=False, separators=(",", ":")).encode()
+    return json_bytes_response(
+        request, json.dumps(document, ensure_ascii=False, separators=(",", ":")).encode(), status
+    )
+
+
+def json_bytes_response(request: ServerRequest, body: bytes, status: int = 200) -> ServerResponse:
+    """json_response() of a document already written, its bytes sent as they are (a chunk index's, whose size
+    and SHA-256 its app gives: SPEC.md § 22.1)."""
     headers = caching_headers(request)
     headers["Vary"] += ", Accept-Encoding"
     headers["Content-Type"] = JSON

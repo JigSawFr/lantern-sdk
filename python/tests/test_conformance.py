@@ -3,7 +3,8 @@ the demo server built from the toolkit (tests/demo.py), served by Flask and
 by FastAPI, anonymously and with a token. The demo offers every family of
 the draft 0.7: it curates sections, pairs devices, checks signed requests,
 takes cheat sets written, keeps save backups (encrypted ones among them)
-and requests, answers the administration API (an account of the suite's
+and requests, cuts two versions of an update into chunks (§ 22), allows one page's origin (§ 2.5),
+answers the administration API (an account of the suite's
 own made, then deleted: --admin-writes), streams events, gives grants and
 keeps sync data; a peer of the toolkit (lantern.peer) serves its files, and
 both answer LAN discovery: with its token, bound to its key, it reaches
@@ -24,7 +25,7 @@ from types import ModuleType
 import pytest
 
 from conftest import SPEC
-from demo import DEMO_KEY, DEMO_TOKEN, GRANT_SEED, UID, build_library, demo_accounts, make_lantern, serve
+from demo import DEMO_KEY, DEMO_ORIGIN, DEMO_TOKEN, GRANT_SEED, UID, build_library, demo_accounts, make_lantern, serve
 from lantern import ed25519, static
 from lantern.peer import Peer
 from lantern.server.discovery import DiscoveryResponder
@@ -121,6 +122,19 @@ REQUIRED += [
     "compression.files",
     "documents.date",
     "features.admin",
+    # Draft 0.7: no `web`, browsers, a pairing's poll after a slow_down, and differential updates.
+    "platforms.web",
+    "cors.preflight",
+    "cors.max-age",
+    "cors.responses",
+    "cors.other-origin",
+    "cors.credentials",
+    "pairing.after-slow-down",
+    "features.deltas",
+    "deltas.index",
+    "deltas.cut",
+    "deltas.route",
+    "deltas.update",
 ]
 # With the demo's token, bound to its key, and every scope the demo serves.
 WITH_TOKEN = [
@@ -189,7 +203,7 @@ WITH_TOKEN = [
     "pairing.rate-limit",
 ]
 #: The levels the demo reaches with its token (SPEC.md § 17): every one of the draft 0.7.
-LEVELS = "Lantern Core +titles +homebrew +saves +cheats +requests +admin +events +peers +sync +encrypted_saves"
+LEVELS = "Lantern Core +titles +homebrew +saves +cheats +requests +admin +events +peers +sync +encrypted_saves +deltas"
 
 
 def suite() -> ModuleType:
@@ -230,8 +244,8 @@ def test_the_suite_passes(framework: str, token: bool, tmp_path: Path) -> None:
     out = io.StringIO()
     key = tmp_path / "demo.key"
     key.write_text(DEMO_KEY.seed_b64(), encoding="ascii")
-    lib = build_library()
-    app = make_lantern(lib, accounts=demo_accounts())
+    lib = build_library(delta=True)
+    app = make_lantern(lib, accounts=demo_accounts(), cors_origins=[DEMO_ORIGIN])
     peer = demo_peer(lib)
     threading.Thread(target=peer.serve_forever, daemon=True).start()
     peer_port = free_udp()
@@ -242,7 +256,7 @@ def test_the_suite_passes(framework: str, token: bool, tmp_path: Path) -> None:
             responder = DiscoveryResponder(
                 app, int(url.rstrip("/").rsplit(":", 1)[1]), port=server_port, host="127.0.0.1"
             ).start()
-            args = [url, "--discover", "127.0.0.1", "--discover-port", str(server_port)]
+            args = [url, "--discover", "127.0.0.1", "--discover-port", str(server_port), "--origin", DEMO_ORIGIN]
             if token:
                 args += [
                     "--token",
@@ -281,7 +295,7 @@ def test_the_generators_static_library(tmp_path: Path) -> None:
     """The generator's output (lantern.static) through the suite's --static (SPEC.md § 21)."""
     run = suite()
     out = io.StringIO()
-    static.export(build_library(), tmp_path / "library", uid=UID, name="Demo shelf", page_size=2)
+    static.export(build_library(delta=True), tmp_path / "library", uid=UID, name="Demo shelf", page_size=2)
     code = run.main(["--static", str(tmp_path / "library")], out=out)
     report = out.getvalue()
     assert code == 0 and "FAIL" not in report, report
@@ -295,6 +309,7 @@ def test_the_generators_static_library(tmp_path: Path) -> None:
         "cheats",
         "paths",
         "files",
+        "chunks",
     ):
         assert re.search(rf"^PASS\s+§ \S+\s+static\.{re.escape(check)}\s", report, re.M), f"{check}\n{report}"
     assert "Levels reached (SPEC.md § 17, draft 0.7): Lantern Static" in report

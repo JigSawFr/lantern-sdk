@@ -229,8 +229,12 @@ LINUX = Profile(
 PROFILES: MappingProxyType[str, Profile] = MappingProxyType(
     {p.platform: p for p in (SWITCH, N3DS, VITA, PS4, ANDROID, LINUX)}
 )
-#: Platforms named by SPEC.md § 4.3 that have no profile yet (Annex A.7).
-OPEN_PLATFORMS: tuple[str, ...] = ("ios", "windows", "macos", "web", "steam", "gog", "xbox")
+#: Platforms named by SPEC.md § 4.3 that have no profile yet (Annex A.8).
+OPEN_PLATFORMS: tuple[str, ...] = ("ios", "windows", "macos", "steam", "gog", "xbox")
+#: Platforms a client names but a server never serves: `web` is a client in a browser, which installs nothing
+#: (Annex A.7); no app, title, homebrew, cheat set or save is of it, nor is it among a handshake's `platforms`
+#: (L-A.7-1).
+NOT_SERVED: tuple[str, ...] = ("web",)
 
 
 def profile(platform: str) -> Profile | None:
@@ -243,8 +247,16 @@ def is_platform(name: str) -> bool:
     return bool(PLATFORM.match(name))
 
 
+def served(platform: str) -> bool:
+    """Whether a server may serve anything of `platform` (Annex A.7): every platform but `web`."""
+    return platform not in NOT_SERVED
+
+
 def title_id_ok(platform: str, title_id: str) -> bool:
-    """A title id of the core's form, and of the platform's profile when it has one."""
+    """A title id of the core's form, and of the platform's profile when it has one; none for `web`, which has
+    nothing to install (Annex A.7)."""
+    if not served(platform):
+        return False
     p = profile(platform)
     return p.title_id_ok(title_id) if p is not None else bool(CORE_ID.match(title_id))
 

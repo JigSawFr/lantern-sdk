@@ -9,7 +9,7 @@ import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from email.utils import parsedate_to_datetime
-from typing import Generic, TypeVar
+from typing import Generic, NamedTuple, TypeVar
 from urllib.parse import quote, urlencode, urljoin, urlsplit
 
 from lantern import e2e
@@ -163,6 +163,12 @@ def _none(status: int, headers: Headers) -> None:
     return None
 
 
+def _object(data: JSONValue) -> JSONObject:
+    if not isinstance(data, dict):
+        raise DocumentError("not an object")
+    return data
+
+
 def _reject(data: JSONValue) -> None:
     raise UnexpectedResponse("a document where the protocol gives none")
 
@@ -174,9 +180,27 @@ def _upload_offset(status: int, headers: Headers) -> int:
     return int(value)
 
 
-def _upload_state(status: int, headers: Headers) -> tuple[int, int | None]:
+class UploadState(NamedTuple):
+    """Where an upload stands (SPEC.md § 9.3, HEAD): its `Upload-Offset`, its `Upload-Length`, and its
+    `Lantern-Chunk-Size` (L-9.3-3), the chunks to resume in; None for a header the server did not send."""
+
+    offset: int
+    length: int | None
+    chunk_size: int | None
+
+
+def _upload_state(status: int, headers: Headers) -> UploadState:
     length = (headers.get("Upload-Length") or "").strip()
-    return _upload_offset(status, headers), int(length) if length.isdigit() else None
+    chunk = (headers.get("Lantern-Chunk-Size") or "").strip()
+    return UploadState(
+        _upload_offset(status, headers),
+        int(length) if length.isdigit() else None,
+        int(chunk) if chunk.isdigit() and int(chunk) > 0 else None,
+    )
+
+
+#: The chunks an upload resumes in when its server's HEAD does not say (SPEC.md § 9.3 asks it to).
+RESUME_CHUNK = 1 << 20
 
 
 def _header_text(value: str, limit: int, what: str) -> str:
@@ -658,9 +682,9 @@ class ClientCore:
             empty=_upload_offset,
         )
 
-    def upload_state(self, upload: str) -> Call[tuple[int, int | None]]:
-        """HEAD of an upload: where to resume (Upload-Offset), and its length."""
-        read: Callable[[JSONValue], tuple[int, int | None]] = _reject  # type: ignore[assignment]
+    def upload_state(self, upload: str) -> Call[UploadState]:
+        """HEAD of an upload: where to resume (Upload-Offset), its length, and its chunk size."""
+        read: Callable[[JSONValue], UploadState] = _reject  # type: ignore[assignment]
         return Call(
             "HEAD",
             "",
@@ -860,6 +884,14 @@ class ClientCore:
         found = read_grant(grant.grant, {hello.uid: key}, now=self.now())
         if found is None or found.sha256 != sha256 or found.size != size:
             raise IntegrityError("a grant that does not verify by peers.key, names another file, or expired")
+
+    # Differential updates (SPEC.md § 22).
+
+    def chunk_index(self, sha256: str, platform: str | None) -> Call[JSONObject]:
+        """GET <base>/v1/chunks/sha256/{hex}: the index of a file, as the server wrote it."""
+        if len(sha256) != 64 or any(c not in "0123456789abcdef" for c in sha256):
+            raise ValueError("a file is named by its SHA-256, lower-case hex")
+        return Call("GET", "/chunks/sha256/" + sha256, _object, "chunk index", _platform(platform))
 
     # Sync (SPEC.md § 20).
 

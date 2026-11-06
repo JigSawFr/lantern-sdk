@@ -283,6 +283,7 @@ ROUTES = {
     "A title's cheat sets": ("cheats", "switch", "0100ABCD00010000", None),
     "A cheat set's text": ("cheat", None, "cs_Jt3Vx0", None),
     "A file": ("blob", None, "3a7bd3e2b4c1f0a9e8d7c6b5a4938271605f4e3d2c1b0a9f8e7d6c5b4a392817", None),
+    "A file's chunk index": ("chunks", None, "3a7bd3e2b4c1f0a9e8d7c6b5a4938271605f4e3d2c1b0a9f8e7d6c5b4a392817", None),
 }
 
 
