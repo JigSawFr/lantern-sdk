@@ -529,3 +529,123 @@ func TestReferenceCheatsAndRequests(t *testing.T) {
 		}
 	})
 }
+
+func TestReferenceAdmin(t *testing.T) {
+	ref := startReference(t)
+	ctx := context.Background()
+	key, err := lantern.SigningKeyFromBase64(ref.AdminSeed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, err := client.New(ref.URL, client.Options{Token: ref.AdminTok, Key: key, Platform: "switch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Without the scope, the family is refused.
+	lea, err := client.New(ref.URL, client.Options{Token: ref.OldToken, Platform: "switch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, err := range lea.AdminUsers(ctx) {
+		if !errors.Is(err, lantern.ErrForbidden) {
+			t.Errorf("an account without the scope admin: %v", err)
+		}
+		break
+	}
+
+	t.Run("accounts", func(t *testing.T) {
+		made, err := admin.AdminCreateUser(ctx, "sam", []string{"library"})
+		if err != nil || made.Name != "sam" || made.State != "active" {
+			t.Fatalf("%+v %v", made, err)
+		}
+		if _, err := admin.AdminCreateUser(ctx, "sam", nil); !errors.Is(err, lantern.ErrConflict) {
+			t.Errorf("a name taken: %v", err)
+		}
+		frozen, err := admin.AdminUpdateUser(ctx, "sam", "frozen", nil)
+		if err != nil || frozen.State != "frozen" {
+			t.Errorf("%+v %v", frozen, err)
+		}
+		names := map[string]bool{}
+		for u, err := range admin.AdminUsers(ctx) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			names[u.Name] = true
+		}
+		if !names["sam"] || !names["lea"] {
+			t.Errorf("accounts %v", names)
+		}
+		if err := admin.AdminDeleteUser(ctx, "sam", "sa"); err == nil {
+			t.Error("a deletion whose confirmation is not the name went out")
+		}
+		if err := admin.AdminDeleteUser(ctx, "sam", "sam"); err != nil {
+			t.Fatal(err)
+		}
+		if err := admin.AdminDeleteUser(ctx, "sam", "sam"); !errors.Is(err, lantern.ErrNotFound) {
+			t.Errorf("deleted twice: %v", err)
+		}
+	})
+	t.Run("devices and invitations", func(t *testing.T) {
+		var found bool
+		for d, err := range admin.AdminDevices(ctx, "lea") {
+			if err != nil {
+				t.Fatal(err)
+			}
+			found = found || d.User == "lea"
+		}
+		if !found {
+			t.Error("lea's device is not listed")
+		}
+		inv, err := admin.AdminCreateInvitation(ctx, lantern.InvitationCreate{User: "lea", Scopes: []string{"library"},
+			Expires: time.Now().Add(time.Hour).UTC().Format(time.RFC3339), Devices: 1})
+		if err != nil || inv.Code == "" {
+			t.Fatalf("%+v %v", inv, err)
+		}
+		listed := false
+		for i, err := range admin.AdminInvitations(ctx) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			listed = listed || i.ID == inv.ID
+		}
+		if !listed {
+			t.Error("the invitation is not listed")
+		}
+		if err := admin.AdminRevokeInvitation(ctx, inv.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := admin.AdminRevokeDevice(ctx, "d_unknown"); !errors.Is(err, lantern.ErrNotFound) {
+			t.Errorf("an unknown device: %v", err)
+		}
+	})
+	t.Run("requests", func(t *testing.T) {
+		lea, err := client.New(ref.URL, client.Options{Token: ref.AdminTok, Key: key, Platform: "switch"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		req, _, err := lea.RequestTitle(ctx, "0100FEED00030000", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		open := 0
+		for r, err := range admin.AdminRequests(ctx, client.AdminRequestFilter{Status: "open"}) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.Status != "open" || r.User == nil {
+				t.Errorf("the filter kept %+v", r)
+			}
+			open++
+		}
+		if open == 0 {
+			t.Error("the open request is not listed")
+		}
+		done, err := admin.AdminDeclineRequest(ctx, req.ID, "Only the games this household owns.")
+		if err != nil || done.Status != "declined" || done.Reason == nil || *done.Reason != "Only the games this household owns." {
+			t.Fatalf("%+v %v", done, err)
+		}
+		if _, err := admin.AdminCompleteRequest(ctx, req.ID); !errors.Is(err, lantern.ErrConflict) {
+			t.Errorf("a request no longer open: %v", err)
+		}
+	})
+}
