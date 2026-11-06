@@ -13,6 +13,11 @@
 // once per connection, with the leaf certificate's SPKI and whether its
 // chain and name verified against the CA store, and goes on only when it
 // returns true.
+//
+// The protocol floor (SPEC.md § 2, L-2-9): a client MUST NOT offer a
+// protocol older than TLS 1.2. Every adapter sets `minimum_tls_version` as
+// the lowest version it will negotiate and leaves the highest to its TLS
+// library; each also exposes it as `minimum_tls()`.
 #pragma once
 
 #include <array>
@@ -28,6 +33,15 @@
 
 namespace lantern
 {
+
+// A TLS protocol version, as its wire value (RFC 8446 § 4.2.1).
+enum class TlsVersion : std::uint16_t
+{
+    tls_1_2 = 0x0303,
+};
+
+// The oldest protocol a transport of this library offers (L-2-9).
+inline constexpr TlsVersion minimum_tls_version = TlsVersion::tls_1_2;
 
 class ServerTrust
 {

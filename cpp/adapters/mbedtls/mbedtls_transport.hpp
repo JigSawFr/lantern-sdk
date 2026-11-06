@@ -55,6 +55,10 @@ class MbedTlsTransport final : public Transport
 
     [[nodiscard]] Result<void> send(const Request& request, ResponseHandler& handler) override;
 
+    // The lowest TLS version the handshake accepts (the configuration's
+    // minimum: TLS 1.2, SPEC.md § 2, L-2-9); the maximum is mbedTLS's.
+    [[nodiscard]] static TlsVersion minimum_tls() noexcept;
+
   private:
     struct State;
     MbedTlsTransport() = default;

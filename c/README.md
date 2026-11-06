@@ -22,7 +22,11 @@ ranges), a library found at an address, the upload's HEAD with its chunk
 size, and canonical JSON as RFC 8785 writes it; and since draft 0.9,
 packages a device cannot use (an app's `requires` and `includes`, the
 format filter, `formats` and `satisfies` of what is missing, the install
-decision, the preferred variant): each a C function.
+decision, the preferred variant): each a C function. Draft 0.11 changes
+nothing in the C API (still version 7): `lantern_transport_create_curl()` and
+`lantern_transport_create_mbedtls()` offer no protocol older than TLS 1.2
+(SPEC.md § 2), as the C++ adapters do; the `uid` shape check of the C++
+`is_valid_server_uid()` is not exported.
 
 ## Building
 

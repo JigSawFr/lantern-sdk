@@ -48,7 +48,8 @@ if (LANTERN_BUILD_TESTS)
         unit/v05_client_tests.cpp
         unit/v05_vectors_tests.cpp
         unit/v07_tests.cpp
-        unit/v09_tests.cpp)
+        unit/v09_tests.cpp
+        unit/v11_tests.cpp)
     target_link_libraries(lantern_unit_tests PRIVATE Lantern::lantern lantern_doctest)
     target_compile_definitions(lantern_unit_tests PRIVATE LANTERN_SPEC_DIR="${LANTERN_SPEC_DIR}"
         $<$<BOOL:${WIN32}>:_CRT_SECURE_NO_WARNINGS>)

@@ -18,4 +18,7 @@ std::unique_ptr<Transport> make_tls_transport(
 // does not: a CA's certificate for 127.0.0.1 is then refused by name).
 bool tls_checks_ip_names();
 
+// The lowest TLS version the adapter is configured to offer.
+TlsVersion adapter_minimum_tls();
+
 } // namespace lantern::test

@@ -54,6 +54,10 @@ class CurlTransport final : public Transport
 
     [[nodiscard]] Result<void> send(const Request& request, ResponseHandler& handler) override;
 
+    // The lowest TLS version set on every request (CURLOPT_SSLVERSION,
+    // CURL_SSLVERSION_TLSv1_2; no maximum), as SPEC.md § 2 asks (L-2-9).
+    [[nodiscard]] static TlsVersion minimum_tls() noexcept;
+
   private:
     CurlTransport() = default;
     void* handle_   = nullptr; // CURL*

@@ -17,6 +17,27 @@
 namespace lantern
 {
 
+bool is_valid_server_uid(std::string_view uid) noexcept
+{
+    if (uid.size() != 36)
+        return false;
+    for (std::size_t i = 0; i < uid.size(); ++i)
+    {
+        const char c = uid[i];
+        if (i == 8 || i == 13 || i == 18 || i == 23)
+        {
+            if (c != '-')
+                return false;
+        }
+        else if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+            return false;
+    }
+    const char version = uid[14];
+    const char variant = uid[19];
+    return (version == '4' || version == '7')
+        && (variant == '8' || variant == '9' || variant == 'a' || variant == 'b');
+}
+
 using detail::add_query;
 using detail::bearer_token;
 using detail::bytes_of;
