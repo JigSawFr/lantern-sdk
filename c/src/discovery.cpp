@@ -6,6 +6,7 @@
 #include <string_view>
 
 #include <lantern/discovery.hpp>
+#include <lantern/dnssd.hpp>
 
 #include "callbacks.hpp"
 
@@ -131,6 +132,27 @@ LANTERN_API lantern_status lantern_discover(lantern_udp_socket* socket,
     settings.peers    = o.peers;
     Handler wrapped(handler, o.on_peer, user, resource);
     const auto found = lantern::discover(*socket, settings, wrapped);
+    if (!found)
+        return fail(error, found.error());
+    return ok(error);
+}
+
+LANTERN_API lantern_status lantern_browse_dnssd(lantern_udp_socket* socket,
+    const lantern_dnssd_options* options, lantern_discovery_handler handler, void* user, lantern_error* error)
+{
+    if (socket == nullptr || options == nullptr || handler == nullptr)
+        return usage(error, "a NULL argument");
+    const lantern_dnssd_options o = copy_struct(options);
+    Resource* resource            = socket->resource();
+    lantern::DnssdOptions settings;
+    if (o.address != nullptr)
+        settings.address = text(o.address);
+    settings.port   = o.port == 0 ? lantern::mdns_port : o.port;
+    settings.wait   = std::chrono::milliseconds(o.wait_ms == 0 ? 2000 : o.wait_ms);
+    settings.decode = decode_options(o.limits, resource);
+    settings.peers  = o.peers;
+    Handler wrapped(handler, o.on_peer, user, resource);
+    const auto found = lantern::browse_dnssd(*socket, settings, wrapped);
     if (!found)
         return fail(error, found.error());
     return ok(error);

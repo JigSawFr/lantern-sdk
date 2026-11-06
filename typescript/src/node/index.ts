@@ -21,6 +21,16 @@ import {
 } from "../client/client.ts";
 import type { DownloadSink, UploadSource } from "../client/download.ts";
 import { type Found, PEERS_REQUEST, PORT, REQUEST, readPeerReply, readReply } from "../discovery.ts";
+import {
+  Browse,
+  instanceQuestion,
+  MDNS_ADDRESS,
+  MDNS_PORT,
+  PEER_SERVICE,
+  PTR,
+  question,
+  SERVER_SERVICE,
+} from "../dnssd.ts";
 import type { App, Package, Save } from "../generated/models.ts";
 import type { FileHashes } from "../homebrew.ts";
 import { DATAGRAM, loadJson } from "../limits.ts";
@@ -440,6 +450,62 @@ async function gather<T extends { uid: string; address: string }>(
     socket.close();
   }
   return [...found.values()];
+}
+
+/** What a browse of multicast DNS takes: the group and port to ask (the defaults are RFC 6762's) and how long to listen, in seconds. */
+export interface BrowseOptions {
+  address?: string;
+  port?: number;
+  timeout?: number;
+}
+
+/**
+ * The servers advertised with DNS-SD as `_lantern._tcp` (SPEC.md § 4.1): a
+ * single question to the multicast group from a port of the client's own,
+ * which responders answer straight back (RFC 6762 § 6.7), so no group is
+ * joined. Each server once, by uid. The advertisement is a hint, never a proof;
+ * a network that does not carry multicast, or a responder that ignores such a
+ * question, is the datagram's (`discover()`).
+ */
+export function browseDnssd(options: BrowseOptions = {}): Promise<Found[]> {
+  return browse(SERVER_SERVICE, options).then((b) => b.servers());
+}
+
+/**
+ * The peers advertised as `_lantern-peer._tcp` (SPEC.md § 19.5), as `browseDnssd()` asks.
+ * `server`, a server's uid, keeps those that take its grants.
+ */
+export async function browseDnssdPeers(options: BrowseOptions & { server?: string } = {}): Promise<Peer[]> {
+  const peers = (await browse(PEER_SERVICE, options)).peers();
+  return options.server === undefined ? peers : peers.filter((p) => p.servers.includes(options.server as string));
+}
+
+async function browse(service: string, options: BrowseOptions): Promise<Browse> {
+  const address = options.address ?? MDNS_ADDRESS;
+  const port = options.port ?? MDNS_PORT;
+  const wait = (options.timeout ?? 2) * 1000;
+  const socket = dgram.createSocket("udp4");
+  const seen = new Browse(service);
+  socket.on("message", (data, remote) => seen.add(new Uint8Array(data), remote.address));
+  const send = (message: Uint8Array): Promise<void> =>
+    new Promise<void>((resolve, reject) => socket.send(message, port, address, (e) => (e ? reject(e) : resolve())));
+  await new Promise<void>((resolve, reject) => {
+    socket.once("error", reject);
+    socket.bind(0, () => {
+      socket.off("error", reject);
+      resolve();
+    });
+  });
+  try {
+    await send(question(service, PTR));
+    // An answer that came without an instance's port or TXT: ask for them once
+    await new Promise((r) => setTimeout(r, wait / 3));
+    for (const instance of seen.incomplete()) await send(instanceQuestion(instance));
+    await new Promise((r) => setTimeout(r, (wait * 2) / 3));
+  } finally {
+    socket.close();
+  }
+  return seen;
 }
 
 export { directedBroadcast, type Found, readPeerReply, readReply } from "../discovery.ts";

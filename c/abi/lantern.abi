@@ -110,7 +110,7 @@ constant LANTERN_TRUST_PINNED: 1
 constant LANTERN_TRUST_UNVERIFIED: 2
 constant LANTERN_WARN: 1
 define LANTERN_C_ABI_VERSION: 1
-define LANTERN_C_API_VERSION: 4
+define LANTERN_C_API_VERSION: 5
 define LANTERN_KNOWN_SCHEMA: 1
 define LANTERN_SAVE_CHUNK_SIZE: 65536
 define LANTERN_SAVE_HEADER_SIZE: 88
@@ -193,6 +193,7 @@ function lantern_apps_page_get_items_at: const lantern_app*lantern_apps_page_get
 function lantern_apps_page_get_items_count: size_t lantern_apps_page_get_items_count(const lantern_apps_page*value)
 function lantern_apps_page_get_next: lantern_str lantern_apps_page_get_next(const lantern_apps_page*value)
 function lantern_apps_page_get_total: bool lantern_apps_page_get_total(const lantern_apps_page*value, uint64_t*out)
+function lantern_browse_dnssd: lantern_status lantern_browse_dnssd(lantern_udp_socket*socket, const lantern_dnssd_options*options, lantern_discovery_handler handler, void*user, lantern_error*error)
 function lantern_canonical_json: lantern_status lantern_canonical_json(const char*json, size_t size, const lantern_allocator*allocator, lantern_string**out, lantern_error*error)
 function lantern_changes_free: void lantern_changes_free(lantern_changes*value)
 function lantern_changes_get_added_at: const lantern_app*lantern_changes_get_added_at(const lantern_changes*value, size_t index)
@@ -1069,6 +1070,7 @@ struct lantern_device_facts: size_t struct_size; const lantern_version_fact*vers
 struct lantern_discovered_peer: size_t struct_size; lantern_str address; const lantern_peer_reply*reply; lantern_peer_endpoint endpoint
 struct lantern_discovered_server: size_t struct_size; lantern_str address; lantern_str origin; const lantern_discovery_reply*reply
 struct lantern_discovery_options: size_t struct_size; const char*address; uint16_t port; uint32_t wait_ms; uint32_t attempts; const lantern_limits*limits; bool peers; lantern_discovery_peer_handler on_peer
+struct lantern_dnssd_options: size_t struct_size; const char*address; uint16_t port; uint32_t wait_ms; const lantern_limits*limits; bool peers; lantern_discovery_peer_handler on_peer
 struct lantern_download_callbacks: size_t struct_size; void*user; lantern_status(*write)(void*user, const uint8_t*bytes, size_t size); lantern_status(*restart)(void*user); void(*release)(void*user)
 struct lantern_download_target: size_t struct_size; const char*url; uint64_t size; uint8_t sha256[32]
 struct lantern_error: size_t struct_size; lantern_status status; lantern_code code; lantern_code effective_code; uint16_t http_status; uint32_t retry_after; char code_text[33]; char title[97]; char detail[201]

@@ -89,7 +89,13 @@ only a peer's side for now; a server core and a C API are for later (see
 - **Discovery** (§ 4.1): the datagram to UDP 47115, the replies read
   bounded and with the `schema` rule, each server once, through a
   `UdpSocket` the app gives (`adapters/posix` has one); with `peers`, the
-  consoles that share their files too (§ 19.5).
+  consoles that share their files too (§ 19.5). **DNS-SD** (`_lantern._tcp`
+  and `_lantern-peer._tcp`, `browse_dnssd()`, `lantern/dnssd.hpp`) over the
+  same `UdpSocket`: one question to `224.0.0.251:5353` from a port of the
+  app's own, which responders answer straight back (RFC 6762 § 6.7), so no
+  group is joined; an instance whose answer came without its port or TXT is
+  asked for them once, and a server's advertisement is held to the rules of
+  its datagram reply. IPv4 only.
 - **Deprecation** (§ 3.4): each `Deprecation` and `Sunset` a server sends
   goes to the app's `DeprecationLog`.
 - **Downloads that are checked**: `Range` and `If-Range` to resume, the
@@ -513,7 +519,8 @@ if (done)
 
 ## Not there yet
 
-- **DNS-SD** (`_lantern._tcp`, § 4.1): the datagram only.
+- **DNS-SD over IPv6** (`ff02::fb`), and an answer that wants the multicast
+  group joined: the question is one-shot, over IPv4.
 - **Compression** (§ 2.1) beyond gzip: the client asks for `gzip` on its JSON
   calls (never on a file or a stream) and reads it with `gunzip()`
   (`lantern/inflate.hpp`, no dependency, the limits of § 13 applying once
@@ -523,8 +530,6 @@ if (done)
   for a later version.
 - **Annex B's retries** (backoff with jitter, `Retry-After` as a floor):
   the errors carry what they need, the app retries.
-- **DNS-SD for peers** (`_lantern-peer._tcp`): the datagram only, as for
-  servers.
 - A server core (beyond a peer's `PeerGate`), and a C API.
 
 ## Layout

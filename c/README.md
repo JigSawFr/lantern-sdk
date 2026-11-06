@@ -6,7 +6,7 @@ client library: a thin, stable C ABI over the C++23 library of
 through JNI) and any language with a C FFI. One header,
 `include/lantern/lantern.h` (C11 or later, and C++), and one library,
 `Lantern::c` (shared) or `Lantern::c_static`. It follows the
-specification's **draft 0.6** (C API version 4).
+specification's **draft 0.6** (C API version 5).
 
 **Status: draft 0.6, the C++ client whole.** The handshake, pairing with a
 device key, signed requests, invitations, the library and its cursors,
@@ -292,7 +292,7 @@ where it is given a `lantern_error`.
 | `lantern_deprecation_log` | Each `Deprecation` a server sends (§ 3.4) |
 | `lantern_download_sink`, `lantern_upload_source` | Where a download goes, where an upload reads |
 | `lantern_data_probe` | What a port finds of its data on the device (§ 8.6) |
-| `lantern_udp_socket` | Discovery's datagrams (§ 4.1), servers' and peers' |
+| `lantern_udp_socket` | Discovery's datagrams (§ 4.1), servers' and peers', and DNS-SD's one-shot question (`lantern_browse_dnssd()`) |
 | `lantern_event_callbacks` | Each event of a stream (§ 18), for the call of `lantern_client_events()` only |
 | `lantern_held_files_callbacks` | What a console that shares holds whole, for its `lantern_peer_gate` (§ 19.4) |
 | `lantern_static_files` | A static library's files (§ 21): the app's own (a USB key, an SD card), pushed into the sink it is lent with `lantern_download_sink_write()`; or `lantern_static_files_create_http()` |

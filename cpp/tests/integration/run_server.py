@@ -42,6 +42,7 @@ package for the hostile TLS scenarios.
 import argparse
 import json
 import os
+import random
 import signal
 import socket
 import ssl
@@ -54,9 +55,18 @@ from pathlib import Path
 
 
 def free_port(kind=socket.SOCK_STREAM):
-    with socket.socket(socket.AF_INET, kind) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+    """A port that nothing holds, below the range the system hands to outgoing connections (Linux: 32768 and up):
+    the tests run side by side, and a client of one could take, between this call and the server's bind, a port
+    that the system picked for the other."""
+    for _ in range(200):
+        port = random.randrange(20000, 32000)
+        with socket.socket(socket.AF_INET, kind) as s:
+            try:
+                s.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+            return port
+    sys.exit("run_server: no free port")
 
 
 def wait_for(origin, process, seconds=30, context=None):
@@ -155,10 +165,11 @@ def main(argv=None):
                        stdout=subprocess.DEVNULL)
 
         public_port, discovery_port = free_port(), free_port(socket.SOCK_DGRAM)
+        dnssd_port = free_port(socket.SOCK_DGRAM)
         public = subprocess.Popen(
             [python, "-m", "server", "--library", str(library), "--port", str(public_port), "--quiet",
              "--state", str(tmp / "public-state.json"), "--saves", str(tmp / "public-saves"),
-             "--discovery", "--discovery-port", str(discovery_port)],
+             "--discovery", "--discovery-port", str(discovery_port), "--dns-sd", "--dns-sd-port", str(dnssd_port)],
             cwd=spec, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=(tmp / "public.log").open("ab"), start_new_session=True)
         others = []     # (process, log) of the other servers this script starts
@@ -228,6 +239,7 @@ def main(argv=None):
             env["LANTERN_TEST_TOKEN"] = paired.stdout.strip()
             env["LANTERN_TEST_KEY"] = (private_dir / "device.key").read_text(encoding="ascii").strip()
             env["LANTERN_TEST_DISCOVERY_PORT"] = str(discovery_port)
+            env["LANTERN_TEST_DNSSD_PORT"] = str(dnssd_port)
             code = subprocess.run(command, env=env).returncode
             if args.hostile_server:
                 code = code or hostile_runs(args.hostile_server, command, env, args.tls, tmp)

@@ -51,6 +51,7 @@ export {
 } from "./client/transport.ts";
 export { contentDigest, digestSha256, formatDigest, parseDigest } from "./digest.ts";
 export * as discovery from "./discovery.ts";
+export * as dnssd from "./dnssd.ts";
 export { isNewer, parse, read, readNamed, schemaOf } from "./documents.ts";
 export * as e2e from "./e2e.ts";
 export { DecryptionError, EncryptedBackup, KeyPhraseError, SaveKey } from "./e2e.ts";

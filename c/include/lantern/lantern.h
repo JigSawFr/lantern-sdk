@@ -45,7 +45,7 @@
  * adds to the API (functions, members appended to a struct, constants);
  * nothing is ever removed or changed while LANTERN_C_ABI_VERSION, the
  * shared library's SONAME version, stays the same. */
-#define LANTERN_C_API_VERSION 4
+#define LANTERN_C_API_VERSION 5
 #define LANTERN_C_ABI_VERSION 1
 #define LANTERN_VERSION_STRING "0.5.0"
 #define LANTERN_SPEC_DRAFT "0.6"
@@ -1460,6 +1460,27 @@ typedef struct lantern_discovery_options
 } lantern_discovery_options;
 LANTERN_API lantern_status lantern_discover(lantern_udp_socket* socket,
     const lantern_discovery_options* options, lantern_discovery_handler handler, void* user,
+    lantern_error* error);
+
+/* DNS-SD (§ 4.1, § 19.5): the servers (or the peers) advertised with multicast
+ * DNS, found by a single question sent from a port of the client's own, which
+ * responders answer straight back (RFC 6762 § 6.7): no group is joined. The
+ * servers come to `handler` as discover()'s do, once each by uid; a peer to
+ * `on_peer`, once each by name and address, with an empty `uid` (an
+ * advertisement has none) and one slot. IPv4 only. Since API 5. */
+typedef struct lantern_dnssd_options
+{
+    size_t struct_size;
+    const char* address; /* NULL: the group, 224.0.0.251; or one responder's address */
+    uint16_t port; /* 0: 5353 */
+    uint32_t wait_ms; /* how long to listen; 0: 2000 */
+    const lantern_limits* limits;
+    /* Browse `_lantern-peer._tcp` instead of `_lantern._tcp`: the peers come to `on_peer` */
+    bool peers;
+    lantern_discovery_peer_handler on_peer;
+} lantern_dnssd_options;
+LANTERN_API lantern_status lantern_browse_dnssd(lantern_udp_socket* socket,
+    const lantern_dnssd_options* options, lantern_discovery_handler handler, void* user,
     lantern_error* error);
 
 /* ===================================================== Draft 0.5 (API 2) */
