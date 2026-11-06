@@ -183,6 +183,9 @@ void write_ratings(json::Writer& w, const Vector<Rating>& ratings)
 
 Answer changes_route(const ServerState& state, const ServerRequest& request, const Caller& caller)
 {
+    // With `wait`, a long poll of the events (§ 18.3)
+    if (state.events && request.param("wait"))
+        return long_poll_route(state, request, caller);
     Journal* journal = state.library->journal();
     if (journal == nullptr)
         return std::unexpected(not_found(state, "This server does not offer it."));
@@ -215,6 +218,15 @@ Answer changes_route(const ServerState& state, const ServerRequest& request, con
     w.begin_object();
     w.key("schema");
     w.number(known_schema);
+    write_app_changes(w, changes);
+    w.key("since");
+    w.string(changes_token(state, *now));
+    w.end_object();
+    return json_response(state, request, std::move(out));
+}
+
+void write_app_changes(json::Writer& w, const AppChanges& changes)
+{
     w.key("added");
     w.begin_array();
     for (const App& app : changes.added)
@@ -225,10 +237,6 @@ Answer changes_route(const ServerState& state, const ServerRequest& request, con
     for (const String& id : changes.removed)
         w.string(id);
     w.end_array();
-    w.key("since");
-    w.string(seal_since(state, 's', now->epoch, now->position));
-    w.end_object();
-    return json_response(state, request, std::move(out));
 }
 
 Answer titles_route(const ServerState& state, const ServerRequest& request, const Caller& caller)

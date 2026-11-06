@@ -9,7 +9,8 @@
 // with their images, its homebrew and its cheat sets) to anyone, takes cheat
 // sets from a token with the scope cheats.write, keeps save backups (also
 // encrypted ones) in memory for the accounts with the scope saves, keeps the
-// requests for games of the accounts with the scope requests, and pairs
+// requests for games of the accounts with the scope requests, tells what
+// changes as events (a stream and the long poll of `changes`, § 18), and pairs
 // devices: the accounts of demo_accounts.hpp, a token bound to a key, signed
 // requests, invitations. An account with the scope admin runs the
 // administration API: accounts, devices, pairings, invitations, requests.
@@ -17,11 +18,13 @@
 // no backup encrypted on the device (a 400, § 9.4). Plain HTTP on 127.0.0.1; it
 // prints its URL and serves until it is stopped. No port, or 0: a free one.
 #include <atomic>
+#include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <string_view>
+#include <thread>
 
 #include <lantern/lantern.hpp>
 
@@ -101,6 +104,10 @@ int main(int argc, char** argv)
     options.saves            = &saves;
     options.requests         = &requests;
     options.encrypted_saves  = encrypted;
+    // Events: a line on a stream every 5 seconds at least, which keeps the conformance run short
+    options.events     = true;
+    options.heartbeat  = 5;
+    options.wait_limit = 30;
     lantern::posix::SystemRandom random;
     auto server = lantern::Server::create(library, options, random, clock);
     if (!server)
@@ -121,5 +128,8 @@ int main(int argc, char** argv)
     std::printf("http://127.0.0.1:%u/\n", static_cast<unsigned>(listener->port()));
     std::fflush(stdout);
     listener->serve(stop);
+    // The streams still open are told, then the listener ends them
+    server->shutdown();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
     return 0;
 }

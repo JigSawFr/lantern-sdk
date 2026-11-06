@@ -12,6 +12,7 @@
 #include <lantern/byte_range.hpp>
 #include <lantern/client.hpp>
 #include <lantern/digest.hpp>
+#include <lantern/encoding.hpp>
 #include <lantern/missing.hpp>
 #include <lantern/profiles.hpp>
 #include <lantern/requests.hpp>
@@ -184,9 +185,10 @@ Answer handshake(const ServerState& state, const ServerRequest& request, const d
     // caller who may read it, `cheats` for one with that scope, `saves` and
     // `encrypted_saves` for one with the scope `saves` when there is a store,
     // `requests` for one with that scope when there is a store, `admin` for
-    // one with that scope when the account store administers, and `pairing`
-    // and `signatures` for every caller (§ 4.2, L-4.2-5) when the server has
-    // accounts; nothing else is here yet
+    // one with that scope when the account store administers, `events` for
+    // one who may read any kind of event when the server offers them, and
+    // `pairing` and `signatures` for every caller (§ 4.2, L-4.2-5) when the
+    // server has accounts; nothing else is here yet
     const bool titles   = reads_library && state.library->offers_titles();
     const bool changes  = reads_library && state.library->journal() != nullptr;
     const bool sections = reads_library && state.library->offers_sections();
@@ -196,7 +198,8 @@ Answer handshake(const ServerState& state, const ServerRequest& request, const d
     const bool saves = state.saves != nullptr && !detail::check_scope(state, caller, "saves").has_value();
     const bool requests
         = state.requests != nullptr && !detail::check_scope(state, caller, "requests").has_value();
-    const bool admin = state.admin && !detail::check_scope(state, caller, "admin").has_value();
+    const bool admin  = state.admin && !detail::check_scope(state, caller, "admin").has_value();
+    const bool events = state.events && !detail::check_events(state, caller).has_value();
     w.key("features");
     w.begin_object();
     constexpr std::array families { std::string_view { "library" }, std::string_view { "titles" },
@@ -212,6 +215,7 @@ Answer handshake(const ServerState& state, const ServerRequest& request, const d
             || (family == "homebrew" && homebrew) || (family == "cheats" && cheats)
             || (family == "saves" && saves) || (family == "encrypted_saves" && saves && state.encrypted_saves)
             || (family == "requests" && requests) || (family == "admin" && admin)
+            || (family == "events" && events)
             || ((family == "pairing" || family == "signatures") && state.accounts != nullptr);
         w.key(family);
         w.number(offered ? known_schema : std::uint64_t { 0 });
@@ -239,6 +243,15 @@ Answer handshake(const ServerState& state, const ServerRequest& request, const d
         w.number(state.save_limits.size);
         w.key("saves_kept_per_title");
         w.number(static_cast<std::uint64_t>(state.save_limits.kept));
+    }
+    if (state.events)
+    {
+        w.key("heartbeat");
+        w.number(static_cast<std::uint64_t>(state.heartbeat));
+        w.key("event_streams");
+        w.number(static_cast<std::uint64_t>(state.event_streams));
+        w.key("wait");
+        w.number(static_cast<std::uint64_t>(state.wait_limit));
     }
     w.end_object();
     w.end_object();
@@ -777,6 +790,7 @@ struct Route
         requests,
         request,
         admin,
+        events,
     };
     Kind kind = Kind::none;
     std::string_view allowed; // the methods it takes
@@ -838,6 +852,8 @@ Route route_of(std::string_view rest) noexcept
         return { Route::Kind::save, "GET, HEAD, DELETE", segments[1], segments[2] };
     if (count == 2 && segments[0] == "uploads" && !segments[1].empty())
         return { Route::Kind::upload, "HEAD, PATCH, DELETE", segments[1], {} };
+    if (count == 1 && segments[0] == "events")
+        return { Route::Kind::events, "GET", {}, {} };
     if (count == 1 && segments[0] == "pairing")
         return { Route::Kind::pairing_start, "POST", {}, {} };
     if (count == 2 && segments[0] == "pairing" && !segments[1].empty())
@@ -919,7 +935,11 @@ Answer route(const ServerState& state, const ServerRequest& request)
     switch (chosen.kind)
     {
         case Route::Kind::changes:
-            offered = state.library->journal() != nullptr;
+            // With `wait`, a long poll of the events, which a library with no journal gives too (§ 18.3)
+            offered = state.library->journal() != nullptr || (state.events && request.param("wait"));
+            break;
+        case Route::Kind::events:
+            offered = state.events;
             break;
         case Route::Kind::titles:
         case Route::Kind::title_changes:
@@ -965,8 +985,12 @@ Answer route(const ServerState& state, const ServerRequest& request)
     const auto caller = detail::identify(state, request);
     if (!caller)
         return std::unexpected(caller.error());
-    if (auto refused = detail::check_request_signature(state, request, *caller))
-        return std::unexpected(std::move(*refused));
+    // A request held and asked again was checked the first time: its nonce is taken once (L-5.4-9)
+    if (!request.resumed)
+    {
+        if (auto refused = detail::check_request_signature(state, request, *caller))
+            return std::unexpected(std::move(*refused));
+    }
     if (!takes(allowed, request.method))
         return std::unexpected(detail::method_not_allowed(state, allowed));
     if (!pairing)
@@ -983,8 +1007,17 @@ Answer route(const ServerState& state, const ServerRequest& request)
             scope = "requests";
         if (chosen.kind == Route::Kind::admin)
             scope = "admin";
-        if (auto refused = detail::check_scope(state, *caller, scope))
+        // The events are for whoever may read one kind of them (§ 18.2)
+        const bool long_poll = chosen.kind == Route::Kind::changes && state.events && request.param("wait");
+        if (chosen.kind == Route::Kind::events || long_poll)
+        {
+            if (auto refused = detail::check_events(state, *caller))
+                return std::unexpected(std::move(*refused));
+        }
+        else if (auto refused = detail::check_scope(state, *caller, scope))
+        {
             return std::unexpected(std::move(*refused));
+        }
     }
     // A body the adapter left unread (too large to buffer) is for the uploads alone
     if (request.stream != nullptr && chosen.kind != Route::Kind::save_post
@@ -1040,6 +1073,8 @@ Answer route(const ServerState& state, const ServerRequest& request)
             return detail::request_route(state, request, *caller, chosen.name);
         case Route::Kind::admin:
             return detail::admin_route(state, request, *caller, chosen.name, chosen.second);
+        case Route::Kind::events:
+            return detail::events_route(state, request, *caller);
         case Route::Kind::pairing_start:
             return detail::pairing_start(state, request);
         case Route::Kind::pairing_poll:
@@ -1178,6 +1213,14 @@ Result<Server> Server::create(Library& library, const ServerOptions& options, Ra
     if (options.requests != nullptr && options.accounts == nullptr)
         return fail(Category::usage, "requests need accounts: a request belongs to one");
 
+    if (options.events
+        && (options.heartbeat < 5 || options.heartbeat > 60 || options.event_streams < 1
+            || options.wait_limit < 30 || options.wait_limit > 300 || options.events_kept < 1
+            || options.events_kept > 1'000'000 || options.stream_lifetime < 60))
+        return fail(Category::usage,
+            "events: heartbeat 5 to 60 s, event_streams 1 or more, wait_limit 30 to 300 s (SPEC.md 18.4), "
+            "events_kept 1 to 1000000, stream_lifetime 60 s or more");
+
     auto state = std::allocate_shared<ServerState>(
         std::pmr::polymorphic_allocator<ServerState>(allocator), allocator);
     state->library  = &library;
@@ -1223,6 +1266,22 @@ Result<Server> Server::create(Library& library, const ServerOptions& options, Ra
     state->admin = options.accounts != nullptr && options.admin && options.accounts->administers();
     if (auto filled = random.fill(state->secret); !filled)
         return std::unexpected(filled.error());
+    if (options.events)
+    {
+        // An event id does not outlive the process: its epoch is drawn now
+        std::array<std::uint8_t, 6> epoch {};
+        if (auto filled = random.fill(epoch); !filled)
+            return std::unexpected(filled.error());
+        state->events          = true;
+        state->heartbeat       = options.heartbeat;
+        state->event_streams   = options.event_streams;
+        state->wait_limit      = options.wait_limit;
+        state->stream_lifetime = options.stream_lifetime;
+        base64url_encode(epoch, state->hub.epoch);
+        state->hub.keep = options.events_kept;
+        library.observe(state.get());
+        state->observing = true;
+    }
     return Server(std::move(state));
 }
 
