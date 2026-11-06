@@ -20,6 +20,9 @@ regex = "1"
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 url = "2"
 getrandom = { version = "0.3", optional = true }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls-no-provider"], optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+webpki-roots = { version = "1", optional = true }
 
 [lints.rust]
 unsafe_code = "forbid"
@@ -35,3 +38,9 @@ panic = "deny"
 [features]
 # The operating system's random bytes for the client (off by default: the library draws none itself)
 os-entropy = ["dep:getrandom"]
+# An HTTP transport over reqwest and rustls, with the server's key pinned (SPEC.md § 5.3)
+http = ["dep:reqwest", "dep:rustls", "dep:webpki-roots"]
+webpki-roots = ["dep:webpki-roots"]
+
+[dev-dependencies]
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "pem"] }
