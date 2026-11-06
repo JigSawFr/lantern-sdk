@@ -35,6 +35,7 @@ if (LANTERN_BUILD_TESTS)
         unit/main.cpp
         unit/client_tests.cpp
         unit/crypto_tests.cpp
+        unit/dnssd_tests.cpp
         unit/document_tests.cpp
         unit/homebrew_tests.cpp
         unit/inflate_tests.cpp

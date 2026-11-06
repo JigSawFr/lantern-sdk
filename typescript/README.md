@@ -279,8 +279,23 @@ for (const found of await discover([directedBroadcast("192.168.1.20", 24)])) con
 ```
 
 A reply is a hint, never a proof: the client then reads the handshake over
-TLS and pairs. A browser has no UDP; DNS-SD needs an mDNS stack, which Node
-has not: neither is here.
+TLS and pairs. A browser has no UDP, so none of this is there.
+
+DNS-SD (§ 4.1, § 19.5) is `browseDnssd()` and `browseDnssdPeers()`, from
+`lantern-protocol/node`, with no dependency: the client asks once, from a port
+of its own, and responders answer straight back (RFC 6762 § 6.7, "legacy
+unicast"), so it joins no multicast group and keeps nothing between two
+browses. An instance whose answer came without its port or its TXT is asked
+for them once. Over IPv4 only; a network that carries no multicast, or a
+responder that ignores such a question, is the datagram's. The reading of the
+answers (`dnssd.Browse`, `fromTxt()`, `peerFromTxt()`) has no socket and runs
+anywhere.
+
+```ts
+import { browseDnssd } from "lantern-protocol/node";
+
+for (const found of await browseDnssd()) console.log(found.name, found.url);
+```
 
 ### Transports and pinning
 
@@ -524,7 +539,8 @@ and `GenerationChanged` (sync). All derive from `LanternError`.
 - In the server toolkit: DNS-SD, and the routes it could mark deprecated.
 - `PeerServer` over TLS (it speaks plain HTTP on a private network, as
   § 19.4 allows), and DNS-SD of peers (`_lantern-peer._tcp`).
-- DNS-SD on the client: Node has no mDNS stack, and a browser no UDP.
+- DNS-SD on the client over IPv6 (the question goes to `224.0.0.251`), and in
+  a browser, which has no UDP.
 - Pinning in a browser: impossible (above).
 - Drawing the QR code of `verifyComplete` or of a save key: the client gives
   their text.

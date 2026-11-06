@@ -246,8 +246,9 @@ Read<PeerReply> read_peer_datagram(std::span<const std::byte> datagram, const De
         return fail(Category::invalid_response, "a datagram that is not a peer's reply (SPEC.md 19.5)");
     if (!is_uuid(reply.uid) || reply.port == 0 || reply.port > 65535 || reply.slots == 0 || reply.slots > 8)
         return fail(Category::invalid_response, "a peer's reply not of SPEC.md 19.5's form");
-    if (reply.base.empty() || reply.base.front() != '/' || reply.base.back() == '/'
-        || reply.base.find_first_of("?#") != String::npos || reply.base.size() > 256)
+    if (reply.base.empty() || reply.base.front() != '/' || reply.base.starts_with("//")
+        || reply.base.back() == '/' || reply.base.find_first_of("?#") != String::npos
+        || reply.base.size() > 256)
         return fail(Category::invalid_response, "a peer's base that is not a path");
     if (reply.servers.empty() || reply.servers.size() > 16
         || !std::ranges::all_of(reply.servers, [](const String& uid) { return is_uuid(uid); }))

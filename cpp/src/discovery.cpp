@@ -53,8 +53,8 @@ Read<DiscoveryReply> read_discovery_datagram(
         return fail(Category::invalid_response, "a datagram that is not a server's reply (SPEC.md 4.1)");
     if (!is_uuid(reply.uid))
         return fail(Category::invalid_response, "a reply whose uid is not a UUID");
-    if (reply.base.empty() || reply.base.front() != '/' || reply.base.back() == '/'
-        || reply.base.find_first_of("?#") != String::npos)
+    if (reply.base.empty() || reply.base.front() != '/' || reply.base.starts_with("//")
+        || reply.base.back() == '/' || reply.base.find_first_of("?#") != String::npos)
         return fail(Category::invalid_response, "a reply whose base is not a path (SPEC.md 2)");
     if (std::ranges::find(reply.versions, std::uint64_t { 1 }) == reply.versions.end())
         return fail(Category::unsupported, "a server that does not serve version 1 of the protocol");

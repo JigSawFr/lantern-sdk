@@ -641,3 +641,49 @@ TEST_CASE("discovery: the public server answers the datagram on loopback")
     const std::string port          = public_origin.substr(public_origin.rfind(':'));
     CHECK(found.origins[0] == "https://127.0.0.1" + port);
 }
+
+TEST_CASE("dnssd: the public server's responder answers a one-shot question on loopback")
+{
+    auto socket = posix::UdpBroadcastSocket::open();
+    REQUIRE(socket);
+    struct Found final : DiscoveryHandler
+    {
+        std::vector<std::string> origins;
+        std::vector<std::string> bases;
+        std::vector<std::string> uids;
+        bool on_server(const DiscoveredServer& server) override
+        {
+            origins.emplace_back(server.origin);
+            bases.emplace_back(server.reply->base);
+            uids.emplace_back(server.reply->uid);
+            return true;
+        }
+    } found;
+    DnssdOptions options;
+    options.address = "127.0.0.1";
+    options.port    = static_cast<std::uint16_t>(std::stoi(env("LANTERN_TEST_DNSSD_PORT")));
+    options.wait    = std::chrono::milliseconds(800);
+    REQUIRE(browse_dnssd(*socket, options, found));
+    REQUIRE(found.origins.size() == 1);
+    const std::string public_origin = env("LANTERN_TEST_PUBLIC");
+    const std::string port          = public_origin.substr(public_origin.rfind(':'));
+    CHECK(found.origins[0] == "https://127.0.0.1" + port);
+    CHECK(found.bases[0] == "/api/lantern");
+    CHECK(found.uids[0].size() == 36);
+
+    // The peers' service is another responder's: nothing answers it here
+    struct NoPeers final : DiscoveryHandler
+    {
+        int peers = 0;
+        bool on_server(const DiscoveredServer&) override { return true; }
+        bool on_peer(const DiscoveredPeer&) override
+        {
+            ++peers;
+            return true;
+        }
+    } none;
+    options.peers = true;
+    options.wait  = std::chrono::milliseconds(300);
+    REQUIRE(browse_dnssd(*socket, options, none));
+    CHECK(none.peers == 0);
+}

@@ -155,10 +155,11 @@ def main(argv=None):
                        stdout=subprocess.DEVNULL)
 
         public_port, discovery_port = free_port(), free_port(socket.SOCK_DGRAM)
+        dnssd_port = free_port(socket.SOCK_DGRAM)
         public = subprocess.Popen(
             [python, "-m", "server", "--library", str(library), "--port", str(public_port), "--quiet",
              "--state", str(tmp / "public-state.json"), "--saves", str(tmp / "public-saves"),
-             "--discovery", "--discovery-port", str(discovery_port)],
+             "--discovery", "--discovery-port", str(discovery_port), "--dns-sd", "--dns-sd-port", str(dnssd_port)],
             cwd=spec, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=(tmp / "public.log").open("ab"), start_new_session=True)
         others = []     # (process, log) of the other servers this script starts
@@ -228,6 +229,7 @@ def main(argv=None):
             env["LANTERN_TEST_TOKEN"] = paired.stdout.strip()
             env["LANTERN_TEST_KEY"] = (private_dir / "device.key").read_text(encoding="ascii").strip()
             env["LANTERN_TEST_DISCOVERY_PORT"] = str(discovery_port)
+            env["LANTERN_TEST_DNSSD_PORT"] = str(dnssd_port)
             code = subprocess.run(command, env=env).returncode
             if args.hostile_server:
                 code = code or hostile_runs(args.hostile_server, command, env, args.tls, tmp)

@@ -115,6 +115,134 @@ static void discovery_over_the_apps_socket(void)
     lantern_udp_socket_free(socket);
 }
 
+/* DNS-SD: a one-shot question to the group, answered by a responder. */
+static size_t put_name(uint8_t* out, const char* const* labels)
+{
+    size_t at = 0;
+    for (; *labels != NULL; ++labels)
+    {
+        const size_t length = strlen(*labels);
+        out[at++]           = (uint8_t)length;
+        memcpy(out + at, *labels, length);
+        at += length;
+    }
+    out[at++] = 0;
+    return at;
+}
+
+static size_t put_record(
+    uint8_t* out, const char* const* owner, uint16_t type, const uint8_t* rdata, size_t size)
+{
+    size_t at = put_name(out, owner);
+    out[at++] = (uint8_t)(type >> 8);
+    out[at++] = (uint8_t)(type & 0xffU);
+    out[at++] = 0;
+    out[at++] = 1; /* class IN */
+    out[at++] = 0;
+    out[at++] = 0;
+    out[at++] = 0;
+    out[at++] = 120; /* ttl */
+    out[at++] = (uint8_t)(size >> 8);
+    out[at++] = (uint8_t)(size & 0xffU);
+    memcpy(out + at, rdata, size);
+    return at + size;
+}
+
+typedef struct mdns
+{
+    int asked;
+    int heard;
+    uint8_t answer[512];
+    size_t answer_size;
+} mdns;
+
+static lantern_status mdns_send(
+    void* user, const char* address, uint16_t port, const uint8_t* bytes, size_t size)
+{
+    mdns* net = user;
+    CHECK(strcmp(address, "224.0.0.251") == 0);
+    CHECK(port == 5353);
+    CHECK(size > 12 && bytes[4] == 0 && bytes[5] == 1); /* one question */
+    ++net->asked;
+    return LANTERN_OK;
+}
+
+static lantern_status mdns_receive(
+    void* user, uint8_t* buffer, size_t capacity, uint32_t timeout_ms, lantern_datagram* out, bool* received)
+{
+    (void)timeout_ms;
+    mdns* net = user;
+    if (net->heard >= net->asked || net->answer_size > capacity)
+    {
+        *received = false;
+        return LANTERN_OK;
+    }
+    ++net->heard;
+    memcpy(buffer, net->answer, net->answer_size);
+    out->size = net->answer_size;
+    snprintf(out->address, sizeof(out->address), "192.168.1.99");
+    out->port = 5353;
+    *received = true;
+    return LANTERN_OK;
+}
+
+static int found_servers;
+static bool on_found_server(void* user, const lantern_discovered_server* server)
+{
+    (void)user;
+    ++found_servers;
+    CHECK(STR_EQ(server->address, "192.168.1.20"));
+    CHECK(STR_EQ(server->origin, "https://192.168.1.20:8443"));
+    CHECK(STR_EQ(lantern_discovery_reply_get_name(server->reply), "Ines's shelf"));
+    CHECK(STR_EQ(lantern_discovery_reply_get_base(server->reply), "/api/lantern"));
+    return true;
+}
+
+static void dnssd_over_the_apps_socket(void)
+{
+    mdns net                     = { 0, 0, { 0 }, 0 };
+    const char* const service[]  = { "_lantern", "_tcp", "local", NULL };
+    const char* const instance[] = { "Ines's shelf", "_lantern", "_tcp", "local", NULL };
+    const char* const host[]     = { "shelf", "local", NULL };
+    uint8_t rdata[128];
+    uint8_t* at = net.answer;
+    memset(at, 0, 12);
+    at[2] = 0x84; /* a response */
+    at[7] = 4; /* four answers */
+    at += 12;
+    at += put_record(at, service, 12, rdata, put_name(rdata, instance));
+    uint8_t srv[64] = { 0, 0, 0, 0, 0x20, 0xfb }; /* port 8443 */
+    at += put_record(at, instance, 33, srv, 6 + put_name(srv + 6, host));
+    const char* const pairs[] = { "uid=6f1c2a8e-4b7d-4e2a-9c31-8d5e2f0a7b14", "path=/api/lantern", "v=1" };
+    size_t size               = 0;
+    for (size_t i = 0; i < 3; ++i)
+    {
+        rdata[size++] = (uint8_t)strlen(pairs[i]);
+        memcpy(rdata + size, pairs[i], strlen(pairs[i]));
+        size += strlen(pairs[i]);
+    }
+    at += put_record(at, instance, 16, rdata, size);
+    const uint8_t address[4] = { 192, 168, 1, 20 };
+    at += put_record(at, host, 1, address, 4);
+    net.answer_size = (size_t)(at - net.answer);
+
+    lantern_udp_callbacks callbacks = LANTERN_INIT(lantern_udp_callbacks);
+    callbacks.user                  = &net;
+    callbacks.send_to               = mdns_send;
+    callbacks.receive               = mdns_receive;
+    lantern_udp_socket* socket      = NULL;
+    REQUIRE_STATUS(lantern_udp_socket_create(&callbacks, NULL, &socket, NULL), LANTERN_OK);
+    lantern_dnssd_options options = LANTERN_INIT(lantern_dnssd_options);
+    options.wait_ms               = 200;
+    found_servers                 = 0;
+    lantern_error error           = LANTERN_INIT(lantern_error);
+    REQUIRE_CALL(lantern_browse_dnssd(socket, &options, on_found_server, NULL, &error), LANTERN_OK, &error);
+    CHECK(net.asked >= 1);
+    CHECK(found_servers == 1);
+    CHECK(lantern_browse_dnssd(NULL, &options, on_found_server, NULL, &error) < 0);
+    lantern_udp_socket_free(socket);
+}
+
 static void the_librarys_transports(void)
 {
     lantern_transport* transport = NULL;
@@ -234,6 +362,7 @@ static void upload_progress_files(void)
 const test_case discovery_tests[] = {
     { "discovery: datagrams and origins", datagrams },
     { "discovery: over the app's socket, each server once", discovery_over_the_apps_socket },
+    { "discovery: DNS-SD over the app's socket", dnssd_over_the_apps_socket },
     { "transports: the library's own", the_librarys_transports },
     { "state: a download's, saved and loaded with its schema", download_state_files },
     { "state: an upload's, saved and loaded with its schema", upload_progress_files },

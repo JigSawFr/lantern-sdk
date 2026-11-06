@@ -7,6 +7,7 @@
 #include <lantern/device_key.hpp>
 #include <lantern/digest.hpp>
 #include <lantern/discovery.hpp>
+#include <lantern/dnssd.hpp>
 #include <lantern/document.hpp>
 #include <lantern/download.hpp>
 #include <lantern/ed25519.hpp>

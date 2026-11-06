@@ -56,6 +56,7 @@ add_library(lantern
     src/device_key.cpp
     src/digest.cpp
     src/discovery.cpp
+    src/dnssd.cpp
     src/document.cpp
     src/download.cpp
     src/ed25519.cpp
