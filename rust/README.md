@@ -74,6 +74,14 @@ README says what is there.
   stands after a conflict or a cut connection. An upload address on another
   host is refused.
 
+- **Administration** (SPEC.md § 5.7): accounts, devices, waiting pairings,
+  invitations and every account's requests. Each call takes a small struct of
+  this crate (`NewUser`, `PairingDecision`, `RequestDecision`…) rather than
+  the generated models, which cannot be built from outside the crate. The
+  specification's refusals are made before anything is sent: deleting an
+  account whose `confirm` is not its name, a name that is not a name, a
+  decision it does not allow.
+
 - **A server that means harm** (`tests/hostile.rs`): a body that never ends,
   a document nested without end, something that is not JSON, a listing that
   never stops (a client follows at most 10 000 pages), a download that never
