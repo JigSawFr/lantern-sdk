@@ -671,3 +671,170 @@ fn requests_are_listed_made_and_withdrawn() {
     let body: Value = serde_json::from_slice(&post.body).unwrap();
     assert_eq!(body["title_id"], "0100EFEF00020000");
 }
+
+fn save_meta() -> lantern_protocol::client::SaveMeta {
+    lantern_protocol::client::SaveMeta {
+        kind: Some("account".to_owned()),
+        game_version_code: Some(196_608),
+        profile: Some("Léa".to_owned()),
+        note: Some("Chapter 4".to_owned()),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn a_save_goes_in_one_request_with_its_digest() {
+    let fake = Fake::new(|r, _| match r.method.as_str() {
+        "POST" => json_reply(201, &example("save")),
+        _ => serve(r).unwrap(),
+    });
+    let mut client = Client::new(URL, fake.clone(), options(0.0)).unwrap();
+    client.set_token(Some("et_example"), None).unwrap();
+    let zip = b"PK\x03\x04 pretend archive";
+    let saved = client
+        .save_upload("0100ABCD00010000", zip, &save_meta(), None)
+        .unwrap();
+    assert_eq!(saved.save_id, "s_03");
+    let sent = fake.requests().pop().unwrap();
+    assert_eq!(sent.headers.get("Content-Type"), Some("application/zip"));
+    assert_eq!(
+        sent.headers.get("Content-Digest").unwrap(),
+        lantern_protocol::digest::content_digest(zip)
+    );
+    assert_eq!(sent.headers.get("Lantern-Profile"), Some("L%C3%A9a"));
+    assert_eq!(sent.headers.get("Lantern-Game-Version"), Some("196608"));
+    assert_eq!(sent.body, zip);
+    // A kind the specification does not know, and a missing platform.
+    let mut bad = save_meta();
+    bad.kind = Some("weird".to_owned());
+    assert!(
+        client
+            .save_upload("0100ABCD00010000", zip, &bad, None)
+            .is_err()
+    );
+    let mut bare = options(0.0);
+    bare.platform = None;
+    let mut client = Client::new(URL, Fake::new(|r, _| serve(r).unwrap()), bare).unwrap();
+    assert!(
+        client
+            .save_upload("0100ABCD00010000", zip, &save_meta(), None)
+            .is_err()
+    );
+}
+
+#[test]
+fn a_cut_upload_is_resumed_where_the_server_stands() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let held = Arc::new(AtomicU64::new(0));
+    let cut = Arc::new(AtomicU64::new(0));
+    let archive: Vec<u8> = (0..2500u32).map(|n| (n % 251) as u8).collect();
+    let total = archive.len() as u64;
+    let (h, c) = (held.clone(), cut.clone());
+    let fake = Fake::new(move |r, _| {
+        let upload = format!("{URL}/api/lantern/v1/uploads/u_1");
+        match (r.method.as_str(), r.url.as_str()) {
+            ("POST", u) if u.contains("/uploads") && !u.contains("/uploads/") => {
+                let mut doc = example("upload");
+                doc["upload"] = json!(upload);
+                doc["chunk_size"] = json!(1000);
+                doc["offset"] = json!(0);
+                json_reply(201, &doc)
+            }
+            ("PATCH", _) => {
+                let offset: u64 = r.headers.get("Upload-Offset").unwrap().parse().unwrap();
+                if offset != h.load(Ordering::SeqCst) {
+                    return reply(
+                        409,
+                        "application/problem+json",
+                        br#"{"schema":1,"status":409,"code":"conflict"}"#,
+                        &[],
+                    );
+                }
+                // The second chunk is lost on its way, after the server took it.
+                if offset == 1000 && c.fetch_add(1, Ordering::SeqCst) == 0 {
+                    h.store(2000, Ordering::SeqCst);
+                    return Err(Error::Transport("connection reset".to_owned()));
+                }
+                let now = offset + r.body.len() as u64;
+                h.store(now, Ordering::SeqCst);
+                if now == total {
+                    return json_reply(201, &example("save"));
+                }
+                reply(
+                    204,
+                    "text/plain",
+                    b"",
+                    &[("Upload-Offset", &now.to_string())],
+                )
+            }
+            ("HEAD", _) => reply(
+                204,
+                "text/plain",
+                b"",
+                &[
+                    ("Upload-Offset", &h.load(Ordering::SeqCst).to_string()),
+                    ("Upload-Length", &total.to_string()),
+                    ("Lantern-Chunk-Size", "1000"),
+                ],
+            ),
+            _ => serve(r).unwrap(),
+        }
+    });
+    let mut client = Client::new(URL, fake.clone(), options(0.0)).unwrap();
+    client.set_token(Some("et_example"), None).unwrap();
+    let saved = client
+        .save_upload_resumable("0100ABCD00010000", &archive, &save_meta(), None, 3)
+        .unwrap();
+    assert_eq!(saved.save_id, "s_03");
+    let patches: Vec<String> = fake
+        .requests()
+        .into_iter()
+        .filter(|r| r.method == "PATCH")
+        .map(|r| r.headers.get("Upload-Offset").unwrap().to_owned())
+        .collect();
+    assert_eq!(patches, ["0", "1000", "2000"]);
+    // An upload address on another host is refused.
+    let mut elsewhere = example("upload");
+    elsewhere["upload"] = json!("https://evil.example.net/u");
+    let other = Fake::new(move |r, _| {
+        if r.method == "POST" {
+            return json_reply(201, &elsewhere);
+        }
+        serve(r).unwrap()
+    });
+    let mut client = Client::new(URL, other, options(0.0)).unwrap();
+    assert!(
+        client
+            .upload_start("0100ABCD00010000", &archive, &save_meta(), None)
+            .is_err()
+    );
+}
+
+#[test]
+fn saves_are_listed_downloaded_and_deleted() {
+    let body: &'static [u8] = b"PK archive bytes";
+    let mut save = example("save");
+    save["size"] = json!(body.len());
+    save["sha256"] = json!(sha256_hex(body));
+    let listing = json!({"schema": 1, "saves": [save]});
+    let fake = Fake::new(move |r, _| match r.method.as_str() {
+        "DELETE" => reply(204, "text/plain", b"", &[]),
+        "GET" if r.url.contains("/saves/0100") => reply(200, "application/zip", body, &[]),
+        "GET" if r.url.contains("/saves") => json_reply(200, &listing),
+        _ => serve(r).unwrap(),
+    });
+    let mut client = Client::new(URL, fake.clone(), options(0.0)).unwrap();
+    client.set_token(Some("et_example"), None).unwrap();
+    let saves = client.saves(Some("0100ABCD00010000"), None).unwrap();
+    assert_eq!(saves.saves.len(), 1);
+    let mut sink = MemorySink::new();
+    client
+        .save_download(&saves.saves[0], &mut sink, true)
+        .unwrap();
+    assert_eq!(sink.bytes(), body);
+    assert!(sink.committed());
+    client
+        .save_delete("0100ABCD00010000", "s_03", None)
+        .unwrap();
+    assert!(client.save_delete("a/b\n", "s_03", None).is_err());
+}
