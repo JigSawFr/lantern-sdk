@@ -16,7 +16,8 @@ use crate::documents::{SCHEMA, schema_of};
 use crate::download::{DownloadSink, Expected, Verifier};
 use crate::error::{Error, Result};
 use crate::generated::models::{
-    AppsPage, Changes, Handshake, PairingCode, PairingToken, Sections, Title, TitleChanges, Titles,
+    AppsPage, Changes, Handshake, Homebrew, HomebrewPage, PairingCode, PairingToken, Sections,
+    Title, TitleChanges, Titles,
 };
 use crate::http::{
     JSON_TYPE, Origin, PLATFORM_HEADER, media_type, on_origin, origin, plain_http_allowed, quote,
@@ -169,6 +170,23 @@ pub struct AppsOptions {
     pub sort: Option<String>,
     /// `format`.
     pub format: Option<String>,
+}
+
+/// Options of the homebrew list.
+#[derive(Debug, Clone, Default)]
+pub struct HomebrewOptions {
+    /// The platform, when it is not the client's.
+    pub platform: Option<String>,
+    /// Items per page.
+    pub page_size: Option<u32>,
+    /// The cursor of the page to read.
+    pub cursor: Option<String>,
+    /// `q`, a search on the name.
+    pub q: Option<String>,
+    /// `kind`: a lower-case word.
+    pub kind: Option<String>,
+    /// `genre`: a lower-case word.
+    pub genre: Option<String>,
 }
 
 /// Options of `missing`.
@@ -849,6 +867,101 @@ impl<T: Transport> Client<T> {
         document(&reply.body, "missing")
     }
 
+    // Homebrew (SPEC.md § 8).
+
+    /// One page of homebrew entries (SPEC.md § 8.5), without their manifests.
+    ///
+    /// # Errors
+    ///
+    /// When `kind` or `genre` is not a lower-case word (1 to 32 letters,
+    /// digits and `_`, starting with a letter), or any error of the exchange.
+    pub fn homebrew_list(&mut self, options: &HomebrewOptions) -> Result<HomebrewPage> {
+        for (name, value) in [("kind", &options.kind), ("genre", &options.genre)] {
+            if let Some(v) = value
+                && !listed_word(v)
+            {
+                return Err(Error::field(
+                    "a lower-case word of 1 to 32 letters, digits and _",
+                    name,
+                ));
+            }
+        }
+        let mut call = Call::get("homebrew", "/homebrew");
+        call.query = Self::platform_query(options.platform.as_deref());
+        for (name, value) in [
+            ("q", &options.q),
+            ("kind", &options.kind),
+            ("genre", &options.genre),
+        ] {
+            if let Some(v) = value {
+                call.query.push((name.to_owned(), v.clone()));
+            }
+        }
+        call.query
+            .extend(Self::listing(options.page_size, options.cursor.as_deref()));
+        let reply = self.send(&call)?;
+        document(&reply.body, "homebrew")
+    }
+
+    /// One entry, with its manifests (SPEC.md § 8.1).
+    ///
+    /// # Errors
+    ///
+    /// When `id` is not one, or any error of the exchange.
+    pub fn homebrew(&mut self, id: &str, platform: Option<&str>) -> Result<Homebrew> {
+        check_id(id, "id")?;
+        let path = format!("/homebrew/{}", quote(id));
+        let mut call = Call::get("homebrew entry", &path);
+        call.query = Self::platform_query(platform);
+        let reply = self.send(&call)?;
+        document(&reply.body, "homebrew entry")
+    }
+
+    /// The entries whose build is above the installed one (SPEC.md § 8.5);
+    /// `installed` is `(id, build)`.
+    ///
+    /// # Errors
+    ///
+    /// When there is nothing installed to ask about, an id is not one, or a
+    /// build is negative; or any error of the exchange.
+    pub fn homebrew_updates(
+        &mut self,
+        installed: &[(String, i64)],
+        options: &HomebrewOptions,
+    ) -> Result<HomebrewPage> {
+        if options.platform.is_none() && self.options.platform.is_none() {
+            return Err(Error::field(
+                "homebrew updates need a platform (SPEC.md § 4.3)",
+                "platform",
+            ));
+        }
+        if installed.is_empty() {
+            return Err(Error::field("name what is installed", "installed"));
+        }
+        for (id, build) in installed {
+            check_id(id, "installed")?;
+            if *build < 0 {
+                return Err(Error::field("a build is not negative", "installed"));
+            }
+        }
+        let body = json!({
+            "schema": SCHEMA,
+            "installed": installed
+                .iter()
+                .map(|(id, build)| json!({ "id": id, "build": build }))
+                .collect::<Vec<_>>(),
+        });
+        let mut call = Call::get("homebrew updates", "/homebrew/updates");
+        call.method = "POST";
+        call.query = Self::platform_query(options.platform.as_deref());
+        call.query
+            .extend(Self::listing(options.page_size, options.cursor.as_deref()));
+        call.body = Some(serde_json::to_vec(&body).map_err(|e| Error::document(e.to_string()))?);
+        call.json_body = true;
+        let reply = self.send(&call)?;
+        document(&reply.body, "homebrew updates")
+    }
+
     // Pairing (SPEC.md § 5.2).
 
     /// Starts a pairing: the device asks `scopes`, with a key that binds the
@@ -1110,6 +1223,15 @@ fn check_base(base: &str) -> Result<String> {
 
 /// A document read from a body within SPEC.md § 13's limits; a newer `schema`
 /// is [`Error::NewerSchema`].
+/// A listed value (a kind, a genre): 1 to 32 lower-case letters, digits and
+/// `_`, starting with a letter (SPEC.md § 8.5).
+fn listed_word(word: &str) -> bool {
+    let mut chars = word.chars();
+    chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && word.len() <= 32
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
 /// An id that goes in a path or a comma-separated list: not empty, short, no
 /// control character and no comma.
 fn check_id(id: &str, field: &str) -> Result<()> {

@@ -15,6 +15,7 @@ pub mod documents;
 pub mod download;
 pub mod error;
 pub mod generated;
+pub mod homebrew;
 pub mod http;
 #[cfg(feature = "http")]
 pub mod http_transport;

@@ -7,7 +7,9 @@ use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use lantern_protocol::client::{AppsOptions, Client, ClientOptions, Entropy, MissingOptions};
+use lantern_protocol::client::{
+    AppsOptions, Client, ClientOptions, Entropy, HomebrewOptions, MissingOptions,
+};
 use lantern_protocol::digest::sha256_hex;
 use lantern_protocol::download::{DownloadSink, Expected, MemorySink};
 use lantern_protocol::error::{Error, Result};
@@ -538,4 +540,60 @@ fn a_title_with_a_newer_schema_is_absent() {
     let mut client = Client::new(URL, fake, options(0.0)).unwrap();
     let err = client.title("0100ABCD00010000", None).unwrap_err();
     assert!(matches!(err, Error::NewerSchema { .. }), "{err:?}");
+}
+
+#[test]
+fn homebrew_is_listed_read_and_updated() {
+    let fake = Fake::new(|r, _| {
+        if r.url.contains("/homebrew/updates") {
+            return json_reply(200, &example("homebrew-page"));
+        }
+        if r.url.contains("/homebrew?") || r.url.ends_with("/homebrew") {
+            return json_reply(200, &example("homebrew-page"));
+        }
+        if r.url.contains("/homebrew/") {
+            return json_reply(200, &example("homebrew"));
+        }
+        serve(r).unwrap()
+    });
+    let mut client = Client::new(URL, fake.clone(), options(0.0)).unwrap();
+    let o = HomebrewOptions {
+        kind: Some("tool".to_owned()),
+        q: Some("frost".to_owned()),
+        ..HomebrewOptions::default()
+    };
+    assert!(!client.homebrew_list(&o).unwrap().items.is_empty());
+    let entry = client.homebrew("org.example.frostline", None).unwrap();
+    assert_eq!(entry.id, "org.example.frostline");
+    let page = client
+        .homebrew_updates(&[("org.example.frostline".to_owned(), 10300)], &o)
+        .unwrap();
+    assert!(!page.items.is_empty());
+    let sent = fake.requests();
+    let post = sent.iter().find(|r| r.method == "POST").unwrap();
+    let body: Value = serde_json::from_slice(&post.body).unwrap();
+    assert_eq!(body["installed"][0]["build"], 10300);
+    assert!(
+        sent.iter()
+            .any(|r| r.url.contains("kind=tool") && r.url.contains("q=frost"))
+    );
+}
+
+#[test]
+fn a_kind_that_is_not_a_word_is_refused_before_it_is_sent() {
+    let fake = Fake::new(|r, _| serve(r).unwrap());
+    let mut client = Client::new(URL, fake.clone(), options(0.0)).unwrap();
+    for bad in ["", "Tool", "1tool", "a-b", &"x".repeat(33)] {
+        let o = HomebrewOptions {
+            kind: Some(bad.to_owned()),
+            ..HomebrewOptions::default()
+        };
+        assert!(client.homebrew_list(&o).is_err(), "{bad}");
+    }
+    assert!(
+        client
+            .homebrew_updates(&[], &HomebrewOptions::default())
+            .is_err()
+    );
+    assert!(fake.requests().is_empty());
 }

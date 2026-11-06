@@ -55,6 +55,13 @@ README says what is there.
   `discover()` over a `Datagram` socket the caller can supply (`UdpDatagram`
   is the standard library's).
 
+- **Homebrew** (SPEC.md § 8): `homebrew_list`, `homebrew`, `homebrew_updates`;
+  and `lantern_protocol::homebrew`: device paths and manifests checked by the
+  vectors (canonical caseless match for two paths, via `caseless`), the digest
+  of a manifest, the bytes an author signs and their strict Ed25519 check,
+  the packages for an architecture, and the key pinned at the first install
+  (`check_pin`) with both short fingerprints to show on a change.
+
 - **A server that means harm** (`tests/hostile.rs`): a body that never ends,
   a document nested without end, something that is not JSON, a listing that
   never stops (a client follows at most 10 000 pages), a download that never
