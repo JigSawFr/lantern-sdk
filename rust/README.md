@@ -33,7 +33,8 @@ README says what is there.
   `signatures` and `ed25519-refused` vectors).
 - **The client** over a `Transport` trait that the caller implements (the
   library does no input or output, draws no random bytes and reads no clock
-  but the ones it is given): the handshake, the apps list and `missing`,
+  but the ones it is given): the handshake, the apps list and `missing`, `changes`, `sections` and
+  the titles (one, many, changes),
   pairing with a bound key, credentials and signature for the server's origin
   alone, a clock mended after `signature_expired`, downloads resumed with a
   `Range` and committed only once size and SHA-256 are right
