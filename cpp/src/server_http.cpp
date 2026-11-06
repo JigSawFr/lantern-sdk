@@ -79,7 +79,7 @@ constexpr std::array status_names {
 
 const StatusName* find_status(std::uint16_t status) noexcept
 {
-    const auto* const found
+    const auto found
         = std::ranges::find_if(status_names, [&](const StatusName& name) { return name.status == status; });
     return found == status_names.end() ? nullptr : &*found;
 }
@@ -529,8 +529,8 @@ Answer preflight(const ServerState& state, const ServerRequest& request)
     {
         const std::size_t comma     = asked.find(',');
         const std::string_view item = trim(asked.substr(0, comma));
-        asked = comma == std::string_view::npos ? std::string_view {} : asked.substr(comma + 1);
-        const auto* const known = std::ranges::find_if(
+        asked            = comma == std::string_view::npos ? std::string_view {} : asked.substr(comma + 1);
+        const auto known = std::ranges::find_if(
             cors_headers, [&](std::string_view name) { return equal_ignoring_case(name, item); });
         if (known != cors_headers.end() && !allowed.contains(*known))
         {
