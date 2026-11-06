@@ -80,6 +80,11 @@
 //   device writing its own item of `installed` only, and erasing a
 //   collection or all of them. The event `sync` tells the account's devices.
 //
+// - with ServerOptions::deltas (§ 22), the family `deltas`: the chunk index of
+//   a file at <base>/v1/chunks/sha256/<hex>, for the apps and homebrew
+//   packages a Library gives `chunks` (MemoryLibrary::offer_deltas() writes
+//   them once per file); the chunks themselves are ranges of the file;
+//
 // Approving a pairing is the app's, or an admin's: the app's own page, once
 // the user is signed in there, calls Server::approve_pairing(); an admin app
 // uses the administration API. Discovery, mirrors and the other families are not here yet: a
@@ -513,6 +518,16 @@ class Library
         return fail(Category::unsupported, "this library takes no cheat set");
     }
 
+    // The chunk index (§ 22.1) of the file whose SHA-256 is `file_sha256`, in canonical JSON: the bytes that
+    // the `chunks` of the app or package gives (the `size` and `sha256` of the returned file are those of the
+    // index). Nothing for a file it has no index for. Only asked when ServerOptions::deltas is set, for a
+    // file the caller may read.
+    [[nodiscard]] virtual Result<std::optional<LibraryFile>> chunk_index(
+        const Digest& /*file_sha256*/, const Allocator& /*allocator*/)
+    {
+        return std::optional<LibraryFile> {};
+    }
+
     // The change journal (§ 6.4): the family `changes` is offered when there
     // is one, and /v1/titles/changes answers 410 to any token when there is
     // none. It must outlive the server.
@@ -542,6 +557,16 @@ struct AppDraft
     std::span<const std::string_view> mirrors; // other addresses of its bytes, 8 at most (§ 19.2)
 };
 
+// How a MemoryLibrary writes chunk indexes (§ 22.1).
+struct ChunkingOptions
+{
+    // The chunker's size (§ 22.2): a power of two from 65,536 to 4,194,304; 0 chooses, for each file, the
+    // smallest that keeps its chunks about 16,384 at most (cdc_size_for()).
+    std::uint64_t chunker_size = 0;
+    // A file below this many bytes gets no `chunks` (a small one gains nothing).
+    std::uint64_t min_file_size = std::uint64_t { 1 } << 20U;
+};
+
 // A Library held in memory: a reference to read, the base of tests and
 // demos. It refuses an app that breaks § 6.1 or its platform's profile
 // (Annex A), a title that breaks § 7.1, a homebrew that breaks § 8 and a
@@ -565,6 +590,12 @@ class MemoryLibrary final : public Library, public Journal
     // Stops serving the app of that id; false when there is none.
     bool remove_app(std::string_view id);
     [[nodiscard]] std::size_t size() const noexcept { return apps_.size(); }
+
+    // Gives `chunks` (§ 22.1) to the apps and homebrew packages added from now on whose file is large enough,
+    // and keeps their indexes, each written once. Call it before adding them, and set ServerOptions::deltas
+    // so that the server serves the indexes and says so. Refuses a chunker's size that is not 0 or one of §
+    // 22.2's.
+    [[nodiscard]] Result<void> offer_deltas(const ChunkingOptions& options = {});
 
     // Keeps a change journal of the last `keep` changes (1 to 1,000,000):
     // the family `changes`.
@@ -633,6 +664,8 @@ class MemoryLibrary final : public Library, public Journal
     [[nodiscard]] Result<Vector<CheatSet>> cheats(const Allocator& allocator) override;
     [[nodiscard]] Result<std::optional<LibraryFile>> cheat_file(
         std::string_view id, const Allocator& allocator) override;
+    [[nodiscard]] Result<std::optional<LibraryFile>> chunk_index(
+        const Digest& file_sha256, const Allocator& allocator) override;
     [[nodiscard]] bool writes_cheats() override { return cheat_writes_; }
     [[nodiscard]] Result<CheatSet> write_cheat(
         const CheatWrite& set, std::string_view replacing, const Allocator& allocator) override;
@@ -707,6 +740,12 @@ class MemoryLibrary final : public Library, public Journal
     [[nodiscard]] bool uses_file(std::string_view name) const noexcept;
     // Stops serving the files only `gone` used.
     void drop_unused_files(const Homebrew& gone);
+    // The `chunks` of a file of `content`, with its index kept; nothing when the file is too small or deltas
+    // are not offered.
+    [[nodiscard]] Result<std::optional<AppChunks>> chunks_of(
+        std::span<const std::byte> content, const Digest& sha256);
+    // Forgets the indexes of the files that no app and no package uses.
+    void prune_indexes();
     [[nodiscard]] Result<CheatSet> put_cheat(const CheatWrite& given, std::string_view replacing);
     [[nodiscard]] bool has_app(std::string_view id) const noexcept;
     [[nodiscard]] const Title* find_title(
@@ -722,6 +761,10 @@ class MemoryLibrary final : public Library, public Journal
     Vector<Homebrew> homebrew_;
     Vector<CheatSet> cheats_;
     Vector<Stored> cheat_files_;
+    // Chunk indexes (§ 22.1), by the SHA-256 of their file (`name`, 64 hex digits)
+    Vector<Stored> indexes_;
+    bool deltas_offered_ = false;
+    ChunkingOptions deltas_;
     bool titles_offered_   = false;
     bool sections_offered_ = false;
     bool homebrew_offered_ = false;
@@ -929,6 +972,12 @@ struct ServerOptions
     std::optional<std::array<std::uint8_t, 32>> grant_seed;
     // `peers.grant_lifetime`: the seconds a grant lives, 1 to 900.
     std::uint32_t grant_lifetime = 600;
+
+    // Differential updates (§ 22): the route <base>/v1/chunks/sha256/<hex>, for the scope `library`, and
+    // `features.deltas` in the handshake. The Library gives the files their `chunks` (MemoryLibrary does
+    // after offer_deltas()). Without it, a file that carries `chunks` names an index that 404s and the
+    // handshake does not say `deltas`.
+    bool deltas = false;
 
     // The administration API (§ 5.7) and the invitations (§ 5.5), when the
     // account store administers (AccountStore::administers()); false: neither.

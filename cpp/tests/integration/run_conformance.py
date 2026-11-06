@@ -106,6 +106,9 @@ SYNC = [
     "features.sync", "sync.overview", "sync.write", "sync.future", "sync.if-match", "sync.generation",
     "sync.installed", "sync.malformed",
 ]
+# Differential updates (§ 22), read with the scope library: the demo's two updates of one game are large enough
+# for a chunk index, so the indexes, their route and a newer version put together from an older one are checked.
+DELTAS = ["features.deltas", "deltas.index", "deltas.cut", "deltas.route", "deltas.update", "cache.immutable"]
 # Pairing (§ 5.2, § 5.4) is offered to every caller, anonymous included.
 PAIRING = [
     "handshake.auth", "pairing.offered", "pairing.code", "pairing.verify-complete", "pairing.waiting",
@@ -130,9 +133,9 @@ ANONYMOUS = ["cheats.write"]
 # Plain HTTP on loopback, and JSON that the server does not compress (§ 2.1).
 WARNINGS = ["transport.https", "compression.json"]
 
-BASE = LIBRARY + CATALOG + HOMEBREW + CHEATS + PAIRING
+BASE = LIBRARY + CATALOG + HOMEBREW + CHEATS + DELTAS + PAIRING
 CORE_LEVELS = ("Lantern Core", "+titles", "+homebrew", "+saves", "+cheats", "+requests", "+admin", "+events",
-               "+peers", "+sync")
+               "+peers", "+sync", "+deltas")
 
 # (name, the demo's flags, whether it has a token, the levels it must reach, the checks that must pass)
 RUNS = [

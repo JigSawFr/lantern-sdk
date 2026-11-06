@@ -190,7 +190,8 @@ Answer handshake(const ServerState& state, const ServerRequest& request, const d
     // one with that scope when the account store administers, `events` for
     // one who may read any kind of event when the server offers them, and
     // `pairing` and `signatures` for every caller (§ 4.2, L-4.2-5) when the
-    // server has accounts; nothing else is here yet
+    // server has accounts, and `deltas` for one who reads the library when the server offers them; nothing
+    // else is here yet
     const bool titles   = reads_library && state.library->offers_titles();
     const bool changes  = reads_library && state.library->journal() != nullptr;
     const bool sections = reads_library && state.library->offers_sections();
@@ -203,6 +204,7 @@ Answer handshake(const ServerState& state, const ServerRequest& request, const d
     const bool admin  = state.admin && !detail::check_scope(state, caller, "admin").has_value();
     const bool events = state.events && !detail::check_events(state, caller).has_value();
     const bool peers  = state.peers && reads_library;
+    const bool deltas = state.deltas && reads_library;
     const bool sync   = state.sync != nullptr && !detail::check_scope(state, caller, "sync.read").has_value();
     w.key("features");
     w.begin_object();
@@ -220,6 +222,7 @@ Answer handshake(const ServerState& state, const ServerRequest& request, const d
             || (family == "saves" && saves) || (family == "encrypted_saves" && saves && state.encrypted_saves)
             || (family == "requests" && requests) || (family == "admin" && admin)
             || (family == "events" && events) || (family == "peers" && peers) || (family == "sync" && sync)
+            || (family == "deltas" && deltas)
             || ((family == "pairing" || family == "signatures") && state.accounts != nullptr);
         w.key(family);
         w.number(offered ? known_schema : std::uint64_t { 0 });
@@ -816,6 +819,7 @@ struct Route
         sync_all,
         sync_collection,
         grant,
+        chunks,
     };
     Kind kind = Kind::none;
     std::string_view allowed; // the methods it takes
@@ -885,6 +889,8 @@ Route route_of(std::string_view rest) noexcept
         return { Route::Kind::sync_collection, "GET, HEAD, PATCH, DELETE", segments[1], {} };
     if (count == 3 && segments[0] == "grants" && segments[1] == "sha256" && !segments[2].empty())
         return { Route::Kind::grant, "GET, HEAD", segments[2], {} };
+    if (count == 3 && segments[0] == "chunks" && segments[1] == "sha256" && !segments[2].empty())
+        return { Route::Kind::chunks, "GET, HEAD", segments[2], {} };
     if (count == 1 && segments[0] == "pairing")
         return { Route::Kind::pairing_start, "POST", {}, {} };
     if (count == 2 && segments[0] == "pairing" && !segments[1].empty())
@@ -1011,6 +1017,9 @@ Answer route(const ServerState& state, const ServerRequest& request)
         case Route::Kind::grant:
             offered = state.peers;
             break;
+        case Route::Kind::chunks:
+            offered = state.deltas;
+            break;
         default:
             break;
     }
@@ -1121,6 +1130,8 @@ Answer route(const ServerState& state, const ServerRequest& request)
             return detail::sync_route(state, request, *caller, chosen.name, false);
         case Route::Kind::grant:
             return detail::grant_route(state, request, *caller, chosen.name);
+        case Route::Kind::chunks:
+            return detail::chunks_route(state, request, *caller, chosen.name);
         case Route::Kind::pairing_start:
             return detail::pairing_start(state, request);
         case Route::Kind::pairing_poll:
@@ -1327,7 +1338,8 @@ Result<Server> Server::create(Library& library, const ServerOptions& options, Ra
         state->grant_public   = ed25519_public_key(*options.grant_seed);
         state->grant_lifetime = options.grant_lifetime;
     }
-    state->admin = options.accounts != nullptr && options.admin && options.accounts->administers();
+    state->deltas = options.deltas;
+    state->admin  = options.accounts != nullptr && options.admin && options.accounts->administers();
     if (auto filled = random.fill(state->secret); !filled)
         return std::unexpected(filled.error());
     if (options.events)

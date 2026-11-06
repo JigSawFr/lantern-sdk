@@ -155,11 +155,11 @@ for peers and the sync: see
 ## Server core
 
 `lantern/server.hpp`: what answers the protocol's routes, with no HTTP
-framework and no socket of its own, as `PeerGate` is for a peer. Eight slices so
+framework and no socket of its own, as `PeerGate` is for a peer. Nine slices so
 far: **Lantern Core, read-only**, **tokens, pairing and signatures**, the
 library's **changes, sections, titles, homebrew and cheat sets**, the
 **save backups**, the **requests and the administration**, the **events**, and the
-**peers and sync**.
+**peers and sync**, and the **chunk indexes** of differential updates.
 
 - the handshake at `/.well-known/lantern` and `<base>/v1` (§ 4.2), which lists
   only what the server serves: `features` says `library`, `titles`, `changes`,
@@ -447,6 +447,20 @@ upper case hex included; the answer is `no-store`. Keep the seed for grants alon
 peers themselves (§ 19.4, `PeerGate`) are consoles, and mirrors (§ 19.2) are the library's
 `mirrors` members: neither is a server's route.
 
+**Deltas** (§ 22; `options.deltas`). The server's side of the family is the **chunk index**:
+`MemoryLibrary::offer_deltas({.chunker_size, .min_file_size})` (call it before adding) gives
+`chunks` (`url`, `size`, `sha256`) to each app and homebrew package whose file is at least
+`min_file_size` bytes (1 MiB by default), cut once by `lantern-cdc-1` with the library's own
+chunker (`chunks.hpp`: `chunker_size` 0 chooses the smallest that keeps its chunks about 16,384
+at most) and its index written once, in canonical JSON, cached by the file's SHA-256 and dropped
+with the last app that names the file. With `options.deltas` the handshake says `deltas` (for
+a caller who reads the library) and `GET <base>/v1/chunks/sha256/{hex}`, for the scope
+`library`, answers with the index of a file the caller may read (its platform, its rating cap),
+`immutable` for a year and with `Range` like any file, and `404` for any other, upper case hex
+and a file without `chunks` included. The chunks themselves are ranges of the file. Another
+`Library` gives its own indexes with `Library::chunk_index()`. `unit/server_deltas_tests.cpp`
+plays `vectors/chunks.json` against the library.
+
 **Sync** (§ 20; `options.sync`, a `SyncStore`, which needs accounts; `limits.sync_items` is the
 store's `item_limit()`). `GET <base>/v1/sync` (the scope `sync.read`) gives the account's
 `generation`, the revision and live items of `wishes` and `installed`, and the caller's own
@@ -494,7 +508,8 @@ decided, an account deleted), +events (the stream and its resuming, the
 heartbeat, the streams a token holds, a revoked device's stream ended, the
 long poll), +peers (the grant key, grants that verify; the checks of a peer program
 need `--peer` and are left out), +sync (the overview, the merge rule, a date far ahead,
-If-Match, another generation, another device's item, malformed items) and +encrypted_saves (except without it, where a backup with an
+If-Match, another generation, another device's item, malformed items), +deltas (the demo's two updates of one game carry chunk indexes: their bytes, their cut
+again, the route, a newer version put together from the older) and +encrypted_saves (except without it, where a backup with an
 encryption must be a 400); anonymously the suite leaves out the signed requests it has no key
 for and the writing of a set. `ctest -R server` plays the library read by this library's own
 client over the listener, `ctest -R unit` the server's cases in memory.
