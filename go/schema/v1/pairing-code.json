@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/pairing-code.json",
+  "title": "Pairing code",
+  "description": "The answer to a pairing request (SPEC.md § 5.2).",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "$ref": "common.json#/$defs/schema1"
+    },
+    "code": {
+      "description": "8 to 32 symbols of 23456789ABCDEFGHJKLMNPQRSTUVWXYZ (40 bits at least), in groups of 4 joined by -.",
+      "type": "string",
+      "pattern": "^[2-9A-HJ-NP-Z]{4}(-[2-9A-HJ-NP-Z]{4}){1,7}$"
+    },
+    "verify": {
+      "$ref": "common.json#/$defs/url"
+    },
+    "poll": {
+      "$ref": "common.json#/$defs/url",
+      "description": "Where to poll; unguessable, it gives the token once."
+    },
+    "interval": {
+      "description": "Seconds between polls, 1 to 60 (SPEC.md § 5.2).",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 60
+    },
+    "expires": {
+      "description": "Seconds until the code expires: 10 minutes at most.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 600
+    },
+    "verify_complete": {
+      "$ref": "common.json#/$defs/url",
+      "description": "verify with the code in its query (RFC 8628 verification_uri_complete), for a QR code the client draws (SPEC.md § 5.2)."
+    }
+  },
+  "required": [
+    "schema",
+    "code",
+    "verify",
+    "verify_complete",
+    "poll",
+    "interval",
+    "expires"
+  ]
+}

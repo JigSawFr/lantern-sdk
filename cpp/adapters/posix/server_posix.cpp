@@ -2,14 +2,18 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <charconv>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -77,9 +81,8 @@ bool clean(std::string_view text) noexcept
     return std::ranges::none_of(text, [](char c) { return c == '\r' || c == '\n' || c == '\0'; });
 }
 
-// Writes the answer: the status line, the headers, `Date`, `Connection: close`,
-// then the body, or the file's bytes read piece by piece.
-void send_response(http1::TcpSocket& socket, const ServerResponse& response)
+// Writes the status line, the headers, `Date` and `Connection: close`: false when the client is gone.
+bool send_head(http1::TcpSocket& socket, const ServerResponse& response)
 {
     std::string head("HTTP/1.1 ");
     head.append(std::to_string(response.status));
@@ -98,7 +101,13 @@ void send_response(http1::TcpSocket& socket, const ServerResponse& response)
     head.append("Date: ");
     head.append(http_date(std::time(nullptr)));
     head.append("\r\nConnection: close\r\n\r\n");
-    if (!socket.write(std::span<const char>(head.data(), head.size())))
+    return static_cast<bool>(socket.write(std::span<const char>(head.data(), head.size())));
+}
+
+// Writes the answer: the head, then the body, or the file's bytes read piece by piece.
+void send_response(http1::TcpSocket& socket, const ServerResponse& response)
+{
+    if (!send_head(socket, response))
         return;
     if (!response.file)
     {
@@ -185,7 +194,209 @@ class SocketBody final : public BodyReader
     std::string_view arrived_;
 };
 
+// Everything a connection owns once its request is read, on the heap: a request the server holds (a long
+// poll, a stream) is answered later, by a thread, from the views into these.
+struct Exchange
+{
+    explicit Exchange(int fd) noexcept
+        : socket(fd)
+    {
+    }
+
+    http1::TcpSocket socket;
+    std::string head_text;
+    std::string body;
+    std::string remote;
+    std::vector<Header> headers;
+    ParsedTarget parsed;
+    std::vector<QueryParam> query;
+    ServerRequest request;
+};
+
+// How often a held connection looks at its client and at the server's events.
+constexpr std::chrono::milliseconds hold_step { 20 };
+// The connections held at once, long polls and streams together.
+constexpr std::size_t max_held = 64;
+
+// Waits up to `step` for the client to say something: false once it has left. What it sends meanwhile (a
+// request pipelined behind this one) is dropped: the connection closes after the answer.
+bool client_stays(int fd, std::chrono::milliseconds step) noexcept
+{
+    pollfd watched {};
+    watched.fd     = fd;
+    watched.events = POLLIN;
+    int ready      = 0;
+    do
+        ready = ::poll(&watched, 1, static_cast<int>(step.count()));
+    while (ready < 0 && errno == EINTR);
+    if (ready < 0)
+        return false;
+    if (ready == 0)
+        return true;
+    if ((watched.revents & (POLLERR | POLLNVAL)) != 0)
+        return false;
+    std::array<char, 256> sink {};
+    const auto got = ::recv(fd, sink.data(), sink.size(), MSG_DONTWAIT);
+    if (got > 0)
+        return true;
+    // Nothing to read after all (or an interrupt) is a client still there; 0 is its end of the stream
+    const int error = errno;
+#if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
+    if (error == EWOULDBLOCK)
+        return got < 0;
+#endif
+    return got < 0 && (error == EAGAIN || error == EINTR);
+}
+
 } // namespace
+
+// The threads that hold connections for a listener (long polls and streams), and whether it is closing.
+struct HoldRegistry
+{
+    struct Entry
+    {
+        std::thread thread;
+        std::shared_ptr<std::atomic<bool>> done;
+    };
+
+    std::mutex mutex;
+    std::vector<Entry> entries;
+    std::atomic<bool> closing { false };
+
+    // Joins the threads that are over; the number still running.
+    std::size_t reap()
+    {
+        std::vector<Entry> over;
+        {
+            const std::scoped_lock lock(mutex);
+            for (std::size_t i = 0; i < entries.size();)
+            {
+                if (entries[i].done->load())
+                {
+                    over.push_back(std::move(entries[i]));
+                    entries.erase(entries.begin() + static_cast<std::ptrdiff_t>(i));
+                }
+                else
+                    ++i;
+            }
+        }
+        for (Entry& entry : over)
+            entry.thread.join();
+        const std::scoped_lock lock(mutex);
+        return entries.size();
+    }
+
+    void close()
+    {
+        closing.store(true);
+        std::vector<Entry> all;
+        {
+            const std::scoped_lock lock(mutex);
+            all = std::move(entries);
+            entries.clear();
+        }
+        for (Entry& entry : all)
+            entry.thread.join();
+    }
+};
+
+namespace
+{
+
+// Holds a connection the server did not answer at once: a long poll waits for an event or its time, then
+// asks the server again; a stream is stepped until it ends or the client leaves. Runs in a thread of its own.
+void hold_connection(
+    const Server& server, const std::atomic<bool>& closing, Exchange& exchange, ServerResponse response)
+{
+    using steady     = std::chrono::steady_clock;
+    const auto began = steady::now();
+    const auto since = [&]
+    {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(steady::now() - began);
+        return static_cast<std::uint64_t>(elapsed.count());
+    };
+    const int fd = exchange.socket.fd();
+
+    while (response.hold_ms != 0)
+    {
+        const auto until = steady::now() + std::chrono::milliseconds(response.hold_ms);
+        while (!closing.load() && server.event_mark() == response.hold_mark)
+        {
+            const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(until - steady::now());
+            if (left.count() <= 0)
+                break;
+            if (!client_stays(fd, std::min(hold_step, left)))
+                return;
+        }
+        if (closing.load())
+            return;
+        exchange.request.resumed   = true;
+        exchange.request.waited_ms = since();
+        response                   = server.handle(exchange.request);
+    }
+    if (!response.stream)
+    {
+        send_response(exchange.socket, response);
+        return;
+    }
+    if (!send_head(exchange.socket, response))
+        return;
+    String chunk;
+    bool more = true;
+    while (more && !closing.load())
+    {
+        chunk.clear();
+        more = response.stream->step(since(), chunk);
+        if (!chunk.empty() && !exchange.socket.write(std::span<const char>(chunk.data(), chunk.size())))
+            return;
+        if (more && !client_stays(fd, hold_step))
+            return;
+    }
+}
+
+// Hands a connection the server holds to a thread of its own, which the registry joins when it is over or
+// closing. False when too many are held already (the client got a 429).
+bool hold(
+    HoldRegistry& registry, const Server& server, std::unique_ptr<Exchange> exchange, ServerResponse response)
+{
+    if (registry.reap() >= max_held)
+    {
+        send_response(exchange->socket,
+            problem_response(429, Code::slow_down, "Too many connections are held open; try again later."));
+        return false;
+    }
+    // What the thread owns: the connection with its request, and what the server said of it
+    struct Held
+    {
+        std::unique_ptr<Exchange> exchange;
+        ServerResponse response;
+    };
+    auto job  = std::make_shared<Held>(Held { std::move(exchange), std::move(response) });
+    auto done = std::make_shared<std::atomic<bool>>(false);
+    std::thread worker(
+        [&server, &registry, done, job]()
+        {
+            hold_connection(server, registry.closing, *job->exchange, std::move(job->response));
+            job->exchange.reset();
+            done->store(true);
+        });
+    const std::scoped_lock lock(registry.mutex);
+    registry.entries.push_back({ std::move(worker), done });
+    return true;
+}
+
+} // namespace
+
+HttpListener::HttpListener(const Server& server, const ListenOptions& options, int fd, std::uint16_t port)
+    : server_(&server)
+    , timeout_(options.timeout)
+    , max_body_(options.max_body)
+    , max_stream_(options.max_stream)
+    , fd_(fd)
+    , port_(port)
+    , holders_(std::make_shared<HoldRegistry>())
+{
+}
 
 HttpListener::HttpListener(HttpListener&& other) noexcept
     : server_(other.server_)
@@ -194,6 +405,7 @@ HttpListener::HttpListener(HttpListener&& other) noexcept
     , max_stream_(other.max_stream_)
     , fd_(std::exchange(other.fd_, -1))
     , port_(other.port_)
+    , holders_(std::move(other.holders_))
 {
 }
 
@@ -205,11 +417,15 @@ HttpListener& HttpListener::operator=(HttpListener&& other) noexcept
     std::swap(max_stream_, other.max_stream_);
     std::swap(fd_, other.fd_);
     std::swap(port_, other.port_);
+    std::swap(holders_, other.holders_);
     return *this;
 }
 
 HttpListener::~HttpListener()
 {
+    // The connections held end with the listener
+    if (holders_)
+        holders_->close();
     if (fd_ >= 0)
         ::close(fd_);
 }
@@ -287,8 +503,10 @@ void HttpListener::serve(const std::atomic<bool>& stop)
 
 bool HttpListener::answer(int connection) const
 {
-    http1::TcpSocket socket(connection);
-    const auto refuse = [&](std::uint16_t status, Code code, std::string_view why)
+    // On the heap: a request the server holds is answered later, by a thread, from views into this
+    auto exchange            = std::make_unique<Exchange>(connection);
+    http1::TcpSocket& socket = exchange->socket;
+    const auto refuse        = [&](std::uint16_t status, Code code, std::string_view why)
     {
         send_response(socket, problem_response(status, code, why));
         return false;
@@ -309,9 +527,10 @@ bool HttpListener::answer(int connection) const
     }
 
     // The request line, then the headers; the body is what came after
-    const std::string head_text(buffer, 0, end_of_head);
-    std::string body(buffer, end_of_head + 4);
-    const std::string_view head(head_text);
+    exchange->head_text.assign(buffer, 0, end_of_head);
+    exchange->body.assign(buffer, end_of_head + 4, std::string::npos);
+    std::string& body = exchange->body;
+    const std::string_view head(exchange->head_text);
     const std::size_t line_end    = head.find("\r\n");
     const std::string_view line   = head.substr(0, line_end);
     const std::size_t first_space = line.find(' ');
@@ -324,8 +543,8 @@ bool HttpListener::answer(int connection) const
     if (method.empty() || !std::ranges::all_of(method, [](char c) { return c >= 'A' && c <= 'Z'; }))
         return refuse(400, Code::bad_request, "Not an HTTP method.");
 
-    std::vector<Header> headers;
-    std::size_t at = line_end == std::string_view::npos ? head.size() : line_end + 2;
+    std::vector<Header>& headers = exchange->headers;
+    std::size_t at               = line_end == std::string_view::npos ? head.size() : line_end + 2;
     std::optional<std::uint64_t> content_length;
     bool chunked = false;
     bool expect  = false;
@@ -378,20 +597,20 @@ bool HttpListener::answer(int connection) const
     body.resize(static_cast<std::size_t>(std::min<std::uint64_t>(body.size(), body_size)));
     SocketBody source(socket, body);
 
-    const auto parsed = parse_target(target);
+    auto parsed = parse_target(target);
     if (!parsed)
         return refuse(400, Code::bad_request, "The request target is not a path this server can read.");
-    std::vector<QueryParam> query;
-    query.reserve(parsed->query.size());
-    for (const auto& [name, value] : parsed->query)
-        query.push_back({ name, value });
-    const std::string remote = peer_address(connection);
+    exchange->parsed = std::move(*parsed);
+    exchange->query.reserve(exchange->parsed.query.size());
+    for (const auto& [name, value] : exchange->parsed.query)
+        exchange->query.push_back({ name, value });
+    exchange->remote = peer_address(connection);
 
-    ServerRequest request;
-    request.method  = method;
-    request.path    = parsed->path;
-    request.query   = query;
-    request.headers = headers;
+    ServerRequest& request = exchange->request;
+    request.method         = method;
+    request.path           = exchange->parsed.path;
+    request.query          = exchange->query;
+    request.headers        = headers;
     if (streamed)
     {
         request.stream        = &source;
@@ -401,11 +620,16 @@ bool HttpListener::answer(int connection) const
     {
         request.body = std::as_bytes(std::span(body.data(), body.size()));
     }
-    request.scheme = "http";
-    request.target = target;
-    request.remote = remote;
-    send_response(socket, server_->handle(request));
-    return true;
+    request.scheme          = "http";
+    request.target          = target;
+    request.remote          = exchange->remote;
+    ServerResponse response = server_->handle(request);
+    if (!response.stream && response.hold_ms == 0)
+    {
+        send_response(socket, response);
+        return true;
+    }
+    return hold(*holders_, *server_, std::move(exchange), std::move(response));
 }
 
 } // namespace lantern::posix

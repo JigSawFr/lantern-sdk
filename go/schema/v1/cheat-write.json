@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/cheat-write.json",
+  "title": "A cheat set to write",
+  "description": "POST <base>/v1/cheats and PUT <base>/v1/cheats/{id}, scope cheats.write (SPEC.md § 10).",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "$ref": "common.json#/$defs/schema1"
+    },
+    "platform": {
+      "$ref": "common.json#/$defs/platform"
+    },
+    "title_id": {
+      "$ref": "common.json#/$defs/id"
+    },
+    "build_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]{1,64}$"
+    },
+    "source": {
+      "$ref": "common.json#/$defs/name"
+    },
+    "note": {
+      "$ref": "common.json#/$defs/note"
+    },
+    "text": {
+      "type": "string",
+      "maxLength": 1048576
+    }
+  },
+  "required": [
+    "schema",
+    "platform",
+    "title_id",
+    "text"
+  ]
+}

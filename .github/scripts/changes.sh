@@ -14,7 +14,7 @@ set -euo pipefail
 
 event=$1
 before=${2:-}
-parts=(cpp c python typescript rust release workflows)
+parts=(cpp c python typescript go rust release workflows)
 
 all() {
   for part in "${parts[@]}"; do echo "$part=true"; done
@@ -52,8 +52,9 @@ declare -A pattern=(
   [c]="^c/|^cpp/|^\.github/workflows/c\.yml$|$shared"
   [python]="^python/|^\.github/workflows/python\.yml$|$shared"
   [typescript]="^typescript/|^python/tools/hostile_server\.py$|^python/src/lantern/|^\.github/workflows/typescript\.yml$|$shared"
+  [go]="^go/|^python/tools/hostile_server\.py$|^\.github/workflows/go\.yml$|$shared"
   [rust]="^rust/|^python/tools/hostile_server\.py$|^python/tools/generate\.py$|^\.github/workflows/rust\.yml$|$shared"
-  [release]="^(cpp|c|python|typescript|rust|tools)/|^(release-please-config|\.release-please-manifest)\.json$|^\.github/workflows/release[^/]*\.yml$"
+  [release]="^(cpp|c|python|typescript|go|rust|tools)/|^(release-please-config|\.release-please-manifest)\.json$|^\.github/workflows/release[^/]*\.yml$"
   [workflows]='^\.github/'
 )
 for part in "${parts[@]}"; do

@@ -21,7 +21,7 @@ server, a peer's side, and the first slices of a server core
 cheat sets, the
 tokens, pairing, invitations and signed requests that give a device its access,
 the save backups, encrypted ones included, the requests for games and the
-administration API with the rating caps: see
+administration API with the rating caps, and the events, a stream and the long poll of `changes`: see
 [Server core](#server-core); the other families come in later steps); the C API is in [`../c/`](../c/README.md).
 
 ## What it does
@@ -154,10 +154,10 @@ administration API with the rating caps: see
 ## Server core
 
 `lantern/server.hpp`: what answers the protocol's routes, with no HTTP
-framework and no socket of its own, as `PeerGate` is for a peer. Five slices so
+framework and no socket of its own, as `PeerGate` is for a peer. Seven slices so
 far: **Lantern Core, read-only**, **tokens, pairing and signatures**, the
 library's **changes, sections, titles, homebrew and cheat sets**, the
-**save backups**, and the **requests and the administration**.
+**save backups**, the **requests and the administration**, and the **events**.
 
 - the handshake at `/.well-known/lantern` and `<base>/v1` (§ 4.2), which lists
   only what the server serves: `features` says `library`, `titles`, `changes`,
@@ -234,8 +234,8 @@ offer none, so that a library written for the first slice keeps working:
   a token the server never gave is a `400`, one of another epoch or older than
   the journal a `410`. `GET <base>/v1/titles/changes` follows the same rules,
   with `more` for a journal that gives part of them; without a journal, it
-  gives a token that no one can use (`410`). No `wait` yet: it comes with
-  the events.
+  gives a token that no one can use (`410`). With the events, `wait` makes it
+  a long poll (see **Events** below).
 - **Sections** (§ 6.5): `offers_sections()` and `sections(languages)`; the
   server leaves out the apps of another platform and the ids the library does
   not have, and a shelf left empty.
@@ -413,10 +413,33 @@ is missing, the updates and the changes, and give `404` (a title, a homebrew, a 
 set) or `unknown` (many titles). The ages come from § 5.6's table; a title is read
 through the library's `titles()`.
 
+**Events** (§ 18; `options.events`, off by default, with `heartbeat` (15 s), `event_streams`
+(2), `wait_limit` (60 s), `events_kept` (10,000) and `stream_lifetime` (an hour), the
+handshake's `limits`). The server keeps its events in a bounded journal in memory; an
+event's id is a token of `changes`, so a stream resumes with `Last-Event-ID` or `?since=`
+(the query wins) and the long poll `GET <base>/v1/changes?since=&wait=` takes the same
+token: a token the server never gave is a `400`, one older than the journal a `410`. Each
+caller gets only what it may read (§ 18.2): the scopes it holds, its own account (the scope
+`admin` reads every account's requests, with their `user`), the platform it named, and its
+rating cap. The server records `request` events (asked, decided, withdrawn, and by
+`Server::settle_requests()`), `save` events and `pairing` events itself, `library` events
+when the library tells it (`Library::observe()`, which `MemoryLibrary` implements for its
+apps, titles, homebrew and cheat sets; `Server::library_changed()` for any other) and
+`shutdown` on `Server::shutdown()`. The core starts no thread and keeps no timer: a stream
+is an `EventStream` that the adapter steps with its own clock
+(`step(now_ms, out)`: `retry` and `ready` first, the events after the id resumed from before
+the first heartbeat, a comment at least every `heartbeat` seconds, the end of the stream
+once its token is revoked or its account frozen, at the next heartbeat), and a long poll
+with nothing to say yet is a `ServerResponse` with `hold_ms`: the adapter waits until
+`Server::event_mark()` changes or the time is up, then calls `handle()` again with the same
+request (`resumed`, `waited_ms`). An adapter that does neither must leave `events` off.
+`unit/server_events_tests.cpp` plays both with a clock of its own, so that no test sleeps.
+
 `adapters/posix/server_posix.hpp` is a blocking HTTP/1.1 listener for the demo
 and the conformance run: one connection at a time, `Connection: close`, a body
-of `Content-Length` bytes, plain HTTP on loopback by default. It is not for an
-app, and has no TLS. `lantern_demo_server [port] [--private] [--no-encrypted-saves]`
+of `Content-Length` bytes, plain HTTP on loopback by default; the connections the
+server holds (event streams, long polls) each go to a thread of their own, 64 at
+most. It is not for an app, and has no TLS. `lantern_demo_server [port] [--private] [--no-encrypted-saves]`
 (`examples/`) serves a small fictional library through it, keeps backups
 (`MemorySaveStore`) and requests (`MemoryRequestStore`) in memory, with the accounts of
 `examples/demo_accounts.hpp` (mira, noor and the token of mira's console,
@@ -437,13 +460,14 @@ loopback and JSON that is not compressed; with the token the run reaches
 **Lantern Core**, +titles, +homebrew, +saves, +cheats (a set written, replaced
 and deleted), +requests, +admin (accounts, pairings approved with a rating cap
 that hides what is above it, devices revoked, an invitation redeemed, requests
-decided, an account deleted) and +encrypted_saves (except without it, where a backup with an
+decided, an account deleted), +events (the stream and its resuming, the
+heartbeat, the streams a token holds, a revoked device's stream ended, the
+long poll) and +encrypted_saves (except without it, where a backup with an
 encryption must be a 400); anonymously the suite leaves out the signed requests it has no key
 for and the writing of a set. `ctest -R server` plays the library read by this library's own
 client over the listener, `ctest -R unit` the server's cases in memory.
 
-Not in this slice, and so not offered by the handshake: events (so a request's
-status change sends no event, § 11, and no `wait` on changes), peers, sync (so
+Not in this slice, and so not offered by the handshake: peers, sync (so
 deleting an account erases no sync data, § 20.5) and discovery; chunks and differential updates for the homebrew
 packages (§ 22); compression of the JSON (§ 2.1: the
 library can read gzip, not write it); a `release` sort that means anything (it
@@ -879,8 +903,8 @@ if (done)
   for a later version.
 - **Annex B's retries** (backoff with jitter, `Retry-After` as a floor):
   the errors carry what they need, the app retries.
-- The rest of the server core (see [Server core](#server-core)): events,
-  peers, sync and discovery, and compressed JSON. The C API is in [`../c/`](../c/README.md).
+- The rest of the server core (see [Server core](#server-core)): peers,
+  sync and discovery, and compressed JSON. The C API is in [`../c/`](../c/README.md).
 
 ## Layout
 

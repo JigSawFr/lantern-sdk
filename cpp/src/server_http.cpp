@@ -246,6 +246,9 @@ namespace detail
 
 ServerState::~ServerState()
 {
+    // The library keeps no pointer to a state that is gone
+    if (observing)
+        library->observe(nullptr);
     secure_wipe(secret);
 }
 

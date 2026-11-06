@@ -414,7 +414,8 @@ bool purge_uploads(const ServerState& state)
     return true;
 }
 
-// A backup was kept: the oldest beyond saves_kept_per_title dropped (§ 9.1). Under the lock of saves.
+// A backup was kept: the oldest beyond saves_kept_per_title dropped (§ 9.1), then its event (§ 18.2).
+// Under the lock of saves.
 bool prune(const ServerState& state, std::string_view user, const Save& kept)
 {
     auto all = state.saves->saves(user, state.allocator);
@@ -432,6 +433,7 @@ bool prune(const ServerState& state, std::string_view user, const Save& kept)
         if (!state.saves->drop(user, same[i]->save_id))
             return false;
     }
+    record_save_event(state, user, kept);
     return true;
 }
 

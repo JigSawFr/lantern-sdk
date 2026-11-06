@@ -55,12 +55,25 @@
 //   reads (§ 3.2), and browsers (§ 2.5): CORS for the origins the app
 //   allows, preflights, Strict-Transport-Security over HTTPS (§ 2).
 //
+// - with ServerOptions::events (§ 18): the stream at <base>/v1/events and the
+//   long poll `changes?since=&wait=`, one journal of events in memory whose
+//   ids are tokens of `changes` (resuming with Last-Event-ID or ?since=, a
+//   410 for an id too old), a heartbeat, the streams a token may hold, and
+//   each caller told only of what it may read (its scopes, account,
+//   platform and rating cap). The server records `request`, `save` and
+//   `pairing` events itself, `library` events when the Library tells it
+//   (Library::observe(); MemoryLibrary does, Server::library_changed() is
+//   for any other) and `shutdown` on Server::shutdown(). The core has no
+//   thread and no timer: a stream is an EventStream the adapter steps with
+//   its own clock, a long poll a response with `hold_ms` that the adapter
+//   waits out (see ServerResponse).
+//
 // Approving a pairing is the app's, or an admin's: the app's own page, once
 // the user is signed in there, calls Server::approve_pairing(); an admin app
-// uses the administration API. Events (so no `wait` on changes), peers, sync
-// and discovery are not here yet: a request for one is a route the server does
-// not have (404), and the handshake says so (`features`). JSON is sent as it
-// is written, never compressed (§ 2.1 asks a server to, as a SHOULD).
+// uses the administration API. Peers, sync and discovery are not here yet: a
+// request for one is a route the server does not have (404), and the
+// handshake says so (`features`). JSON is sent as it is written, never
+// compressed (§ 2.1 asks a server to, as a SHOULD).
 //
 // A Server keeps nothing that a request changes but what the AccountStore
 // keeps, the replay window and the limits per address, which it guards
@@ -137,6 +150,13 @@ struct ServerRequest
     std::string_view scheme; // "https" or "http", the one the request came by; empty: ServerOptions::scheme
     std::string_view target; // the request target as sent, path and query
     std::string_view remote; // the caller's address, as text
+    // For a request the server held (ServerResponse::hold_ms), which the
+    // adapter calls handle() with again, unchanged: `resumed` is true (the
+    // signature of the first call was checked, and its nonce taken once) and
+    // `waited_ms` the milliseconds it has been held so far. Never set from
+    // what a client sent.
+    bool resumed            = false;
+    std::uint64_t waited_ms = 0;
 
     // The first header of that name (compared ignoring case).
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const noexcept;
@@ -352,6 +372,35 @@ class Journal
         = 0;
 };
 
+// What changed in a library, for the event `library` (§ 18.2): the family
+// (`apps`, `titles`, `homebrew` or `cheats`), the platform, and what a rating
+// cap reads it by: its title (apps, titles and cheat sets), or its own
+// ratings (homebrew). A caller gets the event only for the changes it may see.
+struct LibraryChange
+{
+    std::string_view family;
+    std::string_view platform;
+    std::string_view title_id; // empty: none
+    // The ratings a cap reads when there is no title (homebrew); null: read by the title.
+    const Vector<Rating>* ratings = nullptr;
+};
+
+// Told by a Library that its content changed. The server registers itself
+// when it offers events (ServerOptions::events); it may be called from any
+// thread the library changes on, and must not be called back from.
+class LibraryObserver
+{
+  public:
+    LibraryObserver()                                  = default;
+    LibraryObserver(const LibraryObserver&)            = default;
+    LibraryObserver(LibraryObserver&&)                 = default;
+    LibraryObserver& operator=(const LibraryObserver&) = default;
+    LibraryObserver& operator=(LibraryObserver&&)      = default;
+    virtual ~LibraryObserver()                         = default;
+
+    virtual void library_changed(std::span<const LibraryChange> changes) = 0;
+};
+
 // What a server serves. Every method is called per request: answer with
 // what is there now (a database query, a folder scanned and kept...). The
 // families beyond the apps (titles, sections, changes, homebrew, cheats) are
@@ -455,6 +504,11 @@ class Library
     // is one, and /v1/titles/changes answers 410 to any token when there is
     // none. It must outlive the server.
     [[nodiscard]] virtual Journal* journal() { return nullptr; }
+
+    // Who is told of the changes the library makes by itself (§ 18.2); null
+    // for none. A library that never changes by itself, or whose app calls
+    // Server::library_changed(), ignores it.
+    virtual void observe(LibraryObserver* /*observer*/) { }
 };
 
 // An app a MemoryLibrary is given: its identity (§ 6.1). The library fills
@@ -571,6 +625,8 @@ class MemoryLibrary final : public Library, public Journal
         const CheatWrite& set, std::string_view replacing, const Allocator& allocator) override;
     [[nodiscard]] Result<bool> delete_cheat(std::string_view id) override;
     [[nodiscard]] Journal* journal() override { return keep_ > 0 ? this : nullptr; }
+    // Tells the observer of each app, title, homebrew entry and cheat set added or removed.
+    void observe(LibraryObserver* observer) override { observer_ = observer; }
 
     [[nodiscard]] Result<JournalPosition> position(const Allocator& allocator) override;
     [[nodiscard]] Result<AppChanges> app_changes(
@@ -630,6 +686,8 @@ class MemoryLibrary final : public Library, public Journal
     };
 
     void record(Entry::Kind kind, std::string_view platform, std::string_view key);
+    void notify(std::string_view family, std::string_view platform, std::string_view title_id,
+        const Vector<Rating>* ratings = nullptr) const;
     // Serves `content` as a file of this library, once; the address it is served at.
     String keep_file(std::span<const std::byte> content, const Digest& sha256);
     // Whether an app or a package of a homebrew is served from that file.
@@ -660,8 +718,34 @@ class MemoryLibrary final : public Library, public Journal
     std::size_t keep_ = 0;
     String epoch_;
     Vector<Entry> entries_;
-    std::uint64_t sequence_ = 0;
-    std::uint64_t floor_    = 0;
+    std::uint64_t sequence_    = 0;
+    std::uint64_t floor_       = 0;
+    LibraryObserver* observer_ = nullptr;
+};
+
+// An event stream (§ 18.1) an adapter sends, a step at a time: the core has
+// no thread and no timer, the adapter keeps the clock.
+class EventStream
+{
+  public:
+    EventStream()                              = default;
+    EventStream(const EventStream&)            = delete;
+    EventStream& operator=(const EventStream&) = delete;
+    EventStream(EventStream&&)                 = delete;
+    EventStream& operator=(EventStream&&)      = delete;
+    // Frees the stream's slot (§ 18.4): drop it when the client leaves.
+    virtual ~EventStream() = default;
+
+    // Appends to `out` what the stream says at `now_ms`, a count of
+    // milliseconds from a steady clock of the adapter's (any origin, never
+    // going back). The first step gives `retry`, `ready` and the events
+    // after the id the client came with; then events as they are recorded,
+    // and a comment at least every `heartbeat` seconds. False once the
+    // stream is over (the server stops, the token no longer holds, the
+    // stream's hour is up): `out` then holds its last bytes, and the adapter
+    // closes the connection. Call it again within a heartbeat at most; every
+    // few tens of milliseconds gives events in good time.
+    [[nodiscard]] virtual bool step(std::uint64_t now_ms, String& out) = 0;
 };
 
 struct ServerFile
@@ -672,10 +756,22 @@ struct ServerFile
 };
 
 // The answer, for the adapter to send. `Content-Length` is always among
-// the headers, HEAD's and 304's included (whose body is empty); `Date` and
-// the connection's own headers are the adapter's. A file is read by the
-// adapter from `file->reader`, `file->length` bytes from `file->offset`,
-// never held whole.
+// the headers, HEAD's and 304's included (whose body is empty), but for a
+// stream's; `Date` and the connection's own headers are the adapter's. A file
+// is read by the adapter from `file->reader`, `file->length` bytes from
+// `file->offset`, never held whole.
+//
+// With the events of ServerOptions::events, two more cases are the adapter's:
+//
+// - `stream` is set (status 200, no Content-Length, no body): after the
+//   head, the adapter calls stream->step() as often as its clock lets it and
+//   writes what it appends, until it gives false or the client leaves, then
+//   closes the connection and drops the stream.
+// - `hold_ms` is not 0 (a long poll, § 18.3, with nothing to say yet): it is
+//   not an answer. The adapter holds the request until Server::event_mark()
+//   is not `hold_mark` any more, or `hold_ms` milliseconds have passed, then
+//   calls handle() again with the same request, `resumed` and
+//   ServerRequest::waited_ms the time held; the new response may hold again.
 struct ServerResponse
 {
     using allocator_type = Allocator;
@@ -684,6 +780,9 @@ struct ServerResponse
     ResponseHeaders headers;
     String body;
     std::optional<ServerFile> file;
+    std::shared_ptr<EventStream> stream;
+    std::uint32_t hold_ms   = 0;
+    std::uint64_t hold_mark = 0;
 
     ServerResponse()
         : ServerResponse(allocator_type {})
@@ -809,6 +908,27 @@ struct ServerOptions
     // The administration API (§ 5.7) and the invitations (§ 5.5), when the
     // account store administers (AccountStore::administers()); false: neither.
     bool admin = true;
+
+    // Events (§ 18): the stream at <base>/v1/events and the long poll of
+    // `changes`. Only for an adapter that steps streams and holds requests
+    // (see ServerResponse): the POSIX one does. Streams and held requests
+    // use the library and the account store while they last: drop them
+    // before either.
+    bool events = false;
+    // `limits.heartbeat`: the most seconds between two lines of a stream,
+    // 5 to 60.
+    std::uint32_t heartbeat = 15;
+    // `limits.event_streams`: the streams a token may hold at once (an
+    // anonymous caller: an address), 1 at least.
+    std::uint32_t event_streams = 2;
+    // `limits.wait`: the longest wait of a long poll, in seconds, 30 to 300.
+    std::uint32_t wait_limit = 60;
+    // The events kept for resuming, 1 to 1,000,000; an id older than the
+    // last of them is a 410.
+    std::uint32_t events_kept = 10000;
+    // How long a stream lives before the server ends it (the client resumes
+    // with the last id it read), in seconds, 60 at least.
+    std::uint32_t stream_lifetime = 3600;
 };
 
 namespace detail
@@ -854,6 +974,18 @@ class Server
     // the library now; the number marked. The library is read when asked, so
     // the app calls this when its library changes. Needs `requests`.
     [[nodiscard]] Result<std::size_t> settle_requests() const;
+
+    // Events (§ 18). The library changed, for a Library that does not tell
+    // the server itself (Library::observe()): the event `library` goes to the
+    // callers who may see a change. Nothing without `events`.
+    void library_changed(std::span<const LibraryChange> changes) const;
+    // The server stops on purpose (L-18.2-2): every stream gives `shutdown`
+    // and ends, and the held long polls answer at once. Later streams begin
+    // with `shutdown`.
+    void shutdown() const;
+    // A number that changes whenever an event is recorded or the server shuts
+    // down: the adapter compares it with ServerResponse::hold_mark.
+    [[nodiscard]] std::uint64_t event_mark() const noexcept;
 
   private:
     explicit Server(std::shared_ptr<const detail::ServerState> state) noexcept

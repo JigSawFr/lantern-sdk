@@ -5,8 +5,11 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstdint>
+#include <deque>
 #include <expected>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -18,6 +21,8 @@
 #include <lantern/error.hpp>
 #include <lantern/http_signature.hpp>
 #include <lantern/memory.hpp>
+#include <lantern/requests.hpp>
+#include <lantern/saves.hpp>
 #include <lantern/server.hpp>
 
 namespace lantern::detail
@@ -44,8 +49,104 @@ struct AuthRuntime
     }
 };
 
+// What changed in a library, as an event keeps it.
+struct EventChange
+{
+    using allocator_type = Allocator;
+
+    String family;
+    String platform;
+    String title_id;
+    bool by_ratings = false; // a cap reads `ratings`, not the title
+    Vector<Rating> ratings;
+
+    explicit EventChange(const allocator_type& allocator)
+        : family(allocator)
+        , platform(allocator)
+        , title_id(allocator)
+        , ratings(allocator)
+    {
+    }
+    EventChange(const EventChange& other, const allocator_type& allocator)
+        : family(other.family, allocator)
+        , platform(other.platform, allocator)
+        , title_id(other.title_id, allocator)
+        , by_ratings(other.by_ratings)
+        , ratings(other.ratings, allocator)
+    {
+    }
+    EventChange(EventChange&& other, const allocator_type& allocator)
+        : family(std::move(other.family), allocator)
+        , platform(std::move(other.platform), allocator)
+        , title_id(std::move(other.title_id), allocator)
+        , by_ratings(other.by_ratings)
+        , ratings(std::move(other.ratings), allocator)
+    {
+    }
+    EventChange(const EventChange&)            = default;
+    EventChange(EventChange&&)                 = default;
+    EventChange& operator=(const EventChange&) = default;
+    EventChange& operator=(EventChange&&)      = default;
+    ~EventChange()                             = default;
+};
+
+// An event as kept (§ 18.2): its place in the journal, its type, its document
+// as JSON text, and who may see it. `ready` and `shutdown` are not kept.
+struct EventRecord
+{
+    using allocator_type = Allocator;
+
+    std::uint64_t seq = 0;
+    String event;
+    String data; // the document, one line of JSON
+    String scope; // the scope a caller needs
+    String user; // the account it is about, when it is about one
+    String platform;
+    String title_id;
+    Vector<EventChange> changes; // the event `library`
+    // The library journal's position when it was recorded: its id resumes `changes` from there.
+    String journal_epoch;
+    std::uint64_t journal_position = 0;
+
+    explicit EventRecord(const allocator_type& allocator)
+        : event(allocator)
+        , data(allocator)
+        , scope(allocator)
+        , user(allocator)
+        , platform(allocator)
+        , title_id(allocator)
+        , changes(allocator)
+        , journal_epoch(allocator)
+    {
+    }
+};
+
+// The journal of events, in memory, behind one mutex: the last `keep` events,
+// where they begin, and the streams open per token or address (§ 18.4).
+struct EventHub
+{
+    mutable std::mutex mutex;
+    // Changes with the process: an id of another epoch is too old.
+    String epoch;
+    std::uint64_t seq   = 0;
+    std::uint64_t floor = 0; // the ids at or below it are gone
+    std::size_t keep    = 0;
+    bool stopping       = false;
+    std::pmr::deque<EventRecord> events;
+    std::pmr::unordered_map<String, std::uint32_t> streams;
+    // Changes with each event and when the server stops: what an adapter waits on.
+    std::atomic<std::uint64_t> mark { 0 };
+
+    explicit EventHub(const Allocator& memory)
+        : epoch(memory)
+        , events(memory)
+        , streams(memory)
+    {
+    }
+};
+
 // The server's configuration, fixed at create(): every request reads it.
-struct ServerState
+struct ServerState final : LibraryObserver, std::enable_shared_from_this<ServerState>
 {
     Library* library       = nullptr;
     Clock* clock           = nullptr;
@@ -100,6 +201,17 @@ struct ServerState
     mutable std::mutex requests_mutex;
     // The administration API (§ 5.7) and the invitations (§ 5.5): the account store keeps what they need.
     bool admin = false;
+    // Events (§ 18): offered, the limits, and the journal.
+    bool events                   = false;
+    bool observing                = false; // the library tells this state of its changes
+    std::uint32_t heartbeat       = 0;
+    std::uint32_t event_streams   = 0;
+    std::uint32_t wait_limit      = 0;
+    std::uint32_t stream_lifetime = 0;
+    mutable EventHub hub;
+
+    // Told by the library (LibraryObserver).
+    void library_changed(std::span<const LibraryChange> changes) override;
 
     explicit ServerState(const Allocator& memory)
         : allocator(memory)
@@ -114,6 +226,7 @@ struct ServerState
         , verify(memory)
         , runtime(memory)
         , writing(memory)
+        , hub(memory)
     {
     }
     ServerState(const ServerState&)            = delete;
@@ -242,6 +355,27 @@ struct CursorPosition
 // the other kind), 410 for one of another epoch or older than the journal.
 [[nodiscard]] std::expected<std::uint64_t, ProblemError> open_since(
     const ServerState& state, char kind, std::string_view token, const JournalPosition& journal);
+
+// A token of `changes` with its place among the events (§ 18.1: the stream's
+// ids and `changes?since=` share their tokens): the journal's position, and
+// the events' (the hub's epoch, the last event it covers).
+[[nodiscard]] String seal_event_since(const ServerState& state, std::string_view journal_epoch,
+    std::uint64_t journal_position, std::uint64_t event_seq);
+// The event a token of `changes` comes after, and the epoch of the events it
+// counts from: 400 for a token the server never gave; the caller checks the
+// epoch and the floor (410).
+struct EventPlace
+{
+    String epoch;
+    std::uint64_t seq = 0;
+
+    explicit EventPlace(const Allocator& allocator)
+        : epoch(allocator)
+    {
+    }
+};
+[[nodiscard]] std::expected<EventPlace, ProblemError> open_event_since(
+    const ServerState& state, std::string_view token);
 
 // The platform a caller names (§ 4.3): ?platform=, else the Lantern-Platform
 // header; nothing for every platform. 400 for what is not a name.
@@ -420,6 +554,30 @@ struct Caller
 // `cheats` on a server that asks for no token, nothing else.
 [[nodiscard]] std::optional<ProblemError> check_scope(
     const ServerState& state, const Caller& caller, std::string_view scope);
+
+// Events (§ 18): an event recorded for the callers who may see it. `data` is its
+// document, a JSON object; `scope` the scope a caller needs; `user`, `platform`
+// and `title_id` what it is about, each empty for none. Nothing without `events`.
+void record_event(const ServerState& state, std::string_view event, std::string_view data,
+    std::string_view scope, std::string_view user, std::string_view platform, std::string_view title_id,
+    std::span<const LibraryChange> changes = {});
+// The events that follow what a route did: a backup kept, a request made, changed or withdrawn, a
+// pairing waiting.
+void record_library_event(const ServerState& state, std::span<const LibraryChange> changes);
+void record_save_event(const ServerState& state, std::string_view user, const Save& save);
+void record_request_event(const ServerState& state, const StoredRequest& request, bool deleted);
+void record_pairing_event(const ServerState& state, const PendingPairing& pairing);
+// Whether the caller may read any kind of event (§ 18.2): nothing, or the problem.
+[[nodiscard]] std::optional<ProblemError> check_events(const ServerState& state, const Caller& caller);
+// The stream (§ 18.1) and the long poll of `changes` (§ 18.3).
+[[nodiscard]] Answer events_route(
+    const ServerState& state, const ServerRequest& request, const Caller& caller);
+[[nodiscard]] Answer long_poll_route(
+    const ServerState& state, const ServerRequest& request, const Caller& caller);
+// The token of `changes` for now, with the events' place when the server offers them.
+[[nodiscard]] String changes_token(const ServerState& state, const JournalPosition& journal);
+// The members `added` and `removed` of the document of `changes` (§ 6.4).
+void write_app_changes(json::Writer& w, const AppChanges& changes);
 
 // Requests for games (§ 11), for a caller with the scope `requests`: each 404 when the server keeps none.
 [[nodiscard]] Answer requests_route(

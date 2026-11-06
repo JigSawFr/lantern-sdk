@@ -6,7 +6,10 @@
 // reads it from the connection piece by piece (ServerRequest::stream), as
 // the save uploads do, and answers 413 on the routes that take none. Plain
 // HTTP, on loopback unless the app names another address; no TLS, no
-// keep-alive, no chunked request bodies. Never for production: an app puts
+// keep-alive, no chunked request bodies. The responses the server holds (a
+// long poll waiting for an event, an event stream: see ServerResponse) each
+// get a thread of their own, joined when they end or when the listener goes;
+// 64 at most at once, then a 429. Never for production: an app puts
 // Server::handle() behind the HTTP server of its platform.
 #pragma once
 
@@ -14,12 +17,15 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string_view>
 
 #include <lantern/server.hpp>
 
 namespace lantern::posix
 {
+
+struct HoldRegistry;
 
 struct ListenOptions
 {
@@ -52,19 +58,13 @@ class HttpListener
 
     // Waits up to `wait` for a connection and answers it: true when one was.
     [[nodiscard]] Result<bool> serve_one(std::chrono::milliseconds wait);
-    // Answers connections until `stop` is set (checked every 100 ms).
+    // Answers connections until `stop` is set (checked every 100 ms). The
+    // connections held meanwhile go on in their threads; they end with the
+    // listener, or when the server shuts down (Server::shutdown()).
     void serve(const std::atomic<bool>& stop);
 
   private:
-    HttpListener(const Server& server, const ListenOptions& options, int fd, std::uint16_t port) noexcept
-        : server_(&server)
-        , timeout_(options.timeout)
-        , max_body_(options.max_body)
-        , max_stream_(options.max_stream)
-        , fd_(fd)
-        , port_(port)
-    {
-    }
+    HttpListener(const Server& server, const ListenOptions& options, int fd, std::uint16_t port);
 
     // Reads one request from the connection and answers it: false when it was refused or dropped.
     bool answer(int connection) const;
@@ -75,6 +75,7 @@ class HttpListener
     std::uint64_t max_stream_;
     int fd_             = -1;
     std::uint16_t port_ = 0;
+    std::shared_ptr<HoldRegistry> holders_;
 };
 
 } // namespace lantern::posix

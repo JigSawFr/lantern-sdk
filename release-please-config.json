@@ -31,6 +31,7 @@
         { "type": "generic", "path": "cpp/CMakeLists.txt" },
         { "type": "generic", "path": "c/include/lantern/lantern.h" },
         { "type": "generic", "path": "python/src/lantern/_version.py" },
+        { "type": "generic", "path": "go/version.go" },
         { "type": "json", "path": "typescript/package.json", "jsonpath": "$.version" },
         { "type": "generic", "path": "typescript/src/client/client.ts" },
         { "type": "toml", "path": "rust/Cargo.toml", "jsonpath": "$.package.version" },

@@ -459,6 +459,7 @@ Result<App> MemoryLibrary::add_app(const AppDraft& draft, std::span<const std::b
     }
     apps_.push_back(app);
     record(Entry::Kind::app_added, app.platform, app.id);
+    notify("apps", app.platform, app.title_id);
     return app;
 }
 
@@ -480,9 +481,19 @@ bool MemoryLibrary::remove_app(std::string_view id)
         if (!uses_file(name))
             std::erase_if(files_, [&](const Stored& stored) { return stored.name == name; });
         record(Entry::Kind::app_removed, gone.platform, gone.id);
+        notify("apps", gone.platform, gone.title_id);
         return true;
     }
     return false;
+}
+
+void MemoryLibrary::notify(std::string_view family, std::string_view platform, std::string_view title_id,
+    const Vector<Rating>* ratings) const
+{
+    if (observer_ == nullptr)
+        return;
+    const std::array<LibraryChange, 1> changes { LibraryChange { family, platform, title_id, ratings } };
+    observer_->library_changed(changes);
 }
 
 void MemoryLibrary::record(Entry::Kind kind, std::string_view platform, std::string_view key)
@@ -550,6 +561,7 @@ Result<Title> MemoryLibrary::add_title(const Title& title)
         titles_.push_back(result);
     record(Entry::Kind::title, result.platform, result.title_id);
     titles_offered_ = true;
+    notify("titles", result.platform, result.title_id);
     return result;
 }
 
@@ -561,6 +573,7 @@ bool MemoryLibrary::remove_title(std::string_view platform, std::string_view tit
         {
             titles_.erase(titles_.begin() + static_cast<std::ptrdiff_t>(i));
             record(Entry::Kind::title, platform, title_id);
+            notify("titles", platform, title_id);
             return true;
         }
     }
@@ -726,11 +739,13 @@ Result<Homebrew> MemoryLibrary::add_homebrew(
             other                   = result;
             drop_unused_files(replaced);
             homebrew_offered_ = true;
+            notify("homebrew", result.platform, {}, &result.ratings);
             return result;
         }
     }
     homebrew_.push_back(result);
     homebrew_offered_ = true;
+    notify("homebrew", result.platform, {}, &result.ratings);
     return result;
 }
 
@@ -743,6 +758,7 @@ bool MemoryLibrary::remove_homebrew(std::string_view platform, std::string_view 
             const Homebrew gone = homebrew_[i];
             homebrew_.erase(homebrew_.begin() + static_cast<std::ptrdiff_t>(i));
             drop_unused_files(gone);
+            notify("homebrew", gone.platform, {}, &gone.ratings);
             return true;
         }
     }
@@ -827,6 +843,7 @@ Result<CheatSet> MemoryLibrary::put_cheat(const CheatWrite& given, std::string_v
         cheat_files_.push_back(std::move(stored));
     }
     cheats_offered_ = true;
+    notify("cheats", made.platform, made.title_id);
     return made;
 }
 
@@ -838,7 +855,16 @@ Result<CheatSet> MemoryLibrary::add_cheat(const CheatWrite& set)
 bool MemoryLibrary::remove_cheat(std::string_view id)
 {
     std::erase_if(cheat_files_, [&](const Stored& stored) { return stored.name == id; });
-    return std::erase_if(cheats_, [&](const CheatSet& set) { return set.id == id; }) > 0;
+    for (std::size_t i = 0; i < cheats_.size(); ++i)
+    {
+        if (cheats_[i].id != id)
+            continue;
+        const CheatSet gone = cheats_[i];
+        cheats_.erase(cheats_.begin() + static_cast<std::ptrdiff_t>(i));
+        notify("cheats", gone.platform, gone.title_id);
+        return true;
+    }
+    return false;
 }
 
 Result<Vector<Homebrew>> MemoryLibrary::homebrew(std::string_view /*languages*/, const Allocator& allocator)
