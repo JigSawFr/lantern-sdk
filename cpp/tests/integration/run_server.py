@@ -42,6 +42,7 @@ package for the hostile TLS scenarios.
 import argparse
 import json
 import os
+import random
 import signal
 import socket
 import ssl
@@ -54,9 +55,18 @@ from pathlib import Path
 
 
 def free_port(kind=socket.SOCK_STREAM):
-    with socket.socket(socket.AF_INET, kind) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+    """A port that nothing holds, below the range the system hands to outgoing connections (Linux: 32768 and up):
+    the tests run side by side, and a client of one could take, between this call and the server's bind, a port
+    that the system picked for the other."""
+    for _ in range(200):
+        port = random.randrange(20000, 32000)
+        with socket.socket(socket.AF_INET, kind) as s:
+            try:
+                s.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+            return port
+    sys.exit("run_server: no free port")
 
 
 def wait_for(origin, process, seconds=30, context=None):
