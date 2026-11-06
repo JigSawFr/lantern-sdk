@@ -366,7 +366,9 @@ Read<ChunkIndex> read_chunk_index(
         return fail(Category::integrity, "the chunk index of another file");
     if (!found.has_chunks || found.bad_chunks)
         return fail(Category::invalid_response, "chunks of another form than SPEC.md 22.1's");
-    const auto bounds   = cdc_bounds(*found.chunker_size);
+    const auto bounds = cdc_bounds(*found.chunker_size);
+    if (!bounds)
+        return fail(Category::invalid_response, "a chunker this client does not know");
     std::uint64_t total = 0;
     for (const IndexedChunk& chunk : found.chunks)
     {
@@ -443,8 +445,9 @@ Result<DeltaPlan> plan_delta(const ChunkIndex& index, std::span<const Seed> seed
         step.length = chunk.length;
         step.sha256 = chunk.sha256;
         // The first seed's, and its first, among those of the same SHA-256 and size
-        auto it = std::lower_bound(found.begin(), found.end(), chunk.sha256,
-            [](const SeedChunk& a, const Digest& d) { return compare_digests(a.sha256, d) < 0; });
+        auto it = std::ranges::lower_bound(
+            found, chunk.sha256, [](const Digest& a, const Digest& d) { return compare_digests(a, d) < 0; },
+            &SeedChunk::sha256);
         for (; it != found.end() && compare_digests(it->sha256, chunk.sha256) == 0; ++it)
         {
             if (it->length == chunk.length)
@@ -592,7 +595,7 @@ Result<void> DeltaAssembler::feed(std::span<const std::byte> bytes)
     return {};
 }
 
-Result<void> DeltaAssembler::end_range()
+Result<void> DeltaAssembler::end_range() const
 {
     if (position_ != range_end_)
         return fail(Category::transport, "a range cut short");

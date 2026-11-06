@@ -228,7 +228,7 @@ class DeltaAssembler
     // The next bytes of the range. More than the range asked for is an error.
     [[nodiscard]] Result<void> feed(std::span<const std::byte> bytes);
     // The range is over: an error when it gave fewer bytes than asked.
-    [[nodiscard]] Result<void> end_range();
+    [[nodiscard]] Result<void> end_range() const;
     // What of `asked` is still to read after an attempt (a range cut short
     // keeps the chunks verified so far): the same range without them.
     [[nodiscard]] std::optional<ByteRange> remaining(const ByteRange& asked) const noexcept;

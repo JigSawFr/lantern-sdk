@@ -59,7 +59,7 @@ bool parse_decimal(std::string_view text, Decimal& out)
         return false;
     String all(out.digits.get_allocator());
     all.append(text.substr(int_begin, int_digits));
-    long long point = static_cast<long long>(int_digits);
+    auto point = static_cast<long long>(int_digits);
     if (i < text.size() && text[i] == '.')
     {
         ++i;
