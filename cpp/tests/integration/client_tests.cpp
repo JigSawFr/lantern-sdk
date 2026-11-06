@@ -1,8 +1,8 @@
 // The client against the specification's reference server (spec/server),
 // on the fictional library of spec/tests/library.py, started by
 // run_server.py. Every name and game here is made up.
-#include <cstring>
 #include <doctest.h>
+#include <cstring>
 
 #include <algorithm>
 #include <array>
