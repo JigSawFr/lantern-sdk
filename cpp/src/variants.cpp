@@ -11,14 +11,14 @@ namespace lantern
 namespace
 {
 
-const App& deref(const App& app) noexcept
+const App* address(const App& app) noexcept
 {
-    return app;
+    return &app;
 }
 
-const App& deref(const App* app) noexcept
+const App* address(const App* app) noexcept
 {
-    return *app;
+    return app;
 }
 
 template <class Apps> bool included_in(const App& app, Apps installed) noexcept
@@ -28,7 +28,7 @@ template <class Apps> bool included_in(const App& app, Apps installed) noexcept
     return std::ranges::any_of(installed,
         [&](const auto& have)
         {
-            return std::ranges::any_of(deref(have).includes, [&](const AppInclude& item)
+            return std::ranges::any_of(address(have)->includes, [&](const AppInclude& item)
                 { return item.app_id == app.app_id && item.version_code >= app.version_code; });
         });
 }
@@ -73,7 +73,7 @@ template <class Apps> const App* preferred(Apps variants) noexcept
     { return std::tuple<std::size_t, std::uint64_t, std::string_view>(a.requires_.size(), a.size, a.id); };
     for (const auto& item : variants)
     {
-        const App& app = deref(item);
+        const App& app = *address(item);
         if (best == nullptr || key(app) < key(*best))
             best = &app;
     }
