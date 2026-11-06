@@ -675,7 +675,8 @@ impl<T: Transport> Client<T> {
     ///
     /// # Errors
     ///
-    /// Any error of the exchange, or a server that gives the same cursor twice.
+    /// Any error of the exchange, a server that gives the same cursor twice, or
+    /// one that never stops giving pages.
     pub fn all_apps(
         &mut self,
         options: &AppsOptions,
@@ -684,6 +685,12 @@ impl<T: Transport> Client<T> {
         let mut out = Vec::new();
         let mut seen = std::collections::HashSet::new();
         loop {
+            if seen.len() >= crate::limits::PAGES {
+                return Err(Error::UnexpectedResponse {
+                    message: "apps: the server gave more pages than a client follows".to_owned(),
+                    status: None,
+                });
+            }
             let page = self.apps(&options)?;
             out.extend(page.items);
             let Some(next) = page.next else {
