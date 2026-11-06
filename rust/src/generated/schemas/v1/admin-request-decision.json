@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/admin-request-decision.json",
+  "title": "An admin's decision on a request",
+  "description": "POST <base>/v1/admin/requests/{id} (SPEC.md § 11): decline, with a reason for the requester, or done.",
+  "allOf": [
+    {
+      "type": "object",
+      "properties": {
+        "decision": {
+          "enum": [
+            "decline",
+            "done"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "decision"
+      ],
+      "if": {
+        "required": [
+          "reason"
+        ]
+      },
+      "then": {
+        "properties": {
+          "decision": {
+            "const": "decline"
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "$ref": "common.json#/$defs/schema1"
+        }
+      },
+      "required": [
+        "schema"
+      ]
+    }
+  ]
+}

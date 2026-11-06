@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/admin-user-create.json",
+  "title": "A new account",
+  "description": "POST <base>/v1/admin/users (SPEC.md § 5.7). No password: its devices pair by invitation, or are approved by an admin.",
+  "allOf": [
+    {
+      "type": "object",
+      "properties": {
+        "name": {
+          "$ref": "common.json#/$defs/account_name"
+        },
+        "scopes": {
+          "$ref": "common.json#/$defs/scopes"
+        },
+        "state": {
+          "enum": [
+            "active",
+            "frozen"
+          ]
+        }
+      },
+      "not": {
+        "required": [
+          "password"
+        ]
+      },
+      "required": [
+        "name",
+        "scopes"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "$ref": "common.json#/$defs/schema1"
+        }
+      },
+      "required": [
+        "schema"
+      ]
+    }
+  ]
+}

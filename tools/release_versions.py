@@ -21,6 +21,7 @@ import argparse
 import json
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -45,6 +46,24 @@ def json_path(document: object, path: str) -> object:
         if not isinstance(value, dict) or name not in value:
             return None
         value = value[name]
+    return value
+
+
+def toml_path(document: object, path: str) -> object:
+    """The value at a TOML path: $.a.b, or $.a[?(@.k=='v')].b for the table of an array."""
+    value = document
+    for key in re.finditer(r"\.([A-Za-z_][\w-]*)|\[\?\(@\.([\w-]+)=='([^']*)'\)\]", path.removeprefix("$")):
+        if key.group(1):
+            if not isinstance(value, dict) or key.group(1) not in value:
+                return None
+            value = value[key.group(1)]
+        else:
+            if not isinstance(value, list):
+                return None
+            matches = [item for item in value if isinstance(item, dict) and item.get(key.group(2)) == key.group(3)]
+            if len(matches) != 1:
+                return None
+            value = matches[0]
     return value
 
 
@@ -74,6 +93,9 @@ def read(path: str, how: str) -> list[str]:
     if how.startswith("json:"):
         value = json_path(json.loads(text), how.removeprefix("json:"))
         return [value] if isinstance(value, str) else []
+    if how.startswith("toml:"):
+        value = toml_path(tomllib.loads(text), how.removeprefix("toml:"))
+        return [value] if isinstance(value, str) else []
     if how.startswith("re:"):
         return re.findall(how.removeprefix("re:"), text, flags=re.M)
     raise SystemExit(f"release_versions.py: unknown way of reading {path}: {how}")
@@ -84,8 +106,8 @@ def locations() -> list[tuple[str, str]]:
     out = []
     for listed in config["packages"]["."].get("extra-files", []):
         entry = {"type": "generic", "path": listed} if isinstance(listed, str) else listed
-        how = "generic" if entry["type"] == "generic" else f"json:{entry['jsonpath']}"
-        if entry["type"] not in ("generic", "json"):
+        how = "generic" if entry["type"] == "generic" else f"{entry['type']}:{entry.get('jsonpath')}"
+        if entry["type"] not in ("generic", "json", "toml"):
             raise SystemExit(f"release_versions.py: an extra-file of type {entry['type']} is not read here")
         out.append((entry["path"], how))
     return out + DERIVED

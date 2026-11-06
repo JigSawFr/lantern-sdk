@@ -1,0 +1,28 @@
+[package]
+name = "lantern-protocol"
+description = "Client and server library for the Lantern protocol, between console homebrews and home game library servers."
+version = "0.5.0" # x-release-please-version
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+repository = "https://github.com/JigSawFr/lantern-sdk"
+homepage = "https://lantern.boreale.dev/"
+readme = "README.md"
+keywords = ["lantern", "homebrew", "game-library", "protocol"]
+categories = ["network-programming", "api-bindings"]
+include = ["src/**", "README.md", "LICENSE", "Cargo.toml"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+panic = "deny"

@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/discovery.json",
+  "title": "LAN discovery reply",
+  "description": "A server's answer, unicast, to a discovery request on UDP 47115 (SPEC.md § 4.1). The server's address is the reply's source. A hint only: trust comes from TLS and pairing.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "$ref": "common.json#/$defs/schema1"
+    },
+    "lantern": {
+      "const": "server"
+    },
+    "uid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "name": {
+      "$ref": "common.json#/$defs/name"
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "base": {
+      "$ref": "common.json#/$defs/url"
+    },
+    "versions": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "minItems": 1
+    }
+  },
+  "required": [
+    "schema",
+    "lantern",
+    "uid",
+    "name",
+    "port",
+    "base",
+    "versions"
+  ]
+}

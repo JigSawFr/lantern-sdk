@@ -1,0 +1,148 @@
+# The Go library (go/): the generated models against the specification's
+# schemas, gofmt, go vet, staticcheck and govulncheck, the tests (with the race
+# detector and coverage) on Linux, macOS and Windows with the oldest Go the
+# module supports (go.mod) and the latest, a short fuzzing run, and the cross
+# compilation to the platforms servers run on. Nothing is published here: a Go
+# module is its tag (RELEASING.md).
+name: go
+
+# Called by ci.yml when the Go library's files change: its folder, the
+# specification (the submodule), this workflow and the files every library
+# shares (.github/scripts/changes.sh)
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: go
+
+env:
+  # The tools run from their pinned versions, and nothing else is fetched
+  STATICCHECK_VERSION: 2025.1.1
+  GOVULNCHECK_VERSION: v1.9.0
+
+jobs:
+  lint:
+    name: generated code, gofmt, vet, staticcheck, govulncheck
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.mod
+      - name: The generated models are those of the pinned specification
+        run: go run ./internal/gen -check
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then echo "gofmt -w these files:" >&2; echo "$unformatted" >&2; exit 1; fi
+      - name: go vet
+        run: go vet ./...
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@${{ env.STATICCHECK_VERSION }} ./...
+      # govulncheck reports the standard library of the toolchain it runs on:
+      # the oldest Go the module supports carries advisories already fixed, so
+      # it runs on the latest (staticcheck, above, needs the oldest).
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache-dependency-path: go/go.mod
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@${{ env.GOVULNCHECK_VERSION }} ./...
+      - name: go.mod is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+  test:
+    name: tests (${{ matrix.os }}, Go ${{ matrix.go }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-26.04 ]
+        go: [ "1.24", stable ]
+        include:
+          - os: macos-26
+            go: stable
+          - os: windows-2025
+            go: stable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ matrix.go }}
+          cache-dependency-path: go/go.mod
+      - name: go test
+        if: runner.os == 'Windows'
+        run: go test -count=1 ./...
+      - name: go test -race
+        if: runner.os != 'Windows'
+        run: go test -race -count=1 -cover -coverprofile=cover.out ./...
+      - name: Coverage
+        if: runner.os == 'Linux' && matrix.go == 'stable'
+        run: go tool cover -func=cover.out | tail -n 1
+
+  fuzz:
+    name: fuzzing (a short run of each target)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.mod
+      - name: Every fuzz target, 20 seconds each
+        run: |
+          set -euo pipefail
+          for pkg in $(go list ./...); do
+            for target in $(go test "$pkg" -list '^Fuzz' | grep '^Fuzz' || true); do
+              echo "::group::$pkg $target"
+              go test "$pkg" -run '^$' -fuzz "^${target}\$" -fuzztime 20s
+              echo "::endgroup::"
+            done
+          done
+
+  cross:
+    name: it compiles for the platforms servers run on
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [ linux/amd64, linux/arm64, linux/arm, linux/riscv64, darwin/arm64, windows/amd64, freebsd/amd64 ]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.mod
+      - name: go build, and the tests compile
+        env:
+          CGO_ENABLED: "0"
+          # A matrix value, never a pull request's text
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          export GOOS=${TARGET%/*} GOARCH=${TARGET#*/}
+          go build ./...
+          go vet ./...

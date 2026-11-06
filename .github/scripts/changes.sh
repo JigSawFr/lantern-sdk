@@ -14,7 +14,7 @@ set -euo pipefail
 
 event=$1
 before=${2:-}
-parts=(cpp c python typescript release workflows)
+parts=(cpp c python typescript go rust release workflows)
 
 all() {
   for part in "${parts[@]}"; do echo "$part=true"; done
@@ -44,7 +44,7 @@ if grep -qE '^\.github/(workflows/ci\.yml|scripts/|actions/)' <<< "$files"; then
 # What each part is made of, as its workflow's header says: its folder, the
 # specification (the submodule), the files every library shares (the
 # submodules' list, the licences), the malicious test server its tests run,
-# and its workflow. A release is made of the four libraries, tools/ and
+# and its workflow. A release is made of the five libraries, tools/ and
 # release-please's files (release-check.yml).
 shared='^(spec|\.gitmodules|REUSE\.toml)$|^LICENSES/'
 declare -A pattern=(
@@ -52,7 +52,9 @@ declare -A pattern=(
   [c]="^c/|^cpp/|^\.github/workflows/c\.yml$|$shared"
   [python]="^python/|^\.github/workflows/python\.yml$|$shared"
   [typescript]="^typescript/|^python/tools/hostile_server\.py$|^python/src/lantern/|^\.github/workflows/typescript\.yml$|$shared"
-  [release]="^(cpp|c|python|typescript|tools)/|^(release-please-config|\.release-please-manifest)\.json$|^\.github/workflows/release[^/]*\.yml$"
+  [go]="^go/|^python/tools/hostile_server\.py$|^\.github/workflows/go\.yml$|$shared"
+  [rust]="^rust/|^python/tools/hostile_server\.py$|^python/tools/generate\.py$|^\.github/workflows/rust\.yml$|$shared"
+  [release]="^(cpp|c|python|typescript|go|rust|tools)/|^(release-please-config|\.release-please-manifest)\.json$|^\.github/workflows/release[^/]*\.yml$"
   [workflows]='^\.github/'
 )
 for part in "${parts[@]}"; do

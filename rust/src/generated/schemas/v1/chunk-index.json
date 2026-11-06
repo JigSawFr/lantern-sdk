@@ -1,0 +1,316 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/chunk-index.json",
+  "title": "A chunk index",
+  "description": "GET <base>/v1/chunks/sha256/{hex}, or a static library's v1/chunks/sha256/<hex>.json (SPEC.md § 22.1): the file whose SHA-256 and size it gives, cut into chunks by the chunker it names, each chunk its size and SHA-256, in the file's order. Written in canonical JSON (SPEC.md § 2.3), its bytes those whose size and SHA-256 the app's or package's chunks gives. A chunk is at most 4 times the chunker's size.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "$ref": "common.json#/$defs/schema1"
+    },
+    "sha256": {
+      "$ref": "common.json#/$defs/sha256",
+      "description": "The SHA-256 of the whole file: the app's or the package's."
+    },
+    "size": {
+      "$ref": "common.json#/$defs/uint53",
+      "description": "The file's size: its chunks' sizes add up to it."
+    },
+    "chunker": {
+      "description": "How the file was cut (SPEC.md § 22.2): lantern-cdc-1, with a size from 64 KiB to 4 MiB, a power of two; a chunk is at most 4 times it. A later version may add chunkers: a client that does not know one reads the file whole.",
+      "type": "object",
+      "properties": {
+        "alg": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+        },
+        "size": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "alg",
+        "size"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "alg": {
+                "const": "lantern-cdc-1"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "size": {
+                "enum": [
+                  65536,
+                  131072,
+                  262144,
+                  524288,
+                  1048576,
+                  2097152,
+                  4194304
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "chunks": {
+      "description": "Each chunk, in the file's order: [its size in bytes, its SHA-256]. 100,000 at most (SPEC.md § 13); none for an empty file.",
+      "type": "array",
+      "maxItems": 100000,
+      "items": {
+        "type": "array",
+        "prefixItems": [
+          {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 16777216
+          },
+          {
+            "$ref": "common.json#/$defs/sha256"
+          }
+        ],
+        "minItems": 2,
+        "maxItems": 2
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "sha256",
+    "size",
+    "chunker",
+    "chunks"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "chunker": {
+            "properties": {
+              "size": {
+                "const": 65536
+              }
+            },
+            "required": [
+              "size"
+            ]
+          }
+        },
+        "required": [
+          "chunker"
+        ]
+      },
+      "then": {
+        "properties": {
+          "chunks": {
+            "items": {
+              "prefixItems": [
+                {
+                  "maximum": 262144
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "chunker": {
+            "properties": {
+              "size": {
+                "const": 131072
+              }
+            },
+            "required": [
+              "size"
+            ]
+          }
+        },
+        "required": [
+          "chunker"
+        ]
+      },
+      "then": {
+        "properties": {
+          "chunks": {
+            "items": {
+              "prefixItems": [
+                {
+                  "maximum": 524288
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "chunker": {
+            "properties": {
+              "size": {
+                "const": 262144
+              }
+            },
+            "required": [
+              "size"
+            ]
+          }
+        },
+        "required": [
+          "chunker"
+        ]
+      },
+      "then": {
+        "properties": {
+          "chunks": {
+            "items": {
+              "prefixItems": [
+                {
+                  "maximum": 1048576
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "chunker": {
+            "properties": {
+              "size": {
+                "const": 524288
+              }
+            },
+            "required": [
+              "size"
+            ]
+          }
+        },
+        "required": [
+          "chunker"
+        ]
+      },
+      "then": {
+        "properties": {
+          "chunks": {
+            "items": {
+              "prefixItems": [
+                {
+                  "maximum": 2097152
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "chunker": {
+            "properties": {
+              "size": {
+                "const": 1048576
+              }
+            },
+            "required": [
+              "size"
+            ]
+          }
+        },
+        "required": [
+          "chunker"
+        ]
+      },
+      "then": {
+        "properties": {
+          "chunks": {
+            "items": {
+              "prefixItems": [
+                {
+                  "maximum": 4194304
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "chunker": {
+            "properties": {
+              "size": {
+                "const": 2097152
+              }
+            },
+            "required": [
+              "size"
+            ]
+          }
+        },
+        "required": [
+          "chunker"
+        ]
+      },
+      "then": {
+        "properties": {
+          "chunks": {
+            "items": {
+              "prefixItems": [
+                {
+                  "maximum": 8388608
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "chunker": {
+            "properties": {
+              "size": {
+                "const": 4194304
+              }
+            },
+            "required": [
+              "size"
+            ]
+          }
+        },
+        "required": [
+          "chunker"
+        ]
+      },
+      "then": {
+        "properties": {
+          "chunks": {
+            "items": {
+              "prefixItems": [
+                {
+                  "maximum": 16777216
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  ]
+}
