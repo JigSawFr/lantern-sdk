@@ -84,6 +84,7 @@ add_library(lantern
     src/pinning.cpp
     src/profiles.cpp
     src/requires.cpp
+    src/saves.cpp
     src/variants.cpp
     src/server.cpp
     src/server_auth.cpp
@@ -92,6 +93,7 @@ add_library(lantern
     src/server_homebrew.cpp
     src/server_http.cpp
     src/server_library.cpp
+    src/server_saves.cpp
     src/sha256.cpp
     src/sharing.cpp
     src/static_library.cpp

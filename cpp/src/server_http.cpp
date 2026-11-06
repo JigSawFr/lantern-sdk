@@ -58,6 +58,7 @@ struct StatusName
 
 constexpr std::array status_names {
     StatusName { 200, "OK", "" },
+    StatusName { 201, "Created", "" },
     StatusName { 204, "No Content", "" },
     StatusName { 206, "Partial Content", "" },
     StatusName { 304, "Not Modified", "" },

@@ -14,6 +14,7 @@
 #include <lantern/digest.hpp>
 #include <lantern/missing.hpp>
 #include <lantern/profiles.hpp>
+#include <lantern/saves.hpp>
 
 #include "server_internal.hpp"
 
@@ -174,15 +175,17 @@ Answer handshake(const ServerState& state, const ServerRequest& request, const d
     w.end_object();
     // Per family, the schema it is written in, or 0: `library` and the
     // families the library offers (titles, changes, sections, homebrew) for a
-    // caller who may read it, `cheats` for one with that scope, and `pairing`
-    // and `signatures` for every caller (§ 4.2, L-4.2-5) when the server has
-    // accounts; nothing else is here yet
+    // caller who may read it, `cheats` for one with that scope, `saves` and
+    // `encrypted_saves` for one with the scope `saves` when there is a store,
+    // and `pairing` and `signatures` for every caller (§ 4.2, L-4.2-5) when
+    // the server has accounts; nothing else is here yet
     const bool titles   = reads_library && state.library->offers_titles();
     const bool changes  = reads_library && state.library->journal() != nullptr;
     const bool sections = reads_library && state.library->offers_sections();
     const bool homebrew = reads_library && state.library->offers_homebrew();
     const bool cheats
         = !detail::check_scope(state, caller, "cheats").has_value() && state.library->offers_cheats();
+    const bool saves = state.saves != nullptr && !detail::check_scope(state, caller, "saves").has_value();
     w.key("features");
     w.begin_object();
     constexpr std::array families { std::string_view { "library" }, std::string_view { "titles" },
@@ -196,6 +199,7 @@ Answer handshake(const ServerState& state, const ServerRequest& request, const d
         const bool offered = (family == "library" && reads_library) || (family == "titles" && titles)
             || (family == "changes" && changes) || (family == "sections" && sections)
             || (family == "homebrew" && homebrew) || (family == "cheats" && cheats)
+            || (family == "saves" && saves) || (family == "encrypted_saves" && saves && state.encrypted_saves)
             || ((family == "pairing" || family == "signatures") && state.accounts != nullptr);
         w.key(family);
         w.number(offered ? known_schema : std::uint64_t { 0 });
@@ -215,6 +219,15 @@ Answer handshake(const ServerState& state, const ServerRequest& request, const d
     w.begin_object();
     w.key("page_size");
     w.number(static_cast<std::uint64_t>(state.page_limit));
+    if (state.saves != nullptr)
+    {
+        w.key("save_body");
+        w.number(state.save_limits.body);
+        w.key("save_size");
+        w.number(state.save_limits.size);
+        w.key("saves_kept_per_title");
+        w.number(static_cast<std::uint64_t>(state.save_limits.kept));
+    }
     w.end_object();
     w.end_object();
     return detail::json_response(state, request, std::move(out));
@@ -726,12 +739,18 @@ struct Route
         homebrew,
         cheats,
         cheat,
+        saves,
+        save_post,
+        upload_open,
+        save,
+        upload,
         pairing_start,
         pairing_poll,
     };
     Kind kind = Kind::none;
     std::string_view allowed; // the methods it takes
-    std::string_view name; // the file's, the pairing's poll address
+    std::string_view name; // the file's, the pairing's poll address, a title's, an upload's
+    std::string_view second; // a save's id
 };
 
 // <base>/v1/<rest>: the route it names, if this server has one.
@@ -750,38 +769,54 @@ Route route_of(std::string_view rest) noexcept
         rest.remove_prefix(slash + 1);
     }
     if (count == 1 && segments[0] == "apps")
-        return { Route::Kind::apps, "GET, HEAD", {} };
+        return { Route::Kind::apps, "GET, HEAD", {}, {} };
     if (count == 2 && segments[0] == "apps" && segments[1] == "missing")
-        return { Route::Kind::missing, "POST", {} };
+        return { Route::Kind::missing, "POST", {}, {} };
     if (count == 2 && segments[0] == "files" && !segments[1].empty())
-        return { Route::Kind::file, "GET, HEAD", segments[1] };
+        return { Route::Kind::file, "GET, HEAD", segments[1], {} };
     if (count == 1 && segments[0] == "changes")
-        return { Route::Kind::changes, "GET, HEAD", {} };
+        return { Route::Kind::changes, "GET, HEAD", {}, {} };
     if (count == 1 && segments[0] == "titles")
-        return { Route::Kind::titles, "GET, HEAD", {} };
+        return { Route::Kind::titles, "GET, HEAD", {}, {} };
     if (count == 2 && segments[0] == "titles" && segments[1] == "changes")
-        return { Route::Kind::title_changes, "GET, HEAD", {} };
+        return { Route::Kind::title_changes, "GET, HEAD", {}, {} };
     if (count == 2 && segments[0] == "titles" && !segments[1].empty())
-        return { Route::Kind::title, "GET, HEAD", segments[1] };
+        return { Route::Kind::title, "GET, HEAD", segments[1], {} };
     if (count == 2 && segments[0] == "media" && !segments[1].empty())
-        return { Route::Kind::media, "GET, HEAD", segments[1] };
+        return { Route::Kind::media, "GET, HEAD", segments[1], {} };
     if (count == 1 && segments[0] == "sections")
-        return { Route::Kind::sections, "GET, HEAD", {} };
+        return { Route::Kind::sections, "GET, HEAD", {}, {} };
     if (count == 1 && segments[0] == "homebrew")
-        return { Route::Kind::homebrew_list, "GET, HEAD", {} };
+        return { Route::Kind::homebrew_list, "GET, HEAD", {}, {} };
     if (count == 2 && segments[0] == "homebrew" && segments[1] == "updates")
-        return { Route::Kind::homebrew_updates, "POST", {} };
+        return { Route::Kind::homebrew_updates, "POST", {}, {} };
     if (count == 2 && segments[0] == "homebrew" && !segments[1].empty())
-        return { Route::Kind::homebrew, "GET, HEAD", segments[1] };
+        return { Route::Kind::homebrew, "GET, HEAD", segments[1], {} };
     if (count == 1 && segments[0] == "cheats")
-        return { Route::Kind::cheats, "GET, HEAD, POST", {} };
+        return { Route::Kind::cheats, "GET, HEAD, POST", {}, {} };
     if (count == 2 && segments[0] == "cheats" && !segments[1].empty())
-        return { Route::Kind::cheat, "GET, HEAD, PUT, DELETE", segments[1] };
+        return { Route::Kind::cheat, "GET, HEAD, PUT, DELETE", segments[1], {} };
+    if (count == 1 && segments[0] == "saves")
+        return { Route::Kind::saves, "GET, HEAD", {}, {} };
+    if (count == 2 && segments[0] == "saves" && !segments[1].empty())
+        return { Route::Kind::save_post, "POST", segments[1], {} };
+    if (count == 3 && segments[0] == "saves" && !segments[1].empty() && segments[2] == "uploads")
+        return { Route::Kind::upload_open, "POST", segments[1], {} };
+    if (count == 3 && segments[0] == "saves" && !segments[1].empty() && !segments[2].empty())
+        return { Route::Kind::save, "GET, HEAD, DELETE", segments[1], segments[2] };
+    if (count == 2 && segments[0] == "uploads" && !segments[1].empty())
+        return { Route::Kind::upload, "HEAD, PATCH, DELETE", segments[1], {} };
     if (count == 1 && segments[0] == "pairing")
-        return { Route::Kind::pairing_start, "POST", {} };
+        return { Route::Kind::pairing_start, "POST", {}, {} };
     if (count == 2 && segments[0] == "pairing" && !segments[1].empty())
-        return { Route::Kind::pairing_poll, "GET", segments[1] };
+        return { Route::Kind::pairing_poll, "GET", segments[1], {} };
     return {};
+}
+
+bool is_saves_route(Route::Kind kind) noexcept
+{
+    return kind == Route::Kind::saves || kind == Route::Kind::save_post || kind == Route::Kind::upload_open
+        || kind == Route::Kind::save || kind == Route::Kind::upload;
 }
 
 bool takes(std::string_view allowed, std::string_view method) noexcept
@@ -861,6 +896,13 @@ Answer route(const ServerState& state, const ServerRequest& request)
         case Route::Kind::cheat:
             offered = state.library->offers_cheats();
             break;
+        case Route::Kind::saves:
+        case Route::Kind::save_post:
+        case Route::Kind::upload_open:
+        case Route::Kind::save:
+        case Route::Kind::upload:
+            offered = state.saves != nullptr;
+            break;
         default:
             break;
     }
@@ -885,9 +927,16 @@ Answer route(const ServerState& state, const ServerRequest& request)
         std::string_view scope = "library";
         if (cheat_route)
             scope = reading ? "cheats" : "cheats.write";
+        if (is_saves_route(chosen.kind))
+            scope = "saves";
         if (auto refused = detail::check_scope(state, *caller, scope))
             return std::unexpected(std::move(*refused));
     }
+    // A body the adapter left unread (too large to buffer) is for the uploads alone
+    if (request.stream != nullptr && chosen.kind != Route::Kind::save_post
+        && chosen.kind != Route::Kind::upload)
+        return std::unexpected(
+            detail::make_problem(state, 413, Code::too_large, "That body is larger than this route takes."));
     switch (chosen.kind)
     {
         case Route::Kind::apps:
@@ -921,6 +970,16 @@ Answer route(const ServerState& state, const ServerRequest& request)
             if (request.method == "PUT" || request.method == "DELETE")
                 return detail::cheat_write_route(state, request, chosen.name);
             return detail::cheat_text_route(state, request, chosen.name);
+        case Route::Kind::saves:
+            return detail::saves_route(state, request, *caller);
+        case Route::Kind::save_post:
+            return detail::save_post_route(state, request, *caller, chosen.name);
+        case Route::Kind::upload_open:
+            return detail::upload_open_route(state, request, *caller, chosen.name);
+        case Route::Kind::save:
+            return detail::save_route(state, request, *caller, chosen.name, chosen.second);
+        case Route::Kind::upload:
+            return detail::upload_route(state, request, *caller, chosen.name);
         case Route::Kind::pairing_start:
             return detail::pairing_start(state, request);
         case Route::Kind::pairing_poll:
@@ -1045,6 +1104,17 @@ Result<Server> Server::create(Library& library, const ServerOptions& options, Ra
             return fail(Category::usage, "verify holds a character a URL does not");
     }
 
+    if (options.saves != nullptr)
+    {
+        const SaveLimits& limits = options.save_limits;
+        if (options.accounts == nullptr)
+            return fail(Category::usage, "saves need accounts: a backup belongs to one");
+        if (limits.body < 1 || limits.body > limits.size || limits.size > max_safe_integer || limits.kept < 1
+            || limits.chunk < 1 || limits.upload_hours < 1)
+            return fail(
+                Category::usage, "save_limits: 1 <= body <= size, chunk, kept and upload_hours at least 1");
+    }
+
     auto state = std::allocate_shared<ServerState>(
         std::pmr::polymorphic_allocator<ServerState>(allocator), allocator);
     state->library  = &library;
@@ -1083,6 +1153,9 @@ Result<Server> Server::create(Library& library, const ServerOptions& options, Ra
     state->pairing_window      = options.pairing_window;
     state->invitation_attempts = options.invitation_attempts;
     state->invitation_window   = options.invitation_window;
+    state->saves               = options.saves;
+    state->save_limits         = options.save_limits;
+    state->encrypted_saves     = options.saves != nullptr && options.encrypted_saves;
     if (auto filled = random.fill(state->secret); !filled)
         return std::unexpected(filled.error());
     return Server(std::move(state));

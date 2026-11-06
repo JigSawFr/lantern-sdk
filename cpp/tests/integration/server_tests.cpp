@@ -3,6 +3,7 @@
 // a checked download with a resume; and the listener alone, with what no
 // client sends (a head that is not HTTP, a body too large, one of unknown
 // length). The demo's library (examples/demo_library.hpp) is the one served.
+// Saves larger than the listener buffers go to the store from the socket.
 #include <doctest.h>
 
 #include <array>
@@ -26,11 +27,15 @@ using namespace lantern;
 namespace
 {
 
+constexpr std::string_view lea_token = "et_lea-0123456789abcdef0123456789abcdef";
+
 // The demo served on a free loopback port, by a thread, for one test.
 class Running
 {
   public:
-    Running()
+    // `saves`: an account, `lea`, with the token `lea_token` and the scope saves, whose backups are kept
+    // in memory; chunks of up to 2 MiB, streamed from the socket above 1 MiB.
+    explicit Running(bool saves = false)
         : library_(demo::base)
     {
         REQUIRE(demo::fill(library_));
@@ -38,10 +43,21 @@ class Running
         options_.name   = "Demo shelf";
         options_.base   = demo::base;
         options_.scheme = "http";
-        auto server     = Server::create(library_, options_, random_, clock_);
+        posix::ListenOptions listen;
+        if (saves)
+        {
+            constexpr std::array<std::string_view, 2> scopes { "library", "saves" };
+            REQUIRE(accounts_.add_account("lea", scopes));
+            REQUIRE(accounts_.add_token(lea_token, "lea", "A console", scopes));
+            options_.accounts          = &accounts_;
+            options_.saves             = &saves_;
+            options_.save_limits.chunk = std::uint64_t { 2 } << 20U;
+            listen.max_stream          = options_.save_limits.size;
+        }
+        auto server = Server::create(library_, options_, random_, clock_);
         REQUIRE(server);
         server_.emplace(std::move(*server));
-        auto listener = posix::HttpListener::listen(*server_);
+        auto listener = posix::HttpListener::listen(*server_, listen);
         REQUIRE(listener);
         listener_.emplace(std::move(*listener));
         origin_ = "http://127.0.0.1:" + std::to_string(listener_->port());
@@ -64,6 +80,8 @@ class Running
     MemoryLibrary library_;
     posix::SystemRandom random_;
     SystemClock clock_;
+    MemoryAccountStore accounts_;
+    MemorySaveStore saves_;
     ServerOptions options_;
     std::optional<Server> server_;
     std::optional<posix::HttpListener> listener_;
@@ -104,6 +122,45 @@ std::string raw_exchange(std::uint16_t port, std::string_view request)
         answer.append(chunk.data(), *got);
     }
     return answer;
+}
+
+// The text between `before` and the next `"` after it: a JSON string's value, found without parsing.
+std::string quoted_after(const std::string& answer, std::string_view before)
+{
+    const std::size_t at = answer.find(before);
+    REQUIRE(at != std::string::npos);
+    const std::size_t from = at + before.size();
+    return answer.substr(from, answer.find('"', from) - from);
+}
+
+std::string status_line(const std::string& answer)
+{
+    return answer.substr(0, answer.find("\r\n"));
+}
+
+// A request to the saves of Running(true): the head with the token, then `body`; the whole of it
+// is sent, or, with `declared`, a head that announces more than `body` and the connection closes.
+std::string saves_exchange(std::uint16_t port, std::string_view method, std::string_view target,
+    std::string_view extra, std::string_view body, std::uint64_t declared = 0)
+{
+    std::string head(method);
+    head += " /api/lantern/v1";
+    head += target;
+    head += " HTTP/1.1\r\nHost: x\r\nLantern-Platform: switch\r\nAuthorization: Bearer ";
+    head += lea_token;
+    head += "\r\n";
+    head += extra;
+    head += "Content-Length: " + std::to_string(declared != 0 ? declared : body.size()) + "\r\n\r\n";
+    if (declared != 0)
+    {
+        // Sent and closed, no answer read
+        auto socket = http1::TcpSocket::connect("127.0.0.1", port, std::chrono::seconds(5), true);
+        REQUIRE(socket);
+        REQUIRE(socket->write(std::span<const char>(head.data(), head.size())));
+        REQUIRE(socket->write(std::span<const char>(body.data(), body.size())));
+        return {};
+    }
+    return raw_exchange(port, head + std::string(body));
 }
 
 } // namespace
@@ -331,4 +388,56 @@ TEST_CASE("server over HTTP: the listener answers what is not a request of the p
 
     // The listener goes on after all of that
     CHECK(status_of(raw_exchange(port, "GET /.well-known/lantern HTTP/1.1\r\n\r\n")) == "HTTP/1.1 200 OK");
+}
+
+TEST_CASE(
+    "server over HTTP: a save above the listener's buffer is streamed to the store, and a cut chunk resumes")
+{
+    Running running(true);
+    const std::uint16_t port = running.port();
+    const std::string title  = "0100ABCD00010000";
+
+    // 3 MiB in one request: more than the listener buffers (1 MiB), less than limits.save_body
+    std::string archive = "PK\x03\x04";
+    for (std::size_t i = archive.size(); i < (std::size_t { 3 } << 20U); ++i)
+        archive.push_back(static_cast<char>((i * 2654435761ULL) >> 13U));
+    String digest;
+    format_digest_field(Sha256::of(std::string_view(archive)), digest);
+    std::string answer = saves_exchange(port, "POST", "/saves/" + title,
+        "Content-Type: application/zip\r\nContent-Digest: " + std::string(digest) + "\r\n", archive);
+    CHECK(status_line(answer) == "HTTP/1.1 201 Created");
+    const std::string save_id = quoted_after(answer, "\"save_id\":\"");
+    CHECK(save_id.starts_with("s_"));
+    answer = saves_exchange(port, "GET", "/saves/" + title + "/" + save_id, "", {});
+    CHECK(status_line(answer) == "HTTP/1.1 200 OK");
+    CHECK(answer.ends_with(archive));
+    // A body of another digest is refused whole
+    answer = saves_exchange(port, "POST", "/saves/" + title,
+        "Content-Type: application/zip\r\nContent-Digest: "
+        "sha-256=:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=:\r\n",
+        archive);
+    CHECK(status_line(answer).starts_with("HTTP/1.1 422"));
+
+    // An upload of 1.5 MiB whose only chunk is cut after 1.25 MiB: the server keeps what came
+    const std::string whole = archive.substr(0, std::size_t { 3 } << 19U);
+    const auto hex          = to_hex(Sha256::of(std::string_view(whole)));
+    answer
+        = saves_exchange(port, "POST", "/saves/" + title + "/uploads", "Content-Type: application/json\r\n",
+            R"({"schema":1,"size":)" + std::to_string(whole.size()) + R"(,"sha256":")"
+                + std::string(hex.data(), hex.size()) + "\"}");
+    CHECK(status_line(answer) == "HTTP/1.1 201 Created");
+    const std::string upload
+        = quoted_after(answer, "\"upload\":\"").substr(std::string("/api/lantern/v1").size());
+    const std::size_t cut  = std::size_t { 5 } << 18U; // 1.25 MiB
+    const std::string kept = whole.substr(0, cut);
+    saves_exchange(port, "PATCH", upload,
+        "Content-Type: application/offset+octet-stream\r\nUpload-Offset: 0\r\n", kept, whole.size());
+    answer = saves_exchange(port, "HEAD", upload, "", {});
+    CHECK(status_line(answer) == "HTTP/1.1 204 No Content");
+    CHECK(answer.contains("Upload-Offset: " + std::to_string(cut) + "\r\n"));
+    // Resumed from there
+    answer = saves_exchange(port, "PATCH", upload,
+        "Content-Type: application/offset+octet-stream\r\nUpload-Offset: " + std::to_string(cut) + "\r\n",
+        std::string_view(whole).substr(cut));
+    CHECK(status_line(answer) == "HTTP/1.1 201 Created");
 }

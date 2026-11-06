@@ -85,6 +85,15 @@ struct ServerState
     // The cheat sets are read and written one request at a time (§ 10: a set
     // that exists answers 409, which two writes at once would miss).
     mutable std::mutex cheats_mutex;
+    // The save backups (§ 9): where they are kept, the limits, whether encrypted ones are taken. A store's
+    // calls are atomic; this mutex makes a check and the change it leads to one step (a backup kept, then
+    // the oldest dropped), and guards `writing`, the uploads a request writes now: a second chunk of the
+    // same upload meanwhile is a 409.
+    SaveStore* saves = nullptr;
+    SaveLimits save_limits;
+    bool encrypted_saves = false;
+    mutable std::mutex saves_mutex;
+    mutable Vector<String> writing;
 
     explicit ServerState(const Allocator& memory)
         : allocator(memory)
@@ -98,6 +107,7 @@ struct ServerState
         , cors_origins(memory)
         , verify(memory)
         , runtime(memory)
+        , writing(memory)
     {
     }
     ServerState(const ServerState&)            = delete;
@@ -291,6 +301,20 @@ struct PageWindow
 inline constexpr std::size_t cheat_limit = std::size_t { 1 } << 20U;
 inline constexpr std::size_t cheat_body  = std::size_t { 3 } << 20U;
 
+// Save backups (§ 9) and encrypted ones (§ 9.4), for a caller with the scope
+// `saves`: each 404 when the server keeps none.
+struct Caller;
+[[nodiscard]] Answer saves_route(
+    const ServerState& state, const ServerRequest& request, const Caller& caller);
+[[nodiscard]] Answer save_post_route(
+    const ServerState& state, const ServerRequest& request, const Caller& caller, std::string_view title_id);
+[[nodiscard]] Answer upload_open_route(
+    const ServerState& state, const ServerRequest& request, const Caller& caller, std::string_view title_id);
+[[nodiscard]] Answer upload_route(
+    const ServerState& state, const ServerRequest& request, const Caller& caller, std::string_view upload_id);
+[[nodiscard]] Answer save_route(const ServerState& state, const ServerRequest& request, const Caller& caller,
+    std::string_view title_id, std::string_view save_id);
+
 // Who calls (§ 4.2, § 5.1): no token (anonymous), a token of an account, or
 // of an account that is frozen. A token is checked against the store; its
 // scopes are the device's, cut back to the account's.
@@ -305,11 +329,13 @@ struct Caller
 
     State state = State::anonymous;
     String name; // the account's, when there is one
+    String device; // what the user calls the paired device, when there is one
     Vector<String> scopes; // in the order of known_scopes
     std::optional<PublicKey> key; // the token is bound to it
 
     explicit Caller(const Allocator& allocator)
         : name(allocator)
+        , device(allocator)
         , scopes(allocator)
     {
     }

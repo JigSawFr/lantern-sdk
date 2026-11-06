@@ -4,8 +4,8 @@
 // own HTTP server) hands `Server::handle()` a ServerRequest, as the framework
 // parsed it, and sends the ServerResponse it gets back.
 //
-// What it serves so far is Lantern Core, read-only, and the families that
-// give a device its token:
+// What it serves so far is Lantern Core, read-only, the families that give a
+// device its token, and the save backups:
 //
 // - the handshake, at /.well-known/lantern and at <base>/v1 (§ 4.2), which
 //   lists only the families the server serves (`library`, those the library
@@ -28,6 +28,15 @@
 //   server's key (§ 5.3), and device-bound tokens, whose requests carry an
 //   HTTP message signature checked as § 5.4 says, with the replay window of
 //   the injected Clock;
+// - with a SaveStore (saves.hpp) and accounts: the save backups of § 9, for
+//   the scope `saves`: the listing, a backup's archive and its removal, a
+//   save sent in one request, and the resumable upload (open, HEAD for where
+//   it stands, PATCH a chunk, DELETE), the whole archive's SHA-256 and every
+//   Content-Digest checked, the backups kept per title, the limits in the
+//   handshake; and `encrypted_saves` (§ 9.4), a backup encrypted on the
+//   device kept as sent, never read. A large body reaches the store piece
+//   by piece: an adapter that does not buffer it gives the request a
+//   `BodyReader` (see ServerRequest::stream).
 // - the validators and caching headers of § 14, errors as problem+json
 //   (§ 12), the `schema` rule and the bounds of § 13 on the documents it
 //   reads (§ 3.2), and browsers (§ 2.5): CORS for the origins the app
@@ -35,7 +44,7 @@
 //
 // Approving a pairing is the app's: its own page, once the user is signed in
 // there, calls Server::approve_pairing(). Invitations, administration,
-// saves, requests, events (so no `wait` on changes), peers, sync and
+// requests, events (so no `wait` on changes), peers, sync and
 // discovery are not here yet: a request for one is a route the server does
 // not have (404), and the handshake says so (`features`). JSON is sent as it
 // is written, never compressed (§ 2.1 asks a server to, as a SHOULD).
@@ -67,12 +76,31 @@
 namespace lantern
 {
 
+class SaveStore;
+
 // A request, as the adapter hands it over. It only looks at what the
 // adapter owns: every view stays valid while handle() runs.
 struct QueryParam
 {
     std::string_view name; // percent-decoded, "+" a space
     std::string_view value;
+};
+
+// A request's body, read from where the adapter keeps it (a socket, a file)
+// piece by piece, for the routes that take bodies too large to buffer.
+class BodyReader
+{
+  public:
+    BodyReader()                             = default;
+    BodyReader(const BodyReader&)            = default;
+    BodyReader(BodyReader&&)                 = default;
+    BodyReader& operator=(const BodyReader&) = default;
+    BodyReader& operator=(BodyReader&&)      = default;
+    virtual ~BodyReader()                    = default;
+
+    // Fills `buffer` with the next bytes, as many as are there now: the bytes
+    // read, 0 at the body's end. An error (the connection was cut) ends the request.
+    [[nodiscard]] virtual Result<std::size_t> read(std::span<std::byte> buffer) = 0;
 };
 
 struct ServerRequest
@@ -84,6 +112,14 @@ struct ServerRequest
     std::span<const QueryParam> query;
     std::span<const Header> headers;
     std::span<const std::byte> body; // read only for the routes that take one
+    // A body the adapter did not buffer: `body` is then empty, `stream_length`
+    // bytes (Content-Length) are to be read from `stream`, which the server
+    // reads only on the routes that take a body of that size (the save
+    // uploads of § 9.2 and § 9.3) and answers 413 on every other; nothing
+    // read, the adapter closes the connection after the answer. Null: the
+    // body is `body`.
+    BodyReader* stream          = nullptr;
+    std::uint64_t stream_length = 0;
     std::string_view scheme; // "https" or "http", the one the request came by; empty: ServerOptions::scheme
     std::string_view target; // the request target as sent, path and query
     std::string_view remote; // the caller's address, as text
@@ -92,6 +128,11 @@ struct ServerRequest
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const noexcept;
     // The first parameter of that name with a value.
     [[nodiscard]] std::optional<std::string_view> param(std::string_view name) const noexcept;
+    // The body's size in bytes, buffered or not.
+    [[nodiscard]] std::uint64_t body_size() const noexcept
+    {
+        return stream != nullptr ? stream_length : static_cast<std::uint64_t>(body.size());
+    }
 };
 
 // A request target split: the path, then the query's parameters, each
@@ -650,6 +691,22 @@ struct ServerResponse
 [[nodiscard]] ServerResponse problem_response(
     std::uint16_t status, Code code, std::string_view detail, const Allocator& allocator = {});
 
+// The limits of the saves (§ 4.2, § 9), the handshake's `limits.save_body`,
+// `save_size` and `saves_kept_per_title`, and an upload's `chunk_size`.
+struct SaveLimits
+{
+    // The largest save sent in one request.
+    std::uint64_t body = std::uint64_t { 8 } << 20U;
+    // The largest save at all (an upload's `size`).
+    std::uint64_t size = std::uint64_t { 1 } << 30U;
+    // The backups kept per title, platform and account; the oldest beyond are dropped.
+    std::uint32_t kept = 10;
+    // An upload's chunk_size.
+    std::uint64_t chunk = std::uint64_t { 1 } << 20U;
+    // How long an upload may take before it is gone.
+    std::uint32_t upload_hours = 24;
+};
+
 struct ServerOptions
 {
     // The server's UUID, which never changes: lower case, version 4 or 7 (§ 4.2).
@@ -721,6 +778,15 @@ struct ServerOptions
     // Wrong invitation codes per address in a window of seconds, then 429.
     std::uint32_t invitation_attempts = 10;
     std::uint32_t invitation_window   = 600;
+
+    // Save backups (§ 9), for the accounts with the scope `saves`: where they
+    // are kept. Needs `accounts`; without it the server offers no `saves`.
+    // It must outlive the server.
+    SaveStore* saves = nullptr;
+    SaveLimits save_limits;
+    // Keep backups encrypted on the device (§ 9.4, `encrypted_saves`); false:
+    // a backup sent with an `encryption` is a 400 (L-9.4-5).
+    bool encrypted_saves = true;
 };
 
 namespace detail
