@@ -36,7 +36,10 @@ jobs:
           submodules: true
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go/go.mod
+          # The latest Go, not the oldest the module supports: govulncheck
+          # reports the standard library of the toolchain it runs on, and the
+          # oldest one carries fixed advisories the code cannot avoid.
+          go-version: stable
           cache-dependency-path: go/go.mod
       - name: The generated models are those of the pinned specification
         run: go run ./internal/gen -check
