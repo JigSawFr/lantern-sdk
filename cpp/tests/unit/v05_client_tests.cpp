@@ -736,7 +736,7 @@ TEST_CASE("admin: an account's scopes emptied are sent as `scopes: []` (SPEC.md 
     frozen.state = "frozen";
     REQUIRE(setup.client->admin_update_user("sam", frozen));
     CHECK(setup.transport.requests.back().body.find("scopes") == std::string::npos);
-    const auto nothing = setup.client->admin_update_user("sam", AdminUserUpdate{});
+    const auto nothing = setup.client->admin_update_user("sam", AdminUserUpdate {});
     REQUIRE_FALSE(nothing);
     CHECK(nothing.error().category() == Category::usage);
 }
