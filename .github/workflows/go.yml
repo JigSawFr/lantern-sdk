@@ -22,7 +22,7 @@ defaults:
 env:
   # The tools run from their pinned versions, and nothing else is fetched
   STATICCHECK_VERSION: 2025.1.1
-  GOVULNCHECK_VERSION: v1.1.4
+  GOVULNCHECK_VERSION: v1.9.0
 
 jobs:
   lint:
