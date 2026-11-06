@@ -8,15 +8,20 @@
 
 pub mod bytes;
 pub mod canonical;
+pub mod client;
 pub mod digest;
 pub mod documents;
+pub mod download;
 pub mod error;
 pub mod generated;
+pub mod http;
 pub mod limits;
+pub mod pairing;
 pub mod problem;
 pub mod profiles;
 pub mod signatures;
 pub mod spki;
+pub mod transport;
 pub mod uid;
 pub mod variants;
 pub mod vocabulary;

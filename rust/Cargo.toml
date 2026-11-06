@@ -18,6 +18,8 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 sha2 = "0.10"
 regex = "1"
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+url = "2"
+getrandom = { version = "0.3", optional = true }
 
 [lints.rust]
 unsafe_code = "forbid"
@@ -29,3 +31,7 @@ unwrap_used = "deny"
 expect_used = "deny"
 indexing_slicing = "deny"
 panic = "deny"
+
+[features]
+# The operating system's random bytes for the client (off by default: the library draws none itself)
+os-entropy = ["dep:getrandom"]
