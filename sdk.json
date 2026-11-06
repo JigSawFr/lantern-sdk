@@ -83,7 +83,7 @@
       "adapters": [
         "net/http"
       ],
-      "requires": "Go 1.24+",
+      "requires": "Go 1.24.0+",
       "readme": "go/README.md"
     },
     {
@@ -526,7 +526,7 @@
           "server": "yes"
         },
         "go": {
-          "client": "no",
+          "client": "yes",
           "server": "no"
         },
         "rust": {

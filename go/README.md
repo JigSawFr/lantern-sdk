@@ -9,14 +9,14 @@
 go get github.com/JigSawFr/lantern-sdk/go
 ```
 
-Go 1.24 or later, and nothing but the standard library.
+Go 1.24 or later. The standard library and one module, `golang.org/x/crypto`, for the XChaCha20-Poly1305 of encrypted saves (its licence: [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)).
 
 ## What is there
 
 | Package | What it does |
 |---|---|
 | `lantern` | The specification's documents (`Handshake`, `Homebrew`, `AppsPage`…) generated from its JSON Schemas, with every field they do not know kept and written back; the vocabularies; the errors (`ProblemError`, tested with `errors.Is`); the `schema` rule; canonical JSON (RFC 8785); digests (`Repr-Digest`); the limits of SPEC.md § 13 and a JSON reader that keeps to them |
-| `lantern/client` | The handshake, pairing (a code the user approves on the server's side), the token and the device key, the server's key pinned by its SHA-256 (or read on the first use and pinned), requests signed as SPEC.md § 5.4 says, signed again once after `signature_expired` with the server's clock, deprecations noticed; the library: apps by pages (`iter.Seq2`), what a device is `missing`, `changes`, `sections`, titles one by one, a hundred at a time and by their changes, images, and files read and saved checked against their SHA-256 and `Repr-Digest`, resumed with `Range`; the homebrew: entries, updates, packages checked (manifest, roots of the profile, Ed25519 signature with the strict checks of L-8.4-4) before a byte is fetched, the key to pin, a port's data and the requirements; the cheat sets (listed, read checked against their SHA-256, written, replaced, deleted) and the requests for games; the admin API (accounts, devices, waiting pairings, invitations, every account's requests and their decisions); the save backups (listed, read and saved checked against their SHA-256, sent in one request or in resumable chunks) |
+| `lantern/client` | The handshake, pairing (a code the user approves on the server's side), the token and the device key, the server's key pinned by its SHA-256 (or read on the first use and pinned), requests signed as SPEC.md § 5.4 says, signed again once after `signature_expired` with the server's clock, deprecations noticed; the library: apps by pages (`iter.Seq2`), what a device is `missing`, `changes`, `sections`, titles one by one, a hundred at a time and by their changes, images, and files read and saved checked against their SHA-256 and `Repr-Digest`, resumed with `Range`; the homebrew: entries, updates, packages checked (manifest, roots of the profile, Ed25519 signature with the strict checks of L-8.4-4) before a byte is fetched, the key to pin, a port's data and the requirements; the cheat sets (listed, read checked against their SHA-256, written, replaced, deleted) and the requests for games; the admin API (accounts, devices, waiting pairings, invitations, every account's requests and their decisions); the save backups (listed, read and saved checked against their SHA-256, sent in one request or in resumable chunks, and encrypted on the device with a save key and a recovery phrase that never leave it) |
 | `lantern/discovery` | The UDP datagram on port 47115 and the replies it reads, and the TXT record of a DNS-SD advertisement |
 | `lantern/schema` | The specification's JSON Schemas, embedded, and a validator for them |
 
