@@ -277,7 +277,7 @@ class BufferHandler final : public ResponseHandler
             return false;
         if (chunk.size() > range_.length() - filled_)
             return stop(Error::make(Category::invalid_response, "more bytes than the range asked"));
-        std::copy(chunk.begin(), chunk.end(), out_.begin() + static_cast<std::ptrdiff_t>(filled_));
+        std::ranges::copy(chunk, out_.begin() + static_cast<std::ptrdiff_t>(filled_));
         filled_ += chunk.size();
         return true;
     }
