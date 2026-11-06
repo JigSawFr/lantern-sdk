@@ -367,7 +367,10 @@ Each family maps onto the C++ client's, with the rules above:
   older version, borrowed) and reads the other chunks as ranges from the
   `lantern_delta_options`' peers and mirrors, then the server, each chunk
   and the file checked; any failure empties the sink and reads the file
-  whole (`lantern_delta_report.whole_file`). `lantern_read_chunk_index()`
+  whole (`lantern_delta_report.whole_file`). To resume an interrupted run,
+  keep the bytes already written (a verified prefix) and pass them as one
+  more seed: the chunks found there are not read again and are still
+  checked (Annex B.4). `lantern_read_chunk_index()`
   reads one the app kept; `lantern_static_library_chunk_index()` and
   `lantern_static_library_download_with_seeds()` do it over files.
 - **Where an address leads (§ 21.3).** `lantern_find_library()`: the

@@ -503,6 +503,9 @@ class Client
     // chunk that does not match: the sink is emptied (restart()) and the file
     // is read whole, as download_with_mirrors() would (L-22.3-4); an error
     // only when that fails too. On success the sink holds the whole file.
+    // Resuming is the app's: it keeps the bytes already written (a verified
+    // prefix) and passes them as one more seed; the chunks found there are
+    // not read again, and are still checked (Annex B.4).
     [[nodiscard]] Result<DeltaReport> download_with_seeds(const DownloadTarget& target,
         const AppChunks& chunks, std::span<const Seed> seeds, DownloadSink& sink,
         const DeltaOptions& options = {});

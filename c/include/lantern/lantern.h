@@ -1786,6 +1786,9 @@ typedef struct lantern_delta_report
  * sink is written in the file's order. An index that cannot be used, a
  * source that fails or a chunk that does not match: the sink is emptied
  * (restart) and the file read whole; an error only when that fails too.
+ * To resume an interrupted run, keep the bytes already written (a verified
+ * prefix) and pass them as one more seed: the chunks found there are not
+ * read again, and are still checked (Annex B.4).
  * `options` and `report` may be NULL. */
 LANTERN_API lantern_status lantern_client_download_with_seeds(lantern_client* client,
     const lantern_download_target* target, const lantern_app_chunks* chunks, const lantern_seed* seeds,
