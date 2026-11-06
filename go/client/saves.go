@@ -384,6 +384,9 @@ func (c *Client) UploadSaveResumable(ctx context.Context, titleID string, meta S
 type UploadError struct {
 	Upload string
 	Err    error
+	// Backup is the encrypted backup being sent (UploadEncryptedSaveResumable), nil otherwise: it holds
+	// the header and the file key, to encrypt again to the same bytes. Wipe it when done.
+	Backup *lantern.SaveBackup
 }
 
 func (e *UploadError) Error() string {

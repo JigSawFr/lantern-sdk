@@ -7,8 +7,9 @@
 // the specification as typed values generated from its JSON Schemas (and kept
 // whole when they hold fields this version does not know), the vocabularies,
 // the errors, the rule of the `schema` field (SPEC.md § 3.2), canonical JSON
-// (SPEC.md § 2.3), digests and the limits of SPEC.md § 13. It has no
-// dependency beyond the standard library.
+// (SPEC.md § 2.3), digests and the limits of SPEC.md § 13, the checks of a homebrew and the
+// end-to-end encryption of save backups. Its one dependency beyond the standard library is
+// golang.org/x/crypto, for XChaCha20-Poly1305.
 //
 // The documents are generated: run `go generate ./...` after the
 // specification's schemas change.

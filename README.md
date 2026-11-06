@@ -156,7 +156,7 @@ Each family of the specification (SPEC.md § 4.2), read as a client and served (
 | `events` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
 | `peers` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
 | `sync` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
-| `encrypted_saves` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
+| `encrypted_saves` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | ✓ / – | – / – |
 | `deltas` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
 <!-- families:end -->
 

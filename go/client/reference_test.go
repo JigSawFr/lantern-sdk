@@ -651,14 +651,19 @@ func TestReferenceAdmin(t *testing.T) {
 	})
 }
 
-// failingAt reads from data and fails once past a limit, as a connection that is lost.
+// failingAt reads from data and fails once past a limit, as a connection that is lost. With
+// needArm it fails only after arm() (the first pass that hashes the data goes through).
 type failingAt struct {
-	data  []byte
-	limit int64
+	data    []byte
+	limit   int64
+	needArm bool
+	armed   bool
 }
 
+func (f *failingAt) arm() { f.armed = true }
+
 func (f *failingAt) ReadAt(p []byte, off int64) (int, error) {
-	if off+int64(len(p)) > f.limit {
+	if (!f.needArm || f.armed) && off+int64(len(p)) > f.limit {
 		return 0, errors.New("the device went to sleep")
 	}
 	return copy(p, f.data[off:]), nil
@@ -738,7 +743,7 @@ func TestReferenceSaves(t *testing.T) {
 			t.Fatal(err)
 		}
 		cut := up.ChunkSize + up.ChunkSize/2
-		if _, err := c.ContinueSaveUpload(ctx, up.Upload, &failingAt{archive, cut}, nil); err == nil {
+		if _, err := c.ContinueSaveUpload(ctx, up.Upload, &failingAt{data: archive, limit: cut}, nil); err == nil {
 			t.Fatal("an upload went through a lost connection")
 		}
 		state, err := c.SaveUploadState(ctx, up.Upload)
@@ -773,5 +778,83 @@ func TestReferenceSaves(t *testing.T) {
 		if _, err := c.SaveUploadState(ctx, up.Upload); err == nil {
 			t.Error("an abandoned upload answers")
 		}
+	})
+}
+
+func TestReferenceEncryptedSaves(t *testing.T) {
+	ref := startReference(t)
+	ctx := context.Background()
+	seed, err := lantern.SigningKeyFromBase64(ref.AdminSeed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := client.New(ref.URL, client.Options{Token: ref.AdminTok, Key: seed, Platform: "switch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := c.Offers(ctx, "encrypted_saves"); !ok {
+		t.Skip("the reference server does not offer encrypted_saves")
+	}
+	key, err := lantern.GenerateSaveKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _ := lantern.GenerateSaveKey()
+	title := "0100ABCD00010000"
+	meta := client.SaveMeta{Kind: "account"}
+	check := func(t *testing.T, save *lantern.Save, archive []byte) {
+		t.Helper()
+		id, _ := key.KeyID()
+		if save.Encryption == nil || save.Encryption.KeyID != id || save.Encryption.Scheme != lantern.SaveScheme {
+			t.Fatalf("encryption %+v", save.Encryption)
+		}
+		if save.Size != lantern.EncryptedSize(int64(len(archive))) {
+			t.Errorf("the server keeps %d bytes", save.Size)
+		}
+		r, err := c.OpenEncryptedSave(ctx, key, save)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := io.ReadAll(r)
+		r.Close()
+		if err != nil || !bytes.Equal(got, archive) {
+			t.Errorf("the archive came back different: %v", err)
+		}
+		if _, err := c.OpenEncryptedSave(ctx, other, save); !errors.Is(err, lantern.ErrDecryption) {
+			t.Errorf("another key: %v", err)
+		}
+		dest := filepath.Join(t.TempDir(), "save.zip")
+		if err := c.DownloadEncryptedSave(ctx, key, save, dest); err != nil {
+			t.Fatal(err)
+		}
+		if disk, _ := os.ReadFile(dest); !bytes.Equal(disk, archive) {
+			t.Error("the saved archive differs")
+		}
+		c.DeleteSave(ctx, save)
+	}
+	t.Run("one request", func(t *testing.T) {
+		archive := zipOf(t, 70000)
+		save, err := c.UploadEncryptedSave(ctx, title, meta, key, archive)
+		if err != nil {
+			t.Fatal(err)
+		}
+		check(t, save, archive)
+	})
+	t.Run("resumable, cut and taken up again", func(t *testing.T) {
+		archive := zipOf(t, 3<<20)
+		// A reader that fails once partway, as a connection that is lost.
+		failing := &failingAt{data: archive, limit: 1 << 20, needArm: true}
+		_, err := c.UploadEncryptedSaveResumable(ctx, title, meta, key, failing, int64(len(archive)), func(done, total int64) { failing.arm() })
+		var stopped *client.UploadError
+		if !errors.As(err, &stopped) || stopped.Backup == nil {
+			t.Fatalf("expected an upload that stopped: %v", err)
+		}
+		defer stopped.Backup.Wipe()
+		again := stopped.Backup.EncryptedReaderAt(bytes.NewReader(archive), int64(len(archive)))
+		save, err := c.ContinueSaveUpload(ctx, stopped.Upload, again, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		check(t, save, archive)
 	})
 }
