@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Writes and checks sdk.json: what the SDK says about itself, for lantern.boreale.dev's SDK page.
+"""Writes and checks sdk.json: what the SDK says about itself, for the SDK's website (site/README.md).
 
     python3 tools/site_data.py            # prints the document
     python3 tools/site_data.py --write    # writes sdk.json at the root

@@ -1,0 +1,54 @@
+# The Lantern SDK's website (site/README.md) on GitHub Pages, its source
+# GitHub Actions (Settings › Pages): one page in the fifteen languages of
+# Boréale's sites, built from sdk.json. Published at each push to main
+# touching it, and on demand; a pull request only builds and checks it.
+#
+# The checkout, the layout check and the Pages artifact are boreale-site's
+# reusable workflow (library/boreale-site's README, "Reusable workflow");
+# the deployment is this repository's.
+name: site
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ "site/**", "sdk.json", "tools/build_site.py", "tools/check_site.py", "library/boreale-site", ".gitmodules", ".github/workflows/site.yml" ]
+  pull_request:
+    paths: [ "site/**", "sdk.json", "tools/build_site.py", "tools/check_site.py", "library/boreale-site", ".gitmodules", ".github/workflows/site.yml" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    permissions:
+      contents: read
+      pages: read   # asked by the reusable workflow (the site's address)
+    uses: JigSawFr/boreale-site/.github/workflows/site.yml@5d96c0446ad6bbfce20b977f699b6884643d055a # v1.1.0
+    with:
+      build: python3 tools/build_site.py build
+      # Their links, catalogs and Content-Security-Policy.
+      check: python3 tools/check_site.py build
+      pages_artifact: ${{ github.event_name != 'pull_request' }}
+
+  deploy:
+    needs: build
+    if: needs.build.outputs.pages_artifact_id != ''
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
