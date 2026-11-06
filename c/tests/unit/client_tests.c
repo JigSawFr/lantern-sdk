@@ -150,6 +150,12 @@ static void library_calls(void)
     /* A NULL query: the defaults */
     REQUIRE_CALL(lantern_client_apps(f.client, NULL, &page, &error), LANTERN_OK, &error);
     lantern_apps_page_free(page);
+    /* Since version 7: the format filter (§ 6.2) */
+    lantern_apps_query by_format = LANTERN_INIT(lantern_apps_query);
+    by_format.format             = "nsz";
+    REQUIRE_CALL(lantern_client_apps(f.client, &by_format, &page, &error), LANTERN_OK, &error);
+    CHECK(strstr(s->last_url, "apps?format=nsz") != NULL);
+    lantern_apps_page_free(page);
 
     const lantern_installed_app installed[] = { { "0100ABCD00010000", 0 } };
     const char* const want[]                = { "update", "dlc" };
@@ -164,6 +170,25 @@ static void library_calls(void)
         strstr(s->last_body, "\"installed\":[{\"app_id\":\"0100ABCD00010000\",\"version_code\":0}]") != NULL);
     CHECK(strstr(s->last_body, "\"want\":[\"update\",\"dlc\"]") != NULL);
     lantern_apps_page_free(page);
+    /* Since version 7: formats and satisfies (§ 6.3), absent, empty or listed */
+    CHECK(strstr(s->last_body, "formats") == NULL && strstr(s->last_body, "satisfies") == NULL);
+    const char* const formats[]   = { "nsp", "nsz" };
+    const char* const satisfies[] = { "fs-compression" };
+    missing.formats               = formats;
+    missing.formats_count         = 0;
+    missing.satisfies             = satisfies;
+    missing.satisfies_count       = 1;
+    REQUIRE_CALL(lantern_client_missing(f.client, &missing, NULL, NULL, &page, &error), LANTERN_OK, &error);
+    CHECK(strstr(s->last_body, "\"formats\":[]") != NULL);
+    CHECK(strstr(s->last_body, "\"satisfies\":[\"fs-compression\"]") != NULL);
+    lantern_apps_page_free(page);
+    missing.formats_count = 2;
+    REQUIRE_CALL(lantern_client_missing(f.client, &missing, NULL, NULL, &page, &error), LANTERN_OK, &error);
+    CHECK(strstr(s->last_body, "\"formats\":[\"nsp\",\"nsz\"]") != NULL);
+    lantern_apps_page_free(page);
+    missing.formats_count = 1; /* a NULL array with items is a mistake */
+    missing.formats       = NULL;
+    CHECK_STATUS(lantern_client_missing(f.client, &missing, NULL, NULL, &page, &error), LANTERN_ERROR_USAGE);
 
     lantern_changes* changes = NULL;
     REQUIRE_CALL(lantern_client_changes(f.client, "s_20261030T1015", &changes, &error), LANTERN_OK, &error);

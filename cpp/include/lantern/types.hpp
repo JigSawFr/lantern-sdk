@@ -2722,29 +2722,27 @@ struct MissingRequest
 
     Vector<InstalledApp> installed;
     Vector<String> want;
-    Vector<String> formats;
-    Vector<String> satisfies;
+    std::optional<Vector<String>> formats;
+    std::optional<Vector<String>> satisfies;
 
     MissingRequest() : MissingRequest(allocator_type{}) {}
     explicit MissingRequest(const allocator_type& allocator)
         : installed(allocator),
-          want(allocator),
-          formats(allocator),
-          satisfies(allocator)
+          want(allocator)
     {
     }
     MissingRequest(const MissingRequest& other, const allocator_type& allocator)
         : installed(other.installed, allocator),
           want(other.want, allocator),
-          formats(other.formats, allocator),
-          satisfies(other.satisfies, allocator)
+          formats(with_allocator(other.formats, allocator)),
+          satisfies(with_allocator(other.satisfies, allocator))
     {
     }
     MissingRequest(MissingRequest&& other, const allocator_type& allocator)
         : installed(std::move(other.installed), allocator),
           want(std::move(other.want), allocator),
-          formats(std::move(other.formats), allocator),
-          satisfies(std::move(other.satisfies), allocator)
+          formats(with_allocator(std::move(other.formats), allocator)),
+          satisfies(with_allocator(std::move(other.satisfies), allocator))
     {
     }
     MissingRequest(const MissingRequest&)            = default;

@@ -366,6 +366,58 @@ def main():
         lines.append(f"    {c_string(r)},")
     lines.append("};")
     lines.append("")
+    # Draft 0.9: an app's format, requires and includes (app-requires.json)
+    requires = json.loads((vectors / "app-requires.json").read_text(encoding="utf-8"))
+
+    def page(apps):
+        """An apps page of the vector's apps, with the sha256 and file that the vectors leave out."""
+        zero = "0" * 64
+        items = [dict(app, sha256=zero, file="v1/blobs/sha256/" + zero) for app in apps]
+        return json.dumps({"schema": 1, "items": items, "total": len(items), "next": None}, separators=(",", ":"))
+
+    def words(values):
+        return " ".join(values)
+
+    lines.append("typedef struct install_case")
+    lines.append("{")
+    lines.append("    const char* name;")
+    lines.append("    const char* app; /* an apps page of the one app */")
+    lines.append("    const char* formats; /* words, space-separated */")
+    lines.append("    const char* satisfies;")
+    lines.append("    const char* installed; /* an apps page */")
+    lines.append("    bool install;")
+    lines.append("    size_t reasons;")
+    lines.append("} install_case;")
+    lines.append("static const install_case install_cases[] = {")
+    for case in requires["install"]:
+        lines.append(f"    {{ {c_string(case['name'])}, {c_string(page([case['app']]))}, "
+                     f"{c_string(words(case['formats']))}, {c_string(words(case['satisfies']))}, "
+                     f"{c_string(page(case['installed']))}, {'true' if case['decision'] == 'install' else 'false'}, "
+                     f"{case['reasons']}U }},")
+    lines.append("};")
+    lines.append("static const char* const variants_page = " + c_string(page(requires["variants"]["apps"])) + ";")
+    lines.append("static const char* const variants_preferred = " + c_string(requires["variants"]["preferred"]) + ";")
+    lines.append("static const char* const missing_library_page = " + c_string(page(requires["library"])) + ";")
+    lines.append("typedef struct missing_vector")
+    lines.append("{")
+    lines.append("    const char* name;")
+    lines.append("    const char* installed; /* \"app_id:version_code\" words */")
+    lines.append("    const char* want; /* words */")
+    lines.append("    bool has_formats;")
+    lines.append("    const char* formats; /* words */")
+    lines.append("    bool has_satisfies;")
+    lines.append("    const char* satisfies;")
+    lines.append("    const char* missing; /* the ids, as words */")
+    lines.append("} missing_vector;")
+    lines.append("static const missing_vector missing_vectors[] = {")
+    for case in requires["missing"]:
+        held = words(f"{i['app_id']}:{i['version_code']}" for i in case["installed"])
+        lines.append(f"    {{ {c_string(case['name'])}, {c_string(held)}, {c_string(words(case['want']))}, "
+                     f"{'true' if 'formats' in case else 'false'}, {c_string(words(case.get('formats', [])))}, "
+                     f"{'true' if 'satisfies' in case else 'false'}, {c_string(words(case.get('satisfies', [])))}, "
+                     f"{c_string(words(case['missing']))} }},")
+    lines.append("};")
+    lines.append("")
     lines.append("#endif")
     lines.append("")
     Path(args.out).write_text("\n".join(lines), encoding="utf-8")

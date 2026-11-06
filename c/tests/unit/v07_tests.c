@@ -210,7 +210,7 @@ static void setup_close(setup* s)
 
 static void deltas_are_a_family(void)
 {
-    CHECK(LANTERN_C_API_VERSION == 6);
+    CHECK(LANTERN_C_API_VERSION >= 6);
     CHECK(LANTERN_FAMILY_DELTAS == 15);
     setup s;
     OPEN(s);

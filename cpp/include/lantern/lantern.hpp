@@ -35,6 +35,7 @@
 #include <lantern/transport.hpp>
 #include <lantern/types.hpp>
 #include <lantern/url.hpp>
+#include <lantern/variants.hpp>
 
 namespace lantern
 {

@@ -222,6 +222,7 @@ struct AppsQuery
     std::string_view type;
     std::string_view title_id;
     std::string_view q;
+    std::string_view format; // § 6.2: keeps the apps of one format; an unknown one gives an empty list
     std::string_view sort; // "name", "added" or "release"
     std::optional<std::uint32_t> page_size;
     std::string_view cursor; // a page's `next`

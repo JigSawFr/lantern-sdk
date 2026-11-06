@@ -346,9 +346,9 @@ LANTERN_API bool lantern_installed_value_get_app(
 {
     if (installed == nullptr || out == nullptr || index >= as_installed(installed)->apps.size())
         return false;
-    const lantern::InstalledApp& app = as_installed(installed)->apps[index];
-    out->app_id                      = app.app_id.c_str();
-    out->version_code                = app.version_code;
+    const lantern::AppInclude& app = as_installed(installed)->apps[index];
+    out->app_id                    = app.app_id.c_str();
+    out->version_code              = app.version_code;
     return true;
 }
 

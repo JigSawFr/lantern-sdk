@@ -81,6 +81,7 @@ add_library(lantern
     src/pinning.cpp
     src/profiles.cpp
     src/requires.cpp
+    src/variants.cpp
     src/sha256.cpp
     src/sharing.cpp
     src/static_library.cpp

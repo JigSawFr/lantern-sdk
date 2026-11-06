@@ -816,6 +816,7 @@ Read<AppsPage> Client::apps(const AppsQuery& query)
     add_query(*url, first, "type", query.type);
     add_query(*url, first, "title_id", query.title_id);
     add_query(*url, first, "q", query.q);
+    add_query(*url, first, "format", query.format);
     add_query(*url, first, "sort", query.sort);
     add_query(*url, first, "page_size", query.page_size);
     add_query(*url, first, "cursor", query.cursor);

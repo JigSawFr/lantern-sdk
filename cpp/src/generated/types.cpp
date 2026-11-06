@@ -3081,12 +3081,12 @@ bool bind(BindContext& c, MissingRequest& out)
         }
         else if (key == "formats")
         {
-            if (!c.once(seen, 2, "MissingRequest.formats") || !c.strings(out.formats, 16, 4096, "MissingRequest.formats"))
+            if (!c.once(seen, 2, "MissingRequest.formats") || !(out.formats.emplace(c.allocator()), c.strings(*out.formats, 16, 4096, "MissingRequest.formats")))
                 return false;
         }
         else if (key == "satisfies")
         {
-            if (!c.once(seen, 3, "MissingRequest.satisfies") || !c.strings(out.satisfies, 16, 4096, "MissingRequest.satisfies"))
+            if (!c.once(seen, 3, "MissingRequest.satisfies") || !(out.satisfies.emplace(c.allocator()), c.strings(*out.satisfies, 16, 4096, "MissingRequest.satisfies")))
                 return false;
         }
         else if (!c.skip())
@@ -4158,21 +4158,21 @@ void write(json::Writer& w, const MissingRequest& value)
         w.string(item);
     }
     w.end_array();
-    if (!value.formats.empty())
+    if (value.formats)
     {
         w.key("formats");
         w.begin_array();
-        for (const auto& item : value.formats)
+        for (const auto& item : *value.formats)
         {
             w.string(item);
         }
         w.end_array();
     }
-    if (!value.satisfies.empty())
+    if (value.satisfies)
     {
         w.key("satisfies");
         w.begin_array();
-        for (const auto& item : value.satisfies)
+        for (const auto& item : *value.satisfies)
         {
             w.string(item);
         }

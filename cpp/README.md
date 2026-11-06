@@ -11,7 +11,9 @@ requests, invitations, the routes that write and the administration API,
 over TLS with the server's key pinned; events, grants with mirrors and
 peers, sync, end-to-end encrypted saves, static libraries, and, since
 draft 0.7, differential updates (a newer package put together from the
-chunks of an older one) and canonical JSON as RFC 8785 writes it. Of a
+chunks of an older one) and canonical JSON as RFC 8785 writes it, and, since
+draft 0.9, variants of one game and packages a device cannot use (`requires`,
+`includes`, the `format` filter, `formats` and `satisfies`). Of a
 server, only a peer's side for now; a server core is for later (see
 [Not there yet](#not-there-yet)); the C API is in [`../c/`](../c/README.md).
 
@@ -93,6 +95,20 @@ server, only a peer's side for now; a server core is for later (see
   for one at an address in § 21.3's order: the origin's
   `/.well-known/lantern` (a server's handshake, not a static library's),
   then `<address>/lantern.json`.
+- **Variants and packages a device cannot use** (§ 6.1 to § 6.3,
+  `variants.hpp`): an app's `requires` tokens and `includes`; the listing's
+  `format` filter (`AppsQuery::format`); `formats` and `satisfies` of what
+  is missing (`MissingRequest`, `std::optional` so that an empty array,
+  which leaves out every app, differs from none), applied by
+  `StaticLibrary::missing` as a server does, the versions an installed app
+  includes counted as installed (L-6.3-4). `install_decision()` says whether
+  a client installs an app (`Install::install`, or `unavailable` with
+  reasons: its format, a token it lacks, an update an installed app already
+  `included()`, L-6.1-3 to L-6.1-5), and `prefer_variant()` picks the
+  variant among those of one `app_id` and `version_code` (Annex B.15: the
+  fewest `requires`, the smallest `size`, the smaller `id`). The unit tests
+  pass `vectors/app-requires.json`; the integration tests list the
+  reference server's `[LZ4]` variants.
 - **Discovery** (§ 4.1): the datagram to UDP 47115, the replies read
   bounded and with the `schema` rule, each server once, through a
   `UdpSocket` the app gives (`adapters/posix` has one); with `peers`, the
