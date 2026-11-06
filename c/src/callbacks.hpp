@@ -22,6 +22,7 @@
 #include <lantern/homebrew.hpp>
 #include <lantern/http_signature.hpp>
 #include <lantern/pinning.hpp>
+#include <lantern/static_library.hpp>
 #include <lantern/tls.hpp>
 #include <lantern/transport.hpp>
 
@@ -312,3 +313,10 @@ lantern_upload_source* give_source(Resource* resource, Impl* impl, lantern::Encr
 }
 
 } // namespace lantern_c
+
+// A static library, and the resource it was opened with, which its documents use
+struct lantern_static_library
+{
+    lantern_c::Resource* memory {}; // the box's, which holds its reference
+    lantern::StaticLibrary library;
+};

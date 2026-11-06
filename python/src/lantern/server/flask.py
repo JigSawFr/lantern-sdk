@@ -21,7 +21,7 @@ from lantern.http import Headers
 from lantern.server.app import LanternApp
 from lantern.server.http import BODY_LIMIT, ProblemError, ServerRequest, ServerResponse, problem_response
 
-METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]
+METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 _WITH_BODY = ("POST", "PUT", "PATCH")
 
 

@@ -131,7 +131,8 @@ static void codes_and_families(void)
     CHECK(lantern_client_offers(s.client, LANTERN_FAMILY_PEERS) == 1);
     CHECK(lantern_client_offers(s.client, LANTERN_FAMILY_SYNC) == 1);
     CHECK(lantern_client_offers(s.client, LANTERN_FAMILY_ENCRYPTED_SAVES) == 1);
-    CHECK(lantern_client_offers(s.client, 15) == 0);
+    CHECK(lantern_client_offers(s.client, LANTERN_FAMILY_DELTAS) == 1);
+    CHECK(lantern_client_offers(s.client, 16) == 0);
     uint64_t heartbeat = 0;
     CHECK(lantern_handshake_limits_get_heartbeat(lantern_handshake_get_limits(s.shake), &heartbeat)
         && heartbeat == 15);
@@ -510,7 +511,7 @@ static void sync_merge_of_the_vectors(void)
 {
     int64_t now = 0;
     REQUIRE(lantern_parse_sync_time(merge_server_time, &now));
-    REQUIRE(COUNT(merge_cases) == 10);
+    REQUIRE(COUNT(merge_cases) == 13);
     for (size_t i = 0; i < COUNT(merge_cases); ++i)
     {
         const merge_case* v = &merge_cases[i];

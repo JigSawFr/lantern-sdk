@@ -39,13 +39,6 @@ class CallbackStaticFiles final : public lantern::StaticFiles,
 
 } // namespace
 
-// A library, and the resource it was opened with, which its documents use
-struct lantern_static_library
-{
-    Resource* memory; // the box's, which holds its reference
-    lantern::StaticLibrary library;
-};
-
 namespace
 {
 

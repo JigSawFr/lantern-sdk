@@ -6,20 +6,21 @@ servers people run at home for their own games
 ([lantern.boreale.dev](https://lantern.boreale.dev/?utm_source=github&utm_medium=readme)):
 a client for the browser and Node, a toolkit to add Lantern to a Node
 server, and the checks both sides share. It follows the specification's
-**draft 0.5**, as the [Python library](../python/README.md) does, whose
+**draft 0.7**, as the [Python library](../python/README.md) does, whose
 scope and names it mirrors.
 
-**Status: early, complete for draft 0.5's client.** The client speaks every
+**Status: early, complete for draft 0.7's client.** The client speaks every
 route of the protocol: pairing with a device key, requests signed by it
 (RFC 9421), the writes, LAN discovery (Node), events (a stream over fetch
 and long polls), grants, mirrors and peers, sync, end-to-end encrypted
-saves and static libraries. The server toolkit pairs devices, checks signed
+saves, static libraries and differential updates (a newer version put
+together from the bytes of an older one, § 22). The server toolkit pairs devices, checks signed
 requests, and serves the read routes, sections, save backups (encrypted ones
 kept as sent), cheat writes, requests, invitations, rating caps, the
 administration API (deleting accounts included), events, grants and sync,
-with a peer server and a static library generator beside it; it reaches
-every level of draft 0.5, **Lantern Core +titles +homebrew +saves +cheats
-+requests +admin +events +peers +sync +encrypted_saves**, in the
+chunk indexes and the answers a browser's page needs (CORS), with a peer server and a static library generator beside it; it reaches
+every level of draft 0.7, **Lantern Core +titles +homebrew +saves +cheats
++requests +admin +events +peers +sync +encrypted_saves +deltas**, in the
 specification's conformance suite, through `node:http` and through web
 Requests, and its static libraries reach **Lantern Static**. See
 [What is not there yet](#what-is-not-there-yet). Nothing is published on npm
@@ -270,6 +271,45 @@ await lib.downloadApp(missing[0], sink); // checked by its size and SHA-256
   folder is never read outside itself (no link out).
 - Over HTTP, § 2 holds: HTTPS, plain HTTP on loopback only.
 
+### Differential updates
+
+A newer version of a package holds much of the version a device has
+(SPEC.md § 22). The `chunks` module cuts a file into chunks by
+`lantern-cdc-1` (a gear hash over 64 bits kept as two halves of 32, so it
+runs in a browser, and quickly: 64 MiB in under a second), reads and checks a
+chunk index, and puts a file together from seeds (bytes the caller holds) and
+ranges:
+
+```ts
+const sink = new MemorySink();
+await client.downloadWithSeeds(newer, sink, [olderBytes], {
+  onDelta: (r) => console.log(`read ${r.read} of ${r.size} bytes`),
+});
+```
+
+The index (`client.chunkIndex(app)`) is checked before it is used (its bytes
+are the size and SHA-256 `chunks` gives, a schema and a chunker this library
+reads, the file's own `sha256` and `size`, chunks of the right sizes); each
+chunk is checked by its SHA-256 wherever it comes from, then the whole file,
+before the sink commits; the ranges come from peers, mirrors and the server
+in the order of `downloadFile()`, a source that does not honour a range or
+gives more or less than it was asked is passed by; and on any failure, or
+when no chunk is found in the seeds, the file is read whole, as without the
+family. `StaticLibrary.downloadWithSeeds()` does the same over a static
+library whose source gives ranges (`HttpStaticSource`, `FileStaticSource`).
+The pieces are public in `chunks`: `cut`, `chunkSizeFor`, `chunkIndex`,
+`chunksRef`, `readChunkIndex`, `deltaPlan`, `rangesOf`, `assemble`,
+`assembleInto`.
+
+### In a browser
+
+A client in a browser (Annex A.7) names the platform in the query, as the
+header would need a preflight before every read: `new LanternClient(url, {
+platform: "switch", platformInQuery: true })`. The server must answer CORS
+(below); `web` is no platform a server lists. A resumable upload that
+resumes asks the upload's `Lantern-Chunk-Size` with `HEAD`
+(`client.uploadOffset()` gives it as its third value).
+
 ### On the LAN
 
 ```ts
@@ -354,11 +394,12 @@ the device's free space (§ 6.3).
 - `signatures`: device keys, and requests signed and checked as § 5.4 says;
   `spkiSha256()`: a certificate's key fingerprint (§ 5.3); `ratings`: rating
   caps (§ 5.6); `peers`: grants and mirrors (§ 19); `sync`: the merge rule
-  (§ 20.4); `e2e` and `chacha`: encrypted saves (§ 9.4); `staticLibrary`:
+  (§ 20.4); `canonicalJson()`: RFC 8785's canonical JSON (§ 2.3), which it
+  compares by; `chunks`: differential updates (§ 22, below); `e2e` and `chacha`: encrypted saves (§ 9.4); `staticLibrary`:
   the layout (§ 21.1). The specification's vectors (`signatures`,
   `ed25519-refused`, `spki`, `rating-caps`, `paths`, `homebrew-signatures`,
   `version-codes`, `requires`, `encrypted-saves`, `grants`, `sync-merge`,
-  `static-layout`) pass byte for byte.
+  `canonical-json`, `chunks`, `static-layout`) pass byte for byte.
 - Stores (`lantern-protocol/node`): `FileServerStore` and `FileKeyPins` keep
   their files by the `schema` rule (a newer file is never written over,
   unknown keys are kept, a file is written whole or not at all).
@@ -498,6 +539,34 @@ requests a second per address (429 beyond), problem+json without
 `WWW-Authenticate`; `peerFiles()` finds which of a folder's files are its
 server's, and `discovery()` answers the datagrams that ask for peers.
 
+### Differential updates and browsers, served
+
+`MemoryLibrary` cuts every app and package of 128 KiB to 64 MiB into chunks
+when it is added (`new MemoryLibrary({ deltas: { min, max } })`, or `deltas:
+false` for none), once per SHA-256, and gives it `chunks`; the toolkit serves
+the index at `GET <base>/v1/chunks/sha256/{hex}` (scope `library`, the
+caller's platform and rating cap as for the file, `404` otherwise) and offers
+`features.deltas`. A library of your own implements `chunks(sha256)` (the
+index's canonical bytes) and puts `chunks` in its documents
+(`chunksRef()`, `chunkIndex()`), and lists `deltas` among its `families`.
+
+CORS is off until you name the origins whose pages may read the server:
+
+```ts
+new LanternApp(library, { uid, name, corsOrigins: ["https://app.example.org"] }); // or ["*"]
+```
+
+An allowed origin gets `Access-Control-Allow-Origin` (with `Vary: Origin`, or
+`*`) and `Access-Control-Expose-Headers` on every answer, errors included;
+its preflights (`OPTIONS` with `Access-Control-Request-Method`, on any route,
+without a token) get `204` with the methods, the headers asked that Lantern
+gives a client (`Authorization` named), `Access-Control-Max-Age: 600` and,
+when asked, `Access-Control-Allow-Private-Network`. Any other origin gets the
+answer it would get without one, and no header of CORS. The toolkit never
+sends `Access-Control-Allow-Credentials`, sets a cookie, or reads a
+credential from one. An adapter of your own calls `app.withCors(request, response)` for the
+answers it makes itself (the built-in ones do).
+
 ### Static libraries, written
 
 ```sh
@@ -509,7 +578,9 @@ It reads the server as a client does (what the token may read is what is
 written), checks every file by its SHA-256, and writes `lantern.json` and
 `v1/` as § 21.1 lays them out, replacing those of an earlier export and
 nothing else; the handshake last, so that a reader never sees it before its
-pages. In code: `writeStatic(await libraryInput(library, { uid, name }), out)`
+pages; the chunk index of each file that has one goes to
+`v1/chunks/sha256/<hex>.json` as the server keeps it, and `features.deltas`
+is then 1. In code: `writeStatic(await libraryInput(library, { uid, name }), out)`
 from a toolkit Library, or `clientInput(client)`. An image is kept only
 when it is external or below the root.
 
@@ -542,6 +613,11 @@ and `GenerationChanged` (sync). All derive from `LanternError`.
 - DNS-SD on the client over IPv6 (the question goes to `224.0.0.251`), and in
   a browser, which has no UDP.
 - Pinning in a browser: impossible (above).
+- Images of a library's folder served on the server's own origin (SPEC.md
+  § 7.1's `media` route): a title's `icon` and the like stay external.
+- A download that keeps the chunks it checked to resume with after a lost
+  connection (SPEC.md § 22.3 leaves it to the client): a delta download that
+  fails reads the whole file.
 - Drawing the QR code of `verifyComplete` or of a save key: the client gives
   their text.
 - Installing: the library says what to write and where, and checks it; it
@@ -569,11 +645,12 @@ its command line; `cryptography` for its TLS ones; `LANTERN_HOSTILE` names
 another checkout's script), against the specification's reference server
 (`test/fixtures/reference.py`: plain HTTP, and TLS with a pinned self-signed
 key; `--v05` adds draft 0.5: events, sync, encrypted saves, the reference
-peer `spec/server/peer.py`, its static export), and the conformance suite
+peer `spec/server/peer.py`, its static export; `reference-v07` reads its
+chunk indexes and updates a file from its older version), and the conformance suite
 against the demo server (`test/demo.ts`, through `node:http` and
-`fetchHandler`, with a PeerServer, and `lantern-static`'s output through
-`--static`; the suite's `spec/tools/requirements.txt`, and Python 3.14 to
-read the zstd the demo sends). `npm run test:browser` builds `dist/` and
+`fetchHandler`, with a PeerServer, `--origin` for the answers to a page, and
+`lantern-static`'s output through `--static`; the suite's
+`spec/tools/requirements.txt`). `npm run test:browser` builds `dist/` and
 runs it in Chromium (Playwright; `PLAYWRIGHT_CHROMIUM` names a Chromium of
 your own): reading, pairing, signing, an event stream and decryption.
 Examples and tests use made-up games and names.

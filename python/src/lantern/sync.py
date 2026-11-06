@@ -8,20 +8,21 @@ consent a client asks for before anything leaves the console.
     kept = merge(have, sent, now=server_time, skew=300)       # the rule of § 20.4, item by item
 
 The merge rule (§ 20.4): of two items, the later `updated` wins; on the same
-time, a deletion wins; between two values, the one whose canonical JSON (keys
-sorted, no space, non-ASCII as it is, UTF-8) is the greater string of bytes.
+time, a deletion wins; between two values, the one whose canonical JSON (RFC 8785,
+SPEC.md § 2.3) is the greater string of bytes; two values of the same canonical JSON are the same, and the
+server keeps its own.
 An `updated` more than `auth.skew` seconds ahead of the server's clock is the
 server's time (L-20.4-2). Test vectors: vectors/sync-merge.json.
 """
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from lantern._base import JSONValue, LanternError
+from lantern.canonical import canonical as _canonical
 
 #: The collections of this version (SPEC.md § 20.2); a later one may add others, which a reader skips.
 COLLECTIONS = ("wishes", "installed")
@@ -79,8 +80,9 @@ def server_updated(text: object, now: datetime, skew: int) -> str | None:
 
 
 def canonical(value: JSONValue) -> bytes:
-    """A value's canonical JSON (SPEC.md § 20.4): keys sorted, no space, non-ASCII as it is, in UTF-8."""
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    """A value's canonical JSON (SPEC.md § 2.3, § 20.4): RFC 8785's, numbers as ECMAScript writes them, so
+    that `1.0` and `1` are the same value (lantern.canonical)."""
+    return _canonical(value)
 
 
 @dataclass(frozen=True)

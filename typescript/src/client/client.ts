@@ -1,5 +1,5 @@
 /**
- * The client of one Lantern server: every route of draft 0.6, in a browser and
+ * The client of one Lantern server: every route of draft 0.7, in a browser and
  * in Node, over a Transport (fetch() by default).
  *
  *     const client = new LanternClient("https://shelf.example.org/", { platform: "switch", userAgent: "MyShelf/1.0" });
@@ -14,7 +14,8 @@
 
 import { DocumentError, LanternError, SCHEMA } from "../base.ts";
 import { utf8Length } from "../bytes.ts";
-import { contentDigest } from "../digest.ts";
+import * as chunks from "../chunks.ts";
+import { contentDigest, digestSha256 } from "../digest.ts";
 import { schemaOf } from "../documents.ts";
 import { type EncryptedBackup, encryptionHeader } from "../e2e.ts";
 import {
@@ -24,6 +25,7 @@ import {
   InsecureTransport,
   IntegrityError,
   NewerSchema,
+  ProblemError,
   problemError,
   SignatureExpired,
   SignatureReplayed,
@@ -45,6 +47,7 @@ import type {
   Changes,
   CheatSet,
   CheatSets,
+  ChunksRef,
   Encryption,
   Grant,
   Handshake,
@@ -87,6 +90,7 @@ import {
   WRITE_LIMIT,
 } from "../sync.ts";
 import { BUILD_ID, CORE_ID, FAMILIES, HOMEBREW_ID, isPlatform } from "../vocabulary.ts";
+import { type DeltaReport, deltaDownload } from "./delta.ts";
 import { type DownloadSink, MemorySink, type UploadSource, Verifier } from "./download.ts";
 import { EventStream, type EventStreamOptions } from "./events.ts";
 import { checkPairingCode, invitationLink, Pairing } from "./pairing.ts";
@@ -100,6 +104,7 @@ import {
   readBody,
   type Transport,
   type TransportRequest,
+  type TransportResponse,
 } from "./transport.ts";
 
 export const VERSION = "0.5.0"; // x-release-please-version (the SDK's one version: RELEASING.md)
@@ -126,6 +131,11 @@ export interface ClientOptions {
   userAgent?: string;
   /** Sent as Lantern-Platform on every call (SPEC.md § 4.3). */
   platform?: string;
+  /**
+   * Name the platform with `?platform=` on the server's routes instead of the Lantern-Platform header, as a client
+   * in a browser does (Annex A.7, L-4.3-5): the header would need a preflight before every read (SPEC.md § 2.5).
+   */
+  platformInQuery?: boolean;
   /** `Authorization: Bearer`, sent to the server's origin only. */
   token?: string;
   /** The device key the token is bound to: every request is then signed (SPEC.md § 5.4). */
@@ -198,6 +208,10 @@ export interface HomebrewOptions extends ListOptions {
   genre?: string;
 }
 
+/** A file that may carry a chunk index (an app, a homebrew package). */
+type DeltaFileArg = { sha256: string; size: number; chunks?: ChunksRef | undefined };
+type RangeReader = { read: chunks.ReadRange; close(): Promise<void> };
+
 export interface DownloadOptions {
   sha256: string;
   size: number;
@@ -225,6 +239,13 @@ export interface SourceOptions {
   peers?: readonly Peer[];
   /** Told where the file came from, and why each source before it was passed by. */
   onSource?: (source: "peer" | "mirror" | "server", url: string, passed: { url: string; error: unknown }[]) => void;
+}
+
+/** Differential updates (SPEC.md § 22): the seeds' use, and what it saved. */
+export interface DeltaOptions extends SourceOptions {
+  progress?: (done: number, total: number) => void;
+  /** Told what a delta download saved: bytes reused, bytes read, ranges asked for. Not called when the file was read whole. */
+  onDelta?: (report: DeltaReport) => void;
 }
 
 export interface UploadOptions extends SaveOptions {
@@ -300,6 +321,8 @@ export function whatFits(apps: Iterable<App>, free: number): [App[], App[]] {
 
 export class LanternClient {
   readonly root: string;
+  /** Whether the platform goes in the query (Annex A.7), not in a header. */
+  readonly platformInQuery: boolean;
   readonly userAgent: string;
   readonly transport: Transport;
   readonly timeout: number;
@@ -344,6 +367,7 @@ export class LanternClient {
     if (options.platform !== undefined && !isPlatform(options.platform))
       throw new RangeError(`${options.platform} is not a platform's name`);
     this.platform = options.platform;
+    this.platformInQuery = options.platformInQuery ?? false;
     this.acceptLanguage = options.acceptLanguage;
     this.base = options.base !== undefined ? LanternClient.checkBase(options.base) : undefined;
     this.timeout = options.timeout ?? 30;
@@ -483,14 +507,18 @@ export class LanternClient {
       "Accept-Schema": ACCEPT_SCHEMA,
     });
     if (this.acceptLanguage) h.set("Accept-Language", this.acceptLanguage);
-    if (this.platform) h.set(PLATFORM_HEADER, this.platform);
+    if (this.platform && !this.platformInQuery) h.set(PLATFORM_HEADER, this.platform);
+    const target =
+      this.platform && this.platformInQuery && this.#namesPlatform(url)
+        ? `${url}${url.includes("?") ? "&" : "?"}platform=${quote(this.platform)}`
+        : url;
     let raw = options.raw;
     if (options.body !== undefined) {
       raw = new TextEncoder().encode(JSON.stringify(options.body));
       h.set("Content-Type", JSON_TYPE);
     }
     for (const [k, v] of Object.entries(options.headers ?? {})) h.set(k, v);
-    const request: TransportRequest = { method, url, headers: h, body: raw };
+    const request: TransportRequest = { method, url: target, headers: h, body: raw };
     if (options.anonymous || options.signer !== undefined) {
       const pipeline = new Pipeline(
         this.pipeline.server,
@@ -500,6 +528,13 @@ export class LanternClient {
       return pipeline.prepare(request);
     }
     return this.pipeline.prepare(request);
+  }
+
+  /** Whether `url` is a route of this server that takes `?platform=` and does not have it yet (not a file). */
+  #namesPlatform(url: string): boolean {
+    if (!url.startsWith(`${this.root}${this.base ?? ""}/v1/`) || url.includes("/files/")) return false;
+    const query = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
+    return !query.split("&").some((p) => p.startsWith("platform="));
   }
 
   #note(what: string, headers: Headers): void {
@@ -1134,8 +1169,10 @@ export class LanternClient {
       offset = upload.offset;
     } else {
       address = options.resume;
-      chunkSize = 1 << 20;
-      [offset] = await this.uploadOffset(address);
+      let kept: number | undefined;
+      [offset, , kept] = await this.uploadOffset(address);
+      // The upload's own chunk_size, which HEAD gives (L-9.3-3): chunks the server takes; 1 MiB for a server that does not say.
+      chunkSize = kept ?? 1 << 20;
     }
     if (chunkSize < 1) throw new UnexpectedResponse("upload: a chunk_size under 1");
     this.lastUpload = address;
@@ -1155,9 +1192,12 @@ export class LanternClient {
     }
   }
 
-  /** Where an upload stands: its Upload-Offset and Upload-Length (HEAD). */
-  uploadOffset(upload: string): Promise<[number, number | undefined]> {
-    return this.#send<[number, number | undefined]>({
+  /**
+   * Where an upload stands (HEAD, SPEC.md § 9.3): its Upload-Offset, its Upload-Length and its
+   * Lantern-Chunk-Size (the upload's `chunk_size`, L-9.3-3), the last two undefined when the server omits them.
+   */
+  uploadOffset(upload: string): Promise<[number, number | undefined, number | undefined]> {
+    return this.#send<[number, number | undefined, number | undefined]>({
       method: "HEAD",
       what: "upload state",
       url: this.onOrigin(upload, "upload"),
@@ -1165,7 +1205,12 @@ export class LanternClient {
       emptyStatuses: [200, 204],
       empty: (status, headers) => {
         const length = headers.get("Upload-Length")?.trim() ?? "";
-        return [uploadOffset(status, headers), /^\d{1,15}$/.test(length) ? Number(length) : undefined];
+        const chunk = headers.get("Lantern-Chunk-Size")?.trim() ?? "";
+        return [
+          uploadOffset(status, headers),
+          /^\d{1,15}$/.test(length) ? Number(length) : undefined,
+          /^\d{1,15}$/.test(chunk) && Number(chunk) >= 1 ? Number(chunk) : undefined,
+        ];
       },
     });
   }
@@ -1782,6 +1827,240 @@ export class LanternClient {
     const { peers: _p, mirrors: _m, onSource: _o, ...rest } = options;
     await this.download(file.file, sink, { ...rest, sha256: file.sha256, size: file.size });
     options.onSource?.("server", this.url(file.file), passed);
+  }
+
+  // Differential updates (SPEC.md § 22).
+
+  /**
+   * The bytes of a file's chunk index, read at `file.chunks.url` (a route of this server) and checked before
+   * anything else (SPEC.md § 22.3, L-22.3-1): their size and SHA-256 those `chunks` gives, a schema this library
+   * reads, a chunker it knows, the file's own sha256 and size, chunks of the right sizes. Undefined when the file
+   * carries none or the index cannot be used (the whole file is then read, L-22.3-4); LanternError for a server
+   * that fails.
+   */
+  async chunkIndexBytes(file: DeltaFileArg): Promise<Uint8Array | undefined> {
+    return (await this.#chunkIndex(file))?.raw;
+  }
+
+  /** A file's chunk index, checked (see chunkIndexBytes()); undefined when it has none or cannot be used. */
+  async chunkIndex(file: DeltaFileArg): Promise<chunks.ChunkList | undefined> {
+    return (await this.#chunkIndex(file))?.index;
+  }
+
+  async #chunkIndex(file: DeltaFileArg): Promise<{ raw: Uint8Array; index: chunks.ChunkList } | undefined> {
+    const ref = file.chunks;
+    if (ref === undefined) return undefined;
+    try {
+      const raw = await this.#readIndex(ref);
+      return { raw, index: chunks.readChunkIndex(raw, ref, file.sha256, file.size, { hash: this.hash }) };
+    } catch (e) {
+      if (e instanceof chunks.UnusableIndex || e instanceof NewerSchema) return undefined;
+      if (e instanceof ProblemError && e.status === 404) return undefined;
+      throw e;
+    }
+  }
+
+  async #readIndex(ref: ChunksRef): Promise<Uint8Array> {
+    const url = this.onOrigin(ref.url, "chunk index");
+    if (!Number.isInteger(ref.size) || ref.size < 0 || ref.size > chunks.INDEX_LIMIT)
+      throw new chunks.UnusableIndex(`an index of ${ref.size} bytes`);
+    const request = await this.prepare("GET", url, { headers: { Accept: JSON_TYPE } });
+    const response = await this.transport.send(request, { timeout: this.timeout });
+    this.lastSpki = response.spki;
+    try {
+      if (response.status !== 200) {
+        let body: Uint8Array = new Uint8Array();
+        try {
+          body = await readBody(response, ERROR_BODY, url);
+        } catch (e) {
+          if (!(e instanceof DocumentError)) throw e;
+        }
+        throw this.#error(url, response.status, response.headers, body);
+      }
+      // Never more than the document says it is (L-22.3-3): a longer answer is not the index.
+      return await readBody(response, ref.size, url);
+    } finally {
+      await response.cancel();
+    }
+  }
+
+  /** One range of a file from `send`'s source: a 206 whose Content-Range is that range, and exactly its bytes. */
+  async #fetchRange(
+    send: (request: TransportRequest) => Promise<TransportResponse>,
+    request: TransportRequest,
+    file: { sha256: string; size: number },
+    start: number,
+    end: number,
+  ): Promise<Uint8Array> {
+    const url = request.url;
+    request.headers.set("Range", `bytes=${start}-${end}`);
+    const response = await send(request);
+    try {
+      if (response.status !== 206) {
+        // A 200 means the source ignores ranges: its body is not read.
+        if (response.status === 200) throw new UnexpectedResponse(`${url}: the range was not honoured`, 200);
+        let body: Uint8Array = new Uint8Array();
+        try {
+          body = await readBody(response, ERROR_BODY, url);
+        } catch (e) {
+          if (!(e instanceof DocumentError)) throw e;
+        }
+        throw this.#error(url, response.status, response.headers, body);
+      }
+      const digest = digestSha256(response.headers.get("Repr-Digest"));
+      if (digest !== undefined && digest !== file.sha256)
+        throw new IntegrityError(`${url}: the source's Repr-Digest is ${digest}, the document says ${file.sha256}`);
+      const m = /^\s*bytes\s+(\d+)-(\d+)\/(\d+)\s*$/.exec(response.headers.get("Content-Range") ?? "");
+      if (m === null || Number(m[1]) !== start || Number(m[2]) !== end || Number(m[3]) !== file.size)
+        throw new UnexpectedResponse(
+          `${url}: Content-Range ${JSON.stringify(response.headers.get("Content-Range"))}, asked bytes ${start}-${end}/${file.size}`,
+          206,
+        );
+      const data = await readBody(response, end - start + 1, url);
+      if (data.length !== end - start + 1)
+        throw new IntegrityError(`${url}: ${data.length} bytes for the range ${start}-${end}`);
+      return data;
+    } finally {
+      await response.cancel();
+    }
+  }
+
+  /**
+   * A reader of ranges of `file` over its sources, in the order downloadFile() tries them: peers holding it
+   * (with a grant), its mirrors, then this server. A source that fails is passed by for the following ranges.
+   * `close()` closes the transports it opened.
+   */
+  async #rangeReader(
+    file: { file: string; sha256: string; size: number; mirrors?: readonly { url: string }[] | undefined },
+    options: SourceOptions,
+  ): Promise<RangeReader> {
+    type Source = { read: chunks.ReadRange; close?: () => Promise<void> };
+    const sources: Source[] = [];
+    const elsewhere = (url: string, verify: boolean, extra: Record<string, string> = {}): Source => {
+      const transport = this.#elsewhere({ verify });
+      return {
+        read: (start, end) =>
+          this.#fetchRange(
+            (r) => transport.send(r, { timeout: this.timeout }),
+            this.#elsewhereRequest("GET", url, extra),
+            file,
+            start,
+            end,
+          ),
+        close: async () => transport.close?.(),
+      };
+    };
+    if (options.peers !== undefined && options.peers.length > 0) {
+      const hello = this.hello ?? (await this.handshake());
+      const asked = options.peers.filter((p) => p.servers.includes(hello.uid)).slice(0, 2);
+      if (asked.length > 0) {
+        try {
+          const granted = (await this.grant(file.sha256)).grant;
+          for (const peer of asked)
+            sources.push(elsewhere(blobUrl(peer.url, file.sha256), false, { [GRANT_HEADER]: granted }));
+        } catch (e) {
+          if (!(e instanceof LanternError)) throw e; // no grant: the server serves the ranges
+        }
+      }
+    }
+    if (options.mirrors) for (const url of usableMirrors(file)) sources.push(elsewhere(url, true));
+    const server = this.url(file.file);
+    sources.push({
+      read: async (start, end) =>
+        this.#fetchRange(
+          async (r) => {
+            const response = await this.transport.send(r, { timeout: this.timeout });
+            this.lastSpki = response.spki;
+            return response;
+          },
+          await this.prepare("GET", server, { headers: { Accept: "*/*" } }),
+          file,
+          start,
+          end,
+        ),
+    });
+    let first = 0;
+    return {
+      read: async (start, end) => {
+        let failure: unknown;
+        for (let i = first; i < sources.length; i++) {
+          try {
+            return await (sources[i] as Source).read(start, end);
+          } catch (e) {
+            failure = e;
+            first = i + 1 > sources.length - 1 ? sources.length - 1 : i + 1; // the server is never passed by
+          }
+        }
+        throw failure;
+      },
+      close: async () => {
+        for (const s of sources) await s.close?.();
+      },
+    };
+  }
+
+  /**
+   * A file of the library into `sink` with the bytes the caller holds (its `seeds`: an older version, say), and
+   * only the rest read (SPEC.md § 22.3): the file's chunk index is read and checked, each chunk of it found in a
+   * seed is taken from there, the others are read as ranges from peers, mirrors and the server, each checked by
+   * its SHA-256, then the whole file by its own, before it is committed. Nothing more than the file's size is
+   * written nor more than each range asked for read. On any failure (no index, an index or a chunk that does not
+   * check, a source that cannot give ranges) or when no chunk is found in the seeds, the file is read whole by
+   * downloadFile(), as without the family (L-22.3-4). `onDelta` is told what a delta download saved.
+   */
+  async downloadWithSeeds(
+    file: {
+      file: string;
+      sha256: string;
+      size: number;
+      chunks?: ChunksRef | undefined;
+      mirrors?: readonly { url: string }[] | undefined;
+    },
+    sink: DownloadSink,
+    seeds: readonly Uint8Array[],
+    options: DeltaOptions = {},
+  ): Promise<void> {
+    const { onDelta, ...rest } = options;
+    if (file.chunks !== undefined && seeds.length > 0) {
+      let reader: RangeReader | undefined;
+      let report: DeltaReport | undefined;
+      try {
+        report = await deltaDownload({
+          file,
+          seeds,
+          sink,
+          hash: this.hash,
+          progress: options.progress,
+          readIndex: async (ref) => {
+            const hello = this.hello ?? (await this.handshake());
+            if (hello.features["deltas"] === 0) return undefined; // the server withdrew the family
+            return (await this.#chunkIndex({ ...file, chunks: ref }))?.raw;
+          },
+          readRange: async (start, end) => {
+            reader ??= await this.#rangeReader(file, rest);
+            return reader.read(start, end);
+          },
+        });
+      } finally {
+        await reader?.close();
+      }
+      if (report !== undefined) {
+        onDelta?.(report);
+        return;
+      }
+      await sink.reset();
+    }
+    await this.downloadFile(file, sink, rest);
+  }
+
+  /** An app's file with the bytes the caller holds (see downloadWithSeeds()). */
+  downloadAppWithSeeds(app: App, sink: DownloadSink, seeds: readonly Uint8Array[], options: DeltaOptions = {}) {
+    return this.downloadWithSeeds(app, sink, seeds, options);
+  }
+
+  /** A homebrew package's file with the bytes the caller holds (see downloadWithSeeds()). */
+  downloadPackageWithSeeds(p: Package, sink: DownloadSink, seeds: readonly Uint8Array[], options: DeltaOptions = {}) {
+    return this.downloadWithSeeds(p, sink, seeds, options);
   }
 
   // Sync (SPEC.md § 20).

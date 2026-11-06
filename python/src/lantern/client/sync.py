@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from pathlib import Path
-from typing import TypeVar
+from typing import BinaryIO, TypeVar
 from urllib.parse import quote
 
 from lantern import e2e
@@ -49,13 +49,17 @@ from lantern._generated.models import (
     UploadRequest,
 )
 from lantern._generated.models import Homebrew as HomebrewEntry
+from lantern.canonical import canonical
+from lantern.chunks import INDEX_LIMIT, Collector, Index, Piece, Refused, Seed, UnusableIndex, read_index
 from lantern.client.auth import DeviceSigner, Pairing, check_pairing_code, invitation_link
 from lantern.client.core import (
     ERROR_BODY,
     JSON_DOCUMENT,
+    RESUME_CHUNK,
     USER_AGENT,
     Call,
     ClientCore,
+    UploadState,
     chunked,
     events_of,
     item_of,
@@ -64,6 +68,7 @@ from lantern.client.core import (
     retry_signature,
     token_record,
 )
+from lantern.client.delta import Assembly, DeltaReport, NothingShared, check_range, range_headers
 from lantern.client.download import Verifier
 from lantern.client.stdlib import StdlibTransport
 from lantern.client.streams import EventStream
@@ -159,6 +164,8 @@ class LanternClient:
         self.timeout = timeout
         #: The address of the last upload left unfinished, to resume (upload_save(resume=…)).
         self.last_upload: str | None = None
+        #: What the last download_delta() did: a differential update, or why the whole file was read.
+        self.last_delta: DeltaReport | None = None
         #: The header of the last encrypted upload left unfinished, to resume it to the same bytes.
         self.last_header: bytes | None = None
         #: What the user agreed to sync with this server (SPEC.md § 20.1): no call of /v1/sync without it.
@@ -350,22 +357,12 @@ class LanternClient:
         self.core.check_grant(found, sha256, size)
         return found
 
-    def download_from(
-        self,
-        file: App | Package,
-        dest: str | Path,
-        *,
-        mirrors: bool = True,
-        peers: Sequence[FoundPeer] = (),
-        platform: str | None = None,
-        progress: Progress | None = None,
-    ) -> Path:
-        """An app's or a package's file, from its mirrors and from peers first, then from the server
-        (SPEC.md § 19): whatever gave the bytes, they are checked by the size and SHA-256 of the server's
-        document before they are kept (L-19.1-1), and a source that gave more than the size, or bytes
-        that fail the check, is left for the next (L-19.1-3). No token, signature or cookie goes to a
-        mirror or a peer; a peer gets a grant, asked for once (L-19.1-2). Plain HTTP only to a private
-        network's address (L-19.2-1, L-19.4-6); at most 2 peers are tried (L-19.5-2)."""
+    def _sources(
+        self, file: App | Package, mirrors: bool, peers: Sequence[FoundPeer], platform: str | None
+    ) -> list[tuple[str, Transport, dict[str, str]]]:
+        """The mirrors, then the peers (with a grant, asked for once), that hold the exact bytes of `file`
+        (SPEC.md § 19): at most 8 mirrors and 2 peers, plain HTTP only to a private network (L-19.2-1,
+        L-19.4-6, L-19.5-2)."""
         sources: list[tuple[str, Transport, dict[str, str]]] = []
         if mirrors:
             for m in (file.mirrors or [])[:8]:
@@ -384,7 +381,25 @@ class LanternClient:
                     url = peer.blob_url(file.sha256)
                     if plain_http_to(url):
                         sources.append((url, self.peer_transport, {"Lantern-Grant": grant.grant}))
-        for url, transport, headers in sources:
+        return sources
+
+    def download_from(
+        self,
+        file: App | Package,
+        dest: str | Path,
+        *,
+        mirrors: bool = True,
+        peers: Sequence[FoundPeer] = (),
+        platform: str | None = None,
+        progress: Progress | None = None,
+    ) -> Path:
+        """An app's or a package's file, from its mirrors and from peers first, then from the server
+        (SPEC.md § 19): whatever gave the bytes, they are checked by the size and SHA-256 of the server's
+        document before they are kept (L-19.1-1), and a source that gave more than the size, or bytes
+        that fail the check, is left for the next (L-19.1-3). No token, signature or cookie goes to a
+        mirror or a peer; a peer gets a grant, asked for once (L-19.1-2). Plain HTTP only to a private
+        network's address (L-19.2-1, L-19.4-6); at most 2 peers are tried (L-19.5-2)."""
+        for url, transport, headers in self._sources(file, mirrors, peers, platform):
             try:
                 return self._download_source(
                     url,
@@ -398,6 +413,187 @@ class LanternClient:
             except (IntegrityError, TransportError, UnexpectedResponse, DocumentError, ProblemError):
                 continue
         return self.download(file.file, dest, sha256=file.sha256, size=file.size, resume=False, progress=progress)
+
+    # Differential updates (SPEC.md § 22).
+
+    def chunk_index(self, file: App | Package) -> Index:
+        """The chunk index an app's or a package's `chunks` points at, read and checked before it is used
+        (L-22.3-1): its bytes of the size and SHA-256 `chunks` gives, of schema 1 and of this file, a chunker
+        this library knows, chunks within the limits. UnusableIndex otherwise (the whole file is then read)."""
+        ref = file.chunks
+        if ref is None:
+            raise UnusableIndex("the document gives no chunk index for this file")
+        if not 0 < ref.size <= INDEX_LIMIT:
+            raise UnusableIndex(f"a chunk index of {ref.size} bytes")
+        try:
+            raw = self.fetch(ref.url, sha256=ref.sha256, size=ref.size)
+        except IntegrityError as e:
+            raise UnusableIndex(str(e)) from None
+        return read_index(raw, sha256=file.sha256, size=file.size, ref=ref)
+
+    def chunk_index_of(self, sha256: str, size: int, *, platform: str | None = None) -> Index:
+        """The chunk index of the file of `sha256` and `size`, asked of the server by that SHA-256 alone
+        (GET <base>/v1/chunks/sha256/{hex}, SPEC.md § 22.1): NotFound when the server has none for this
+        caller; UnusableIndex when it fails the checks of read_index()."""
+        doc = self._send(self.core.chunk_index(sha256, platform))
+        return read_index(canonical(doc), sha256=sha256, size=size)
+
+    def download_delta(
+        self,
+        file: App | Package,
+        dest: str | Path,
+        *,
+        seeds: Sequence[Seed],
+        mirrors: bool = True,
+        peers: Sequence[FoundPeer] = (),
+        platform: str | None = None,
+        progress: Progress | None = None,
+    ) -> Path:
+        """An app's or a package's file put together from `seeds`, the bytes of an older version the caller
+        holds (bytes, or the paths of files), and the ranges of the file they lack (SPEC.md § 22.3): the index
+        is read and checked, each seed cut by its chunker, each chunk found there taken, the others read as
+        ranges from the mirrors, the peers and then the server (§ 19), each checked by its SHA-256 as it
+        comes, then the whole file by the document's size and SHA-256 before `dest` exists. Never more
+        written than the file's size, nor more read of a source than the range asked (L-22.3-3).
+
+        When the file has no index or no seed shares a chunk with it, or an index, a chunk, a seed or every
+        source fails, the whole file is read as download_from() does (L-22.3-4); `last_delta` says which
+        happened and how many bytes each way."""
+        report = self.last_delta = DeltaReport()
+        part = Path(dest).with_name(Path(dest).name + ".part")
+        if file.chunks is None or not seeds:
+            report.reason = "the file has no chunk index" if file.chunks is None else "no seed"
+        else:
+            try:
+                return self._delta(
+                    file,
+                    dest,
+                    part=part,
+                    seeds=seeds,
+                    mirrors=mirrors,
+                    peers=peers,
+                    platform=platform,
+                    progress=progress,
+                    report=report,
+                )
+            except (LanternError, ValueError, OSError) as e:
+                part.unlink(missing_ok=True)
+                self.last_delta = report = DeltaReport(reason=f"{type(e).__name__}: {str(e)[:160]}")
+        return self.download_from(file, dest, mirrors=mirrors, peers=peers, platform=platform, progress=progress)
+
+    def _delta(
+        self,
+        file: App | Package,
+        dest: str | Path,
+        *,
+        part: Path,
+        seeds: Sequence[Seed],
+        mirrors: bool,
+        peers: Sequence[FoundPeer],
+        platform: str | None,
+        progress: Progress | None,
+        report: DeltaReport,
+    ) -> Path:
+        assembly = Assembly(file, self.chunk_index(file), seeds)
+        assembly.report = report
+        if not assembly.shares:
+            raise NothingShared("no chunk of the seeds is in the file")
+        sources: list[tuple[str, Transport | None, dict[str, str]]] = [
+            *self._sources(file, mirrors, peers, platform),
+            (file.file, None, {}),
+        ]
+        with part.open("wb") as f:
+            for read, group in assembly.groups:
+                if read:
+                    self._read_group(
+                        file=file, assembly=assembly, group=group, sources=sources, out=f, progress=progress
+                    )
+                    continue
+                for piece in group:
+                    f.write(assembly.take(piece, assembly.seed(piece)))
+                    if progress is not None:
+                        progress(assembly.hasher.size, file.size)
+        assembly.finish()
+        Path(part).replace(dest)
+        report.used = True
+        return Path(dest)
+
+    def _read_group(
+        self,
+        *,
+        file: App | Package,
+        assembly: Assembly,
+        group: list[Piece],
+        sources: list[tuple[str, Transport | None, dict[str, str]]],
+        out: BinaryIO,
+        progress: Progress | None,
+    ) -> None:
+        """The pieces one range holds, from the first source that gives them: a source that fails after some
+        pieces were checked and written is left for the next, which is asked for the rest alone."""
+        done = 0
+        last: LanternError | None = None
+        for url, transport, headers in sources:
+            rest = group[done:]
+            collector = Collector(rest)
+            start, end = rest[0].offset, rest[-1].offset + rest[-1].length - 1
+            try:
+                for data in self._range(file=file, url=url, transport=transport, headers=headers, start=start, end=end):
+                    for piece, body in collector.feed(data):
+                        out.write(assembly.take(piece, body))
+                        assembly.report.read += piece.length
+                        done += 1
+                        if progress is not None:
+                            progress(assembly.hasher.size, file.size)
+                collector.finish()
+                assembly.report.ranges += 1
+                return
+            except (IntegrityError, TransportError, UnexpectedResponse, DocumentError, ProblemError) as e:
+                last = e
+        raise last or UnexpectedResponse("no source for a range")
+
+    def _range(
+        self,
+        *,
+        file: App | Package,
+        url: str,
+        transport: Transport | None,
+        headers: dict[str, str],
+        start: int,
+        end: int,
+    ) -> Iterator[bytes]:
+        """The bytes `start` to `end` of the file at `url`, as they arrive: 206 of exactly that range
+        (UnexpectedResponse for a source that answers otherwise, the whole file included), no more than the
+        range (L-22.3-3). The server gets the client's credentials; a mirror or a peer, none."""
+        if transport is None:
+            request = self.core.prepare("GET", self.core.url(url), headers=range_headers(start, end))
+            transport = self.transport
+        else:
+            if not plain_http_to(url):
+                raise InsecureTransport(f"{url}: plain HTTP only to a private network's address (SPEC.md § 19.2)")
+            h = Headers({"User-Agent": self.core.user_agent, **range_headers(start, end)})
+            for k, v in headers.items():
+                h[k] = v
+            request = Request("GET", url, h)
+        with transport.send(request, timeout=self.timeout) as response:
+            if response.status >= 400:
+                raise self.core.error(url, response.status, response.headers, _error_body(response))
+            check_range(
+                response.status,
+                response.headers,
+                start=start,
+                end=end,
+                size=file.size,
+                sha256=file.sha256,
+                what=url,
+            )
+            got = 0
+            for chunk in response.iter_bytes():
+                got += len(chunk)
+                if got > end - start + 1:
+                    raise Refused(f"{url}: more than the {end - start + 1} bytes asked for")
+                yield chunk
+            if got != end - start + 1:
+                raise Refused(f"{url}: {got} of the {end - start + 1} bytes asked for")
 
     def _download_source(
         self,
@@ -591,8 +787,9 @@ class LanternClient:
             upload = self._send(self.core.upload_open(title_id, request, platform))
             address, chunk_size, offset = upload.upload, upload.chunk_size, upload.offset
         else:
-            address, chunk_size = resume, 1 << 20
-            offset, _ = self._send(self.core.upload_state(resume))
+            address = resume
+            state = self._send(self.core.upload_state(resume))  # Lantern-Chunk-Size (L-9.3-3)
+            offset, chunk_size = state.offset, state.chunk_size or RESUME_CHUNK
         if chunk_size < 1:
             raise UnexpectedResponse("upload: a chunk_size under 1")
         self.last_upload, self.last_header = address, header
@@ -869,8 +1066,12 @@ class LanternClient:
             upload = self._send(self.core.upload_open(title_id, request, platform))
             address, chunk_size, offset = upload.upload, upload.chunk_size, upload.offset
         else:
-            address, chunk_size = resume, 1 << 20
-            offset, _ = self._send(self.core.upload_state(resume))
+            address = resume
+            state = self._send(self.core.upload_state(resume))  # Lantern-Chunk-Size (L-9.3-3)
+            offset, chunk_size = (
+                state.offset,
+                state.chunk_size or RESUME_CHUNK,
+            )  # Lantern-Chunk-Size (SPEC.md § 9.3), else a megabyte
         if chunk_size < 1:
             raise UnexpectedResponse("upload: a chunk_size under 1")
         self.last_upload = address
@@ -892,6 +1093,12 @@ class LanternClient:
 
     def upload_offset(self, upload: str) -> tuple[int, int | None]:
         """Where an upload stands: its Upload-Offset and Upload-Length (HEAD)."""
+        state = self._send(self.core.upload_state(upload))
+        return state.offset, state.length
+
+    def upload_state(self, upload: str) -> UploadState:
+        """Where an upload stands (HEAD, SPEC.md § 9.3): its Upload-Offset, Upload-Length and Lantern-Chunk-Size,
+        the chunks to resume in (L-9.3-3); None for a header the server left out."""
         return self._send(self.core.upload_state(upload))
 
     def abandon_upload(self, upload: str) -> None:

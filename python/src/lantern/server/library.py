@@ -20,11 +20,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from lantern import chunks as cdc
 from lantern import homebrew as hb
 from lantern import schema
 from lantern._generated.models import (
     App,
     CheatSet,
+    ChunksRef,
     Homebrew,
     ManifestEntry,
     Mirror,
@@ -37,14 +39,18 @@ from lantern._generated.models import (
 from lantern.digest import sha256_hex
 from lantern.grants import MIRRORS_LIMIT, mirror_ok
 from lantern.limits import CHEAT_SET
-from lantern.profiles import profile
+from lantern.profiles import profile, served
 from lantern.server.events import LibraryChange
 from lantern.server.files import FileRef
 from lantern.server.http import ServerRequest
 
 #: The families a Library may offer, beyond `changes` (which needs a Journal); `sections` needs a
-#: SectionSource.
+#: SectionSource, and `deltas` (SPEC.md § 22) a `chunk_index()` (ChunkSource).
 LIBRARY_FAMILIES = ("library", "titles", "homebrew", "cheats", "sections")
+#: The sizes of the files a MemoryLibrary cuts into chunks when asked to (SPEC.md § 22): a smaller one gains
+#: nothing, a larger one takes this pure Python too long to cut.
+DELTAS_MIN = 128 << 10
+DELTAS_MAX = 64 << 20
 
 
 @dataclass(frozen=True)
@@ -144,6 +150,18 @@ class SectionSource(Protocol):
 
 
 @runtime_checkable
+class ChunkSource(Protocol):
+    """A library that gives chunk indexes (SPEC.md § 22): put "deltas" among its `families`, and set `chunks`
+    (cdc.ref() of the index's bytes, whose `url` is `<base>/v1/chunks/sha256/<hex>`) on each app and package
+    it cuts. LanternApp serves the index at that route to whoever may read the file."""
+
+    def chunk_index(self, sha256: str) -> bytes | None:
+        """The canonical bytes (SPEC.md § 2.3, § 22.1) of the chunk index of the file whose SHA-256 is
+        `sha256`, or None for a file it did not cut."""
+        ...
+
+
+@runtime_checkable
 class CheatWriter(Protocol):
     """A Library whose cheat sets clients may write, with the scope cheats.write (SPEC.md § 10). LanternApp
     checks what is written (the platform's format, the limits, a set that exists) before it calls these."""
@@ -165,6 +183,27 @@ class CheatWriter(Protocol):
     def delete_cheat(self, cheat_id: str) -> bool:
         """Removes a set; False when there is none of that id."""
         ...
+
+
+_CUT: dict[str, bytes] = {}
+_CUT_LOCK = threading.Lock()
+
+
+def cut_before(file: FileRef) -> bytes:
+    """The canonical chunk index of a file (SPEC.md § 22.1), made once for each SHA-256 in this process (the
+    last 64 are kept): cutting is the slow part of adding a file."""
+    with _CUT_LOCK:
+        raw = _CUT.get(file.sha256)
+    if raw is None:
+        data = file.data if file.data is not None else Path(file.path).read_bytes()
+        if len(data) != file.size:
+            raise ValueError(f"{file.path}: not the {file.size} bytes it was hashed with")
+        _, raw = cdc.build_index(data)
+        with _CUT_LOCK:
+            _CUT[file.sha256] = raw
+            while len(_CUT) > 64:
+                _CUT.pop(next(iter(_CUT)))
+    return raw
 
 
 def now() -> str:
@@ -240,10 +279,20 @@ class MemoryLibrary:
     """
 
     def __init__(
-        self, *, base: str = "/api/lantern", families: Iterable[str] = LIBRARY_FAMILIES, journal: bool = True
+        self,
+        *,
+        base: str = "/api/lantern",
+        families: Iterable[str] = LIBRARY_FAMILIES,
+        journal: bool = True,
+        deltas: tuple[int, int] | None = None,
     ) -> None:
+        """`deltas`: (min, max), the sizes in bytes of the files cut into chunks for differential updates
+        (SPEC.md § 22; `DELTAS_MIN` and `DELTAS_MAX` are the reference server's); each app and package of such a
+        size carries `chunks`, and the family `deltas` is offered. None: no file is cut."""
         self.base = base.rstrip("/")
-        self.families = frozenset(families)
+        self.deltas = deltas
+        self.families = frozenset(families) | ({"deltas"} if deltas is not None else frozenset())
+        self._indexes: dict[str, bytes] = {}
         self._apps: dict[str, App] = {}
         self._titles: dict[tuple[str, str], Title] = {}
         self._homebrew: dict[tuple[str, str], Homebrew] = {}
@@ -276,12 +325,32 @@ class MemoryLibrary:
             self._files[file_id] = file
         return self.file_url(file_id)
 
+    def _served(self, platform: str, what: str) -> None:
+        if not served(platform):
+            raise ValueError(f"{what}: nothing is served of platform {platform}, which installs nothing (Annex A.7)")
+
+    def _cut(self, file: FileRef) -> ChunksRef | None:
+        """The `chunks` of a file this library cuts (SPEC.md § 22.1), its index kept; None for a file it does not."""
+        if self.deltas is None or not self.deltas[0] <= file.size <= self.deltas[1] or cdc.size_for(file.size) is None:
+            return None
+        raw = cut_before(file)
+        with self._lock:
+            self._indexes[file.sha256] = raw
+        return ChunksRef.from_json(cdc.ref(f"{self.base}/v1/chunks/sha256/{file.sha256}", raw))
+
+    def chunk_index(self, sha256: str) -> bytes | None:
+        with self._lock:
+            return self._indexes.get(sha256)
+
     def add_app(self, app: App, file: FileRef | None = None) -> App:
         """Serve an app (its `file` URL one of this library's when `file` is given)."""
+        self._served(app.platform, f"app {app.id}")
         if file is not None:
             if (file.size, file.sha256) != (app.size, app.sha256):
                 raise ValueError(f"app {app.id}: its size and sha256 are not its file's")
             app.file = self.add_file(file)
+            if app.chunks is None:
+                app.chunks = self._cut(file)
         problems = schema.definition("app", app.to_json())
         if problems:
             raise ValueError(f"app {app.id}: " + "; ".join(problems[:3]))
@@ -339,9 +408,14 @@ class MemoryLibrary:
             if app is not None and self._journal is not None:
                 self._journal.record("removed", app_id, app.platform)
             if app is not None:
+                live = {a.sha256 for a in self._apps.values()} | {
+                    p.sha256 for e in self._homebrew.values() for p in [e.package, *(e.packages or [])]
+                }
+                self._indexes = {k: v for k, v in self._indexes.items() if k in live}
                 self._changed(LibraryChange("apps", app.platform, app.title_id))
 
     def add_title(self, title: Title) -> Title:
+        self._served(title.platform, f"title {title.title_id}")
         title.schema = None
         problems = schema.definition("title", title.to_json())
         if problems:
@@ -365,12 +439,15 @@ class MemoryLibrary:
         file it serves, which is checked against the package and given a
         URL of this library. Refused (ValueError) when check_homebrew() finds
         a reason, or a file is not its package's."""
+        self._served(entry.platform, f"homebrew {entry.id}")
         for p in [entry.package, *(entry.packages or [])]:
             file = (files or {}).get(p.file)
             if file is not None:
                 if (file.size, file.sha256) != (p.size, p.sha256):
                     raise ValueError(f"homebrew {entry.id}: {p.file} is not its package's file")
                 p.file = self.add_file(file)
+                if p.chunks is None:
+                    p.chunks = self._cut(file)
         entry.schema = None
         problems = check_homebrew(entry)
         if problems:
@@ -415,6 +492,7 @@ class MemoryLibrary:
         note: str | None,
         updated: str,
     ) -> CheatSet:
+        self._served(platform, "cheat set")
         data = text.encode()
         if len(data) > CHEAT_SET:
             raise ValueError(f"a cheat set is {CHEAT_SET} bytes at most")

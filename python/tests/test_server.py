@@ -84,6 +84,7 @@ def test_handshake(app: LanternApp) -> None:
         "peers": 1,
         "sync": 0,
         "encrypted_saves": 0,
+        "deltas": 1,
     }
     assert hello["platforms"] == ["3ds", "android", "linux", "switch"]
     mine = body(call(app, "GET", "/.well-known/lantern", Authorization=f"Bearer {DEMO_TOKEN}"))

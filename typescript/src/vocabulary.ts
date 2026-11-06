@@ -30,6 +30,7 @@ export const FAMILIES = [
   "peers",
   "sync",
   "encrypted_saves",
+  "deltas",
 ] as const;
 export type Family = (typeof FAMILIES)[number];
 /** A platform's name (SPEC.md § 4.3). */

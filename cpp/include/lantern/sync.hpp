@@ -10,13 +10,15 @@
 //
 // The merge rule of § 20.4 is here too, the same on every server and in
 // every client that keeps a copy: the later `updated` wins; on the same
-// one, a deletion; between two values, the greater canonical JSON.
+// one, a deletion; between two values, the greater canonical JSON (§ 2.3,
+// canonical.hpp).
 #pragma once
 
 #include <cstdint>
 #include <optional>
 #include <string_view>
 
+#include <lantern/canonical.hpp>
 #include <lantern/document.hpp>
 #include <lantern/error.hpp>
 #include <lantern/json.hpp>
@@ -49,11 +51,6 @@ inline constexpr std::string_view sync_installed = "installed";
 [[nodiscard]] std::optional<std::int64_t> parse_sync_time(std::string_view text) noexcept;
 // Written to the millisecond, as § 20.2 writes it.
 void format_sync_time(std::int64_t milliseconds, String& out);
-
-// The canonical JSON of § 20.4: keys sorted (by their UTF-8 bytes), no
-// space, characters other than ASCII as they are; numbers as written.
-[[nodiscard]] Result<String> canonical_json(
-    std::string_view json, Allocator allocator = {}, const json::Limits& limits = {});
 
 // What the merge decides of an item sent against the one kept.
 struct SyncMerge

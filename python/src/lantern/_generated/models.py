@@ -716,9 +716,10 @@ class App:
     atlas: str | None = None
     installed_size: int | None = None
     mirrors: list[Mirror] | None = None
+    chunks: ChunksRef | None = None
     extra: JSONObject = field(default_factory=dict)
 
-    KEYS: ClassVar[frozenset[str]] = frozenset({"id", "platform", "title_id", "app_id", "type", "version_code", "version_name", "name", "size", "format", "sha256", "added", "file", "atlas", "installed_size", "mirrors"})
+    KEYS: ClassVar[frozenset[str]] = frozenset({"id", "platform", "title_id", "app_id", "type", "version_code", "version_name", "name", "size", "format", "sha256", "added", "file", "atlas", "installed_size", "mirrors", "chunks"})
 
     @classmethod
     def from_json(cls, data: JSONValue, where: str = "App") -> App:
@@ -740,6 +741,7 @@ class App:
             atlas=_m.opt(o, "atlas", where, _m.as_str),
             installed_size=_m.opt(o, "installed_size", where, _m.as_int),
             mirrors=_m.opt(o, "mirrors", where, lambda v, w: _m.as_list(v, w, Mirror.from_json)),
+            chunks=_m.opt(o, "chunks", where, ChunksRef.from_json),
             extra=_m.extras(o, cls.KEYS),
         )
 
@@ -767,6 +769,8 @@ class App:
             out["installed_size"] = self.installed_size
         if self.mirrors is not None:
             out["mirrors"] = _m.json_list(x.to_json() for x in self.mirrors)
+        if self.chunks is not None:
+            out["chunks"] = self.chunks.to_json()
         out.update(self.extra)
         return out
 
@@ -794,6 +798,39 @@ class Mirror:
     def to_json(self) -> JSONObject:
         out: JSONObject = {}
         out["url"] = self.url
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class ChunksRef:
+    """Where a file's chunk index is (SPEC.md § 22.1): its url (a route of the server, or a path relative to a static library's root), and the index's size and SHA-256, which a client checks before it uses it.
+
+    From common.json#/$defs/chunks_ref.
+    """
+
+    url: str
+    size: int
+    sha256: str
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"url", "size", "sha256"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "ChunksRef") -> ChunksRef:
+        o = _m.obj(data, where)
+        return cls(
+            url=_m.req(o, "url", where, _m.as_str),
+            size=_m.req(o, "size", where, _m.as_int),
+            sha256=_m.req(o, "sha256", where, _m.as_str),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        out["url"] = self.url
+        out["size"] = self.size
+        out["sha256"] = self.sha256
         out.update(self.extra)
         return out
 
@@ -1031,6 +1068,75 @@ class CheatSets:
         out: JSONObject = {}
         out["schema"] = self.schema
         out["cheats"] = _m.json_list(x.to_json() for x in self.cheats)
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class ChunkIndex:
+    """GET <base>/v1/chunks/sha256/{hex}, or a static library's v1/chunks/sha256/<hex>.json (SPEC.md § 22.1): the file whose SHA-256 and size it gives, cut into chunks by the chunker it names, each chunk its size and SHA-256, in the file's order.
+
+    From chunk-index.
+    """
+
+    schema: int
+    sha256: str
+    size: int
+    chunker: ChunkIndexChunker
+    chunks: list[list[JSONValue]]
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "sha256", "size", "chunker", "chunks"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "ChunkIndex") -> ChunkIndex:
+        o = _m.obj(data, where)
+        return cls(
+            schema=_m.req(o, "schema", where, _m.as_int),
+            sha256=_m.req(o, "sha256", where, _m.as_str),
+            size=_m.req(o, "size", where, _m.as_int),
+            chunker=_m.req(o, "chunker", where, ChunkIndexChunker.from_json),
+            chunks=_m.req(o, "chunks", where, lambda v, w: _m.as_list(v, w, lambda v, w: _m.as_list(v, w, _m.as_any))),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        out["schema"] = self.schema
+        out["sha256"] = self.sha256
+        out["size"] = self.size
+        out["chunker"] = self.chunker.to_json()
+        out["chunks"] = _m.json_list(_m.json_list(x) for x in self.chunks)
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class ChunkIndexChunker:
+    """How the file was cut (SPEC.md § 22.2): lantern-cdc-1, with a size from 64 KiB to 4 MiB, a power of two; a chunk is at most 4 times it.
+
+    From chunk-index/chunker.
+    """
+
+    alg: str
+    size: int
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"alg", "size"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "ChunkIndexChunker") -> ChunkIndexChunker:
+        o = _m.obj(data, where)
+        return cls(
+            alg=_m.req(o, "alg", where, _m.as_str),
+            size=_m.req(o, "size", where, _m.as_int),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        out["alg"] = self.alg
+        out["size"] = self.size
         out.update(self.extra)
         return out
 
@@ -1767,9 +1873,10 @@ class Package:
     signer_sha256: str | None = None
     installed_size: int | None = None
     mirrors: list[Mirror] | None = None
+    chunks: ChunksRef | None = None
     extra: JSONObject = field(default_factory=dict)
 
-    KEYS: ClassVar[frozenset[str]] = frozenset({"format", "file", "size", "sha256", "manifest_sha256", "path", "manifest", "arch", "signature", "signer_sha256", "installed_size", "mirrors"})
+    KEYS: ClassVar[frozenset[str]] = frozenset({"format", "file", "size", "sha256", "manifest_sha256", "path", "manifest", "arch", "signature", "signer_sha256", "installed_size", "mirrors", "chunks"})
 
     @classmethod
     def from_json(cls, data: JSONValue, where: str = "Package") -> Package:
@@ -1787,6 +1894,7 @@ class Package:
             signer_sha256=_m.opt(o, "signer_sha256", where, _m.as_str),
             installed_size=_m.opt(o, "installed_size", where, _m.as_int),
             mirrors=_m.opt(o, "mirrors", where, lambda v, w: _m.as_list(v, w, Mirror.from_json)),
+            chunks=_m.opt(o, "chunks", where, ChunksRef.from_json),
             extra=_m.extras(o, cls.KEYS),
         )
 
@@ -1811,6 +1919,8 @@ class Package:
             out["installed_size"] = self.installed_size
         if self.mirrors is not None:
             out["mirrors"] = _m.json_list(x.to_json() for x in self.mirrors)
+        if self.chunks is not None:
+            out["chunks"] = self.chunks.to_json()
         out.update(self.extra)
         return out
 
@@ -3591,6 +3701,7 @@ DOCUMENTS: dict[str, type[Any]] = {
     "cheat": CheatSet,
     "cheat-write": CheatWrite,
     "cheats": CheatSets,
+    "chunk-index": ChunkIndex,
     "discovery": Discovery,
     "discovery-peer": DiscoveryPeer,
     "discovery-request": DiscoveryRequest,
@@ -3645,6 +3756,9 @@ __all__ = [
     "CheatSet",
     "CheatSets",
     "CheatWrite",
+    "ChunkIndex",
+    "ChunkIndexChunker",
+    "ChunksRef",
     "DOCUMENTS",
     "DeviceKey",
     "Discovery",

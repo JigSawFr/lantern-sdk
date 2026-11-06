@@ -41,7 +41,7 @@
       "description": "The platforms the server has something for (SPEC.md § 4.3).",
       "type": "array",
       "items": {
-        "$ref": "common.json#/$defs/platform"
+        "$ref": "common.json#/$defs/served_platform"
       },
       "uniqueItems": true
     },
@@ -142,6 +142,10 @@
           "minimum": 0
         },
         "encrypted_saves": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deltas": {
           "type": "integer",
           "minimum": 0
         }

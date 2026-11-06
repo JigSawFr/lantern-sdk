@@ -75,7 +75,7 @@ export async function main(argv: string[]): Promise<number> {
     const language = typeof values["language"] === "string" ? values["language"] : "en";
     const done = await writeStatic(input, out, { pageSize, language });
     console.error(
-      `lantern-static: ${done.documents} documents and ${done.files} files of ${done.platforms.join(", ") || "no platform"} in ${out}`,
+      `lantern-static: ${done.documents} documents, ${done.files} files and ${done.indexes} chunk indexes of ${done.platforms.join(", ") || "no platform"} in ${out}`,
     );
     return 0;
   } catch (e) {

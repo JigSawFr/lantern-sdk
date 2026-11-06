@@ -125,7 +125,7 @@ describe("the validator (src/schema.ts)", () => {
   }
   test("formats, and true is not 1", () => {
     assert.deepEqual(definition("time", "2026-10-30T09:12:00Z"), []);
-    assert.ok(definition("time", "2026-10-30T09:12:00.5+02:00").length > 0); // UTC with Z (draft 0.6, L-2.3-2)
+    assert.ok(definition("time", "2026-10-30T09:12:00.5+02:00").length > 0); // UTC with Z (draft 0.7, L-2.3-2)
     assert.ok(definition("time", "2026-10-30 09:12").length > 0);
     assert.ok(definition("time", "2026-13-30T09:12:00Z").length > 0);
     assert.ok(definition("sha256", "0".repeat(63)).length > 0);

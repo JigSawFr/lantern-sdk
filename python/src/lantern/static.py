@@ -74,6 +74,7 @@ from lantern._generated.models import (
     Titles,
 )
 from lantern._version import __version__
+from lantern.chunks import INDEX_LIMIT, Index, UnusableIndex, read_index
 from lantern.client.download import Verifier
 from lantern.client.stdlib import StdlibTransport
 from lantern.client.transport import Request, Transport
@@ -112,8 +113,8 @@ _PAGES_LIMIT = 100_000
 
 def layout_path(kind: str, platform: str | None = None, ident: str | None = None, page: int | None = None) -> str:
     """The file of a read route, relative to the root (SPEC.md § 21.1): `kind` is handshake, apps, titles or
-    homebrew (a page), title, entry (a homebrew entry), cheats (a title's sets), cheat (a set's text) or blob
-    (a file by its SHA-256)."""
+    homebrew (a page), title, entry (a homebrew entry), cheats (a title's sets), cheat (a set's text), blob
+    (a file by its SHA-256) or chunks (a file's chunk index, SPEC.md § 22)."""
     if kind == "handshake":
         return HANDSHAKE
     if kind in ("apps", "titles", "homebrew"):
@@ -132,6 +133,8 @@ def layout_path(kind: str, platform: str | None = None, ident: str | None = None
         return f"v1/cheats/{ident}.txt"
     if kind == "blob" and ident:
         return f"v1/blobs/sha256/{ident}"
+    if kind == "chunks" and ident:
+        return f"v1/chunks/sha256/{ident}.json"
     raise ValueError(f"no route {kind!r}")
 
 
@@ -345,6 +348,18 @@ class StaticLibrary:
         """The entries newer than what is installed, (id, build), by comparing `build` (§ 8.5, § 21.3)."""
         return homebrew_updates(self.iter_homebrew(platform), platform, installed)
 
+    def chunk_index(self, file: App | Package) -> Index:
+        """The chunk index of an app's or a package's file (SPEC.md § 22.1), read at its `chunks.url` and checked
+        before it is used (L-22.3-1); UnusableIndex when the file has none or it fails a check, after which a
+        client reads the whole file."""
+        ref = file.chunks
+        if ref is None or not 0 < ref.size <= INDEX_LIMIT:
+            raise UnusableIndex("no chunk index of a size a client reads")
+        raw = self.read_bytes(ref.url, ref.size)
+        if raw is None:
+            raise UnusableIndex(f"{ref.url}: not in the library")
+        return read_index(raw, sha256=file.sha256, size=file.size, ref=ref)
+
     def download(self, file: App | Package, dest: str | Path) -> Path:
         """An app's or a package's file, through `dest` + ".part", renamed only once its size and SHA-256
         are the document's (§ 6.6); IntegrityError otherwise, and nothing is kept."""
@@ -469,6 +484,8 @@ def export(
     chosen = sorted(set(platforms)) if platforms is not None else found
     docs: dict[str, bytes] = {}
     blobs: dict[str, FileRef] = {}
+    indexes: dict[str, bytes] = {}
+    chunk_index: Callable[[str], bytes | None] | None = getattr(library, "chunk_index", None)
 
     def blob(file: str, sha256: str, size: int) -> str:
         ref = file_of(file.rstrip("/").rsplit("/", 1)[-1])
@@ -477,11 +494,23 @@ def export(
         blobs[sha256] = ref
         return layout_path("blob", ident=sha256)
 
+    def chunked(doc: JSONObject, sha256: str) -> None:
+        """A document's `chunks` made a path of the library (L-21.1-2) with the index it names written, or
+        dropped when the library holds no index for the file (SPEC.md § 22.1)."""
+        ref = doc.get("chunks")
+        raw = chunk_index(sha256) if chunk_index is not None and isinstance(ref, dict) else None
+        if isinstance(ref, dict) and raw is not None:
+            indexes[sha256] = raw
+            doc["chunks"] = {**ref, "url": layout_path("chunks", ident=sha256)}
+        else:
+            doc.pop("chunks", None)
+
     for p in chosen:
         mine = []
         for a in sorted((a for a in apps if a.platform == p), key=lambda a: ((a.name or "").casefold(), a.id)):
             doc = a.to_json()
             doc["file"] = blob(a.file, a.sha256, a.size)
+            chunked(doc, a.sha256)
             mine.append(doc)
         for n, page in enumerate(
             _pages(mine, page_size, lambda c, nxt, t: {"schema": SCHEMA, "items": list(c), "total": t, "next": nxt}),
@@ -512,6 +541,7 @@ def export(
             for pdoc, model in zip(packages, [e.package, *(e.packages or [])], strict=True):
                 assert isinstance(pdoc, dict)
                 pdoc["file"] = blob(model.file, model.sha256, model.size)
+                chunked(pdoc, model.sha256)
             docs[layout_path("entry", p, e.id)] = _dump({"schema": SCHEMA, **full})
             short = json.loads(json.dumps(full))
             short["package"].pop("manifest", None)
@@ -542,6 +572,7 @@ def export(
         titles=SCHEMA if "titles" in families else 0,
         homebrew=SCHEMA if "homebrew" in families else 0,
         cheats=SCHEMA if by_title else 0,
+        deltas=SCHEMA if indexes else 0,
     )
     for f in NOT_STATIC:
         features[f] = 0
@@ -574,6 +605,10 @@ def export(
         target = root / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
+    for sha, index in indexes.items():
+        target = root / layout_path("chunks", ident=sha)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(index)  # its bytes as kept: those whose size and SHA-256 `chunks` gives (SPEC.md § 22.1)
     for sha, ref in blobs.items():
         _copy(ref, root / layout_path("blob", ident=sha))
     for cid, ref in texts.items():
@@ -582,7 +617,12 @@ def export(
     tmp = root / (HANDSHAKE + ".tmp")
     tmp.write_bytes(_dump(hello))
     tmp.replace(root / HANDSHAKE)
-    return {"documents": len(docs) + 1, "files": len(blobs) + len(texts), "platforms": list(chosen)}
+    return {
+        "documents": len(docs) + 1,
+        "files": len(blobs) + len(texts),
+        "indexes": len(indexes),
+        "platforms": list(chosen),
+    }
 
 
 def _copy(ref: object, target: Path) -> None:

@@ -12,8 +12,9 @@ sections (with a library that curates them), titles, homebrew and cheats
 (with a save store, § 9: in one request and by resumable upload), and
 encrypted ones kept as sent (§ 9.4); requests (with a request store, § 11);
 events (a stream and long polling, § 18), grants for peers (with a grant
-key, § 19.3) and sync (with a sync store, § 20); and refuses the others with
-404 (their features are 0).
+key, § 19.3), sync (with a sync store, § 20) and chunk indexes (with a library
+that cuts files, § 22); answers a browser's page of the origins it allows
+(§ 2.5); and refuses the others with 404 (their features are 0).
 
 Who calls is decided one of two ways:
 
@@ -40,7 +41,7 @@ import secrets
 import threading
 import time
 import traceback
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import TypeVar, cast
@@ -77,7 +78,7 @@ from lantern.grants import LIFETIME_LIMIT, make_grant
 from lantern.http import Headers, media_type
 from lantern.limits import CHEAT_SET, NAME, NOTE, PROFILE, STRING_CAPS, TITLES_AT_ONCE, printable
 from lantern.missing import missing
-from lantern.profiles import profile, title_id_ok
+from lantern.profiles import profile, served, title_id_ok
 from lantern.server.accounts import (
     ACCOUNT_NAME,
     SCOPES,
@@ -99,6 +100,7 @@ from lantern.server.http import (
     bad_request,
     caching_headers,
     html_response,
+    json_bytes_response,
     json_response,
     method_not_allowed,
     not_found,
@@ -107,7 +109,7 @@ from lantern.server.http import (
     read_document,
     unauthorized,
 )
-from lantern.server.library import Account, Authenticate, CheatWriter, Library, SectionSource
+from lantern.server.library import Account, Authenticate, CheatWriter, ChunkSource, Library, SectionSource
 from lantern.server.paging import Cursors, Sealer, SinceTokens, SortKey, page_size
 from lantern.server.pairing import Limiter, PairingDesk, Pending, approval_page, slow_down
 from lantern.server.saves import (
@@ -139,6 +141,7 @@ SCOPE_OF = {
     "requests": "requests",
     "admin": "admin",
     "peers": "library",
+    "deltas": "library",
     "sync": "sync.read",
     "sync.write": "sync.write",
 }
@@ -146,6 +149,49 @@ SCOPE_OF = {
 INVITATION_DAYS = 30
 INVITATIONS_LIMIT = 1000
 APP_SORTS = ("name", "added", "release")
+#: Browsers (SPEC.md § 2.5): what a preflight may ask for, and what a page may read of an answer.
+CORS_METHODS = "GET, HEAD, POST, PUT, PATCH, DELETE"
+CORS_HEADERS = (
+    "Authorization",
+    "Content-Type",
+    "Content-Digest",
+    "Signature",
+    "Signature-Input",
+    "Accept-Schema",
+    "Lantern-Platform",
+    "Lantern-Save-Kind",
+    "Lantern-Save-Slot",
+    "Lantern-Game-Version",
+    "Lantern-Profile",
+    "Lantern-Note",
+    "Lantern-Save-Encryption",
+    "Upload-Offset",
+    "If-Match",
+    "If-None-Match",
+    "If-Range",
+    "Range",
+    "Last-Event-ID",
+)
+CORS_EXPOSED = (
+    "Date",
+    "ETag",
+    "Content-Range",
+    "Accept-Ranges",
+    "Repr-Digest",
+    "Retry-After",
+    "WWW-Authenticate",
+    "Accept-Signature",
+    "Upload-Offset",
+    "Upload-Length",
+    "Lantern-Chunk-Size",
+    "Allow",
+    "Deprecation",
+    "Sunset",
+    "Link",
+)
+CORS_MAX_AGE = 600
+#: An origin as a browser writes it: a scheme, a host and a port, without a path.
+ORIGIN = re.compile(r"^https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$|^https?://\[[0-9A-Fa-f:.]+\](?::[0-9]{1,5})?$")
 #: A cheat set's document: its text (1 MiB at most), escaped in JSON.
 CHEAT_BODY = 3 << 20
 #: A cheat set's source (SPEC.md § 10): a name of 1 to 64 letters, digits, spaces and . ' ( ) -.
@@ -176,6 +222,7 @@ ROUTES = (
     Route(("changes",), ("GET", "HEAD"), "changes", "changes"),  # with wait, a long poll: family events
     Route(("events",), ("GET",), "events", "events"),
     Route(("grants", "sha256", "{}"), ("GET", "HEAD"), "peers", "grant"),
+    Route(("chunks", "sha256", "{}"), ("GET", "HEAD"), "deltas", "chunk_index"),
     Route(("sync",), ("GET", "HEAD"), "sync", "sync_overview"),
     Route(("sync",), ("DELETE",), "sync.write", "sync_erase"),
     Route(("sync", "{}"), ("GET", "HEAD"), "sync", "sync_read"),
@@ -279,6 +326,13 @@ class LanternApp:
     - `cheat_writes`: with a library that writes cheat sets (a CheatWriter,
       as MemoryLibrary is), take them from the accounts with cheats.write
       (SPEC.md § 10); without, writing answers 405.
+    - `cors_origins`: the origins whose pages may read this server (SPEC.md § 2.5: "https://app.example.org"),
+      or "*" for every one; none by default. An allowed origin gets Access-Control-Allow-Origin (with Vary:
+      Origin) and Access-Control-Expose-Headers on every answer, errors included, and its preflights are
+      answered 204 without a token. No cookie is ever read or set, and Access-Control-Allow-Credentials is
+      never sent.
+    - A library that offers "deltas" (a ChunkSource, as MemoryLibrary(deltas=…) is) gives the chunk indexes
+      of its files (SPEC.md § 22) at <base>/v1/chunks/sha256/{hex}.
     """
 
     def __init__(
@@ -320,6 +374,7 @@ class LanternApp:
         encrypted_saves: bool = True,
         requests: RequestStore | None = None,
         cheat_writes: bool = True,
+        cors_origins: Iterable[str] = (),
     ) -> None:
         if not sig.SKEW_RANGE[0] <= skew <= sig.SKEW_RANGE[1]:
             raise ValueError("skew is 60 to 900 seconds (SPEC.md § 5.4)")
@@ -335,6 +390,12 @@ class LanternApp:
             raise ValueError("grant_seed is an Ed25519 seed of 32 bytes")
         if not 1 <= grant_lifetime <= LIFETIME_LIMIT:
             raise ValueError("grant_lifetime is 1 to 900 seconds (SPEC.md § 19.3)")
+        origins = frozenset(cors_origins)
+        if bad := sorted(o for o in origins if o != "*" and not ORIGIN.match(o)):
+            raise ValueError(f"cors_origins: {bad[0]!r} is not an origin (https://app.example.org) or *")
+        if platforms is not None and (unserved := [p for p in platforms if not served(p)]):
+            raise ValueError(f"platforms: nothing is served of {unserved[0]}, which installs nothing (Annex A.7)")
+        self.cors_origins = origins
         self.library, self.uid, self.name, self.base = library, uid, name, base.rstrip("/")
         self.software, self.motd = software, motd
         self.authenticate, self.public = authenticate, public
@@ -377,12 +438,71 @@ class LanternApp:
     def handle(self, request: ServerRequest) -> ServerResponse:
         """The answer to `request`: never raises (a failure of the server answers 500 `internal`)."""
         try:
-            return self.route(request)
+            if request.method == "OPTIONS" and self.cors_route(request.path):
+                response = self.preflight(request)
+            else:
+                response = self.route(request)
         except ProblemError as e:
-            return problem_response(request, e)
+            response = problem_response(request, e)
         except Exception as e:  # noqa: BLE001 - any failure of the server answers 500 (SPEC.md § 12)
             self.on_error(e)
-            return problem_response(request, ProblemError(500, "internal", "The server failed; try again later."))
+            response = problem_response(request, ProblemError(500, "internal", "The server failed; try again later."))
+        return self.with_cors(request, response)
+
+    # Browsers (SPEC.md § 2.5).
+
+    def cors_route(self, path: str) -> bool:
+        """Whether `path` is a route of the text: the handshake, or any below <base>."""
+        return path == "/.well-known/lantern" or path.startswith(self.base + "/")
+
+    def cors_allow(self, request: ServerRequest) -> str | None:
+        """The Access-Control-Allow-Origin of this request: "*", or its Origin when the server allows it; None
+        when it does not (or the request has no Origin, or is not to a route of the text)."""
+        origin = (request.header("Origin") or "").strip()
+        if not self.cors_origins or not origin or not self.cors_route(request.path):
+            return None
+        if "*" in self.cors_origins:
+            return "*"
+        return origin if origin in self.cors_origins else None
+
+    def preflight(self, request: ServerRequest) -> ServerResponse:
+        """A browser's preflight (SPEC.md § 2.5, L-2.5-3): 204 with what a page may send, on any route and
+        without a token. An OPTIONS that is not one, or of an origin not allowed, is a method no route takes."""
+        if self.cors_allow(request) is None or not request.header("Access-Control-Request-Method"):
+            raise method_not_allowed(CORS_METHODS.split(", "))
+        asked = [h.strip() for h in (request.header("Access-Control-Request-Headers") or "").split(",") if h.strip()]
+        known = {h.lower(): h for h in CORS_HEADERS}
+        allowed = [known[h.lower()] for h in asked if h.lower() in known] or list(CORS_HEADERS)
+        headers = Headers(
+            {
+                "Access-Control-Allow-Methods": CORS_METHODS,
+                "Access-Control-Allow-Headers": ", ".join(allowed),
+                "Access-Control-Max-Age": str(CORS_MAX_AGE),
+                "Cache-Control": "no-store",
+                "Vary": "Access-Control-Request-Headers",
+                "Content-Length": "0",
+            }
+        )
+        if (request.header("Access-Control-Request-Private-Network") or "").strip().lower() == "true":
+            headers["Access-Control-Allow-Private-Network"] = "true"
+        return ServerResponse(204, headers)
+
+    def with_cors(self, request: ServerRequest, response: ServerResponse) -> ServerResponse:
+        """`response` with the headers of an origin the server allows (L-2.5-2), errors included: the origin
+        (or *) allowed, the headers a page reads, and Vary: Origin when the answer depends on it. Never a
+        credential: no Access-Control-Allow-Credentials (L-2.5-5)."""
+        allow = self.cors_allow(request)
+        if allow is not None:
+            response.headers["Access-Control-Allow-Origin"] = allow
+            if not (response.status == 204 and request.method == "OPTIONS"):
+                response.headers["Access-Control-Expose-Headers"] = ", ".join(CORS_EXPOSED)
+        if self.cors_origins and "*" not in self.cors_origins and self.cors_route(request.path):
+            vary = response.headers.get("Vary")
+            if vary is None:
+                response.headers["Vary"] = "Origin"
+            elif "origin" not in {v.strip().lower() for v in vary.split(",")}:
+                response.headers["Vary"] = vary + ", Origin"
+        return response
 
     def owns(self, path: str) -> bool:
         """Whether `path` is one of Lantern's: the handshake, below <base>/v1/, or the approval page."""
@@ -626,7 +746,7 @@ class LanternApp:
             found |= {h.platform for h in lib.homebrew(())}
         if "cheats" in lib.families:
             found |= {c.platform for c in lib.cheats()}
-        return sorted(found)
+        return sorted(p for p in found if served(p))
 
     def handshake(self, account: Account) -> JSONObject:
         """The handshake document (SPEC.md § 4.2) for `account`."""
@@ -1036,6 +1156,34 @@ class LanternApp:
         response = json_response(request, doc)
         response.headers["Cache-Control"] = "no-store"
         return response
+
+    # Differential updates (SPEC.md § 22).
+
+    def h_chunk_index(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        """The chunk index of a file the caller may read: the bytes its app or package gives `chunks` for
+        (L-22.1-2); 404 otherwise, as for a file the server does not have."""
+        sha = args[0]
+        if not SHA256.match(sha):
+            raise not_found("A file is named by its SHA-256, lower-case hex.")
+        platform = platform_of(request)
+        hide = self.hides(account)
+        found = any(
+            a.sha256 == sha
+            and a.chunks is not None
+            and (platform is None or a.platform == platform)
+            and not hide(a.platform, a.title_id)
+            for a in self.library.apps()
+        )
+        if not found and "homebrew" in self.library.families:
+            for e in self.library.homebrew(()):
+                if (platform is None or e.platform == platform) and not ratings.hidden(e.ratings, account.rating_cap):
+                    found = found or any(
+                        p.sha256 == sha and p.chunks is not None for p in [e.package, *(e.packages or [])]
+                    )
+        raw = self.library.chunk_index(sha) if found and isinstance(self.library, ChunkSource) else None
+        if raw is None:
+            raise not_found("This file has no chunk index: read it whole.")
+        return json_bytes_response(request, raw)
 
     # Sync (SPEC.md § 20).
 
@@ -1745,6 +1893,7 @@ class LanternApp:
                     {
                         "Upload-Offset": str(session.offset),
                         "Upload-Length": str(session.save.size),
+                        "Lantern-Chunk-Size": str(self.save_limits.chunk),  # SPEC.md § 9.3
                         "Cache-Control": "no-store",
                     }
                 )

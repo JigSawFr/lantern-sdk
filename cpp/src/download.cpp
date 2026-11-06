@@ -13,6 +13,9 @@
 namespace lantern
 {
 
+using detail::ContentRange;
+using detail::parse_content_range;
+
 namespace
 {
 
@@ -38,31 +41,6 @@ std::optional<std::uint64_t> parse_u64(std::string_view text) noexcept
     if (text.empty() || result.ec != std::errc {} || result.ptr != end)
         return std::nullopt;
     return value;
-}
-
-struct ContentRange
-{
-    std::uint64_t first = 0;
-    std::uint64_t last  = 0;
-    std::uint64_t total = 0;
-};
-
-// "bytes 100-199/200"
-std::optional<ContentRange> parse_content_range(std::string_view value) noexcept
-{
-    if (!value.starts_with("bytes "))
-        return std::nullopt;
-    value.remove_prefix(6);
-    const std::size_t dash  = value.find('-');
-    const std::size_t slash = value.find('/');
-    if (dash == std::string_view::npos || slash == std::string_view::npos || dash > slash)
-        return std::nullopt;
-    const auto first = parse_u64(value.substr(0, dash));
-    const auto last  = parse_u64(value.substr(dash + 1, slash - dash - 1));
-    const auto total = parse_u64(value.substr(slash + 1));
-    if (!first || !last || !total || *first > *last || *last >= *total)
-        return std::nullopt;
-    return ContentRange { *first, *last, *total };
 }
 
 // Streams a file into the sink, hashing it, checking what the server says

@@ -12,7 +12,10 @@
  * that writes), save backups (§ 9, over a SaveStore: in one request and
  * resumable, encrypted ones kept as sent), requests (§ 11, over a
  * RequestStore), events (a stream and long polls, § 18), peers (grants
- * signed by the server's own key, § 19.3) and sync (§ 20, over a SyncStore).
+ * signed by the server's own key, § 19.3), sync (§ 20, over a SyncStore) and
+ * deltas (chunk indexes, § 22, over a Library that gives `chunks()`). For a
+ * browser's page (§ 2.5) it answers preflights and adds the CORS headers for
+ * the origins `corsOrigins` names.
  * A family it is not given is refused with 404 (its feature is 0). Who calls
  * is decided one of two ways:
  *
@@ -97,6 +100,7 @@ const SCOPE_OF: Readonly<Record<string, string>> = {
   changes: "library",
   sections: "library",
   homebrew: "library",
+  deltas: "library",
   cheats: "cheats",
   saves: "saves",
   encrypted_saves: "saves",
@@ -105,6 +109,48 @@ const SCOPE_OF: Readonly<Record<string, string>> = {
   peers: "library",
   sync: "sync.read",
 };
+/** Browsers (SPEC.md § 2.5): an origin's form, what a preflight may ask for and what a page may read of an answer. */
+const ORIGIN = /^https?:\/\/(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::[0-9]{1,5})?$/;
+const CORS_METHODS = "GET, HEAD, POST, PUT, PATCH, DELETE";
+const CORS_HEADERS = [
+  "Authorization",
+  "Content-Type",
+  "Content-Digest",
+  "Signature",
+  "Signature-Input",
+  "Accept-Schema",
+  "Lantern-Platform",
+  "Lantern-Save-Kind",
+  "Lantern-Save-Slot",
+  "Lantern-Game-Version",
+  "Lantern-Profile",
+  "Lantern-Note",
+  "Lantern-Save-Encryption",
+  "Upload-Offset",
+  "If-Match",
+  "If-None-Match",
+  "If-Range",
+  "Range",
+  "Last-Event-ID",
+];
+const CORS_EXPOSED = [
+  "Date",
+  "ETag",
+  "Content-Range",
+  "Accept-Ranges",
+  "Repr-Digest",
+  "Retry-After",
+  "WWW-Authenticate",
+  "Accept-Signature",
+  "Upload-Offset",
+  "Upload-Length",
+  "Lantern-Chunk-Size",
+  "Allow",
+  "Deprecation",
+  "Sunset",
+  "Link",
+].join(", ");
+const CORS_MAX_AGE = 600;
 /** How long an invitation may live (SPEC.md § 5.5), and how many may wait at once. */
 const INVITATION_DAYS = 30;
 const INVITATIONS_LIMIT = 1000;
@@ -143,6 +189,7 @@ const ROUTES: Route[] = [
   { pattern: ["changes"], methods: ["GET", "HEAD"], family: "changes|events", handler: "hChanges" },
   { pattern: ["events"], methods: ["GET"], family: "events", handler: "hEvents" },
   { pattern: ["grants", "sha256", "{}"], methods: ["GET", "HEAD"], family: "peers", handler: "hGrant" },
+  { pattern: ["chunks", "sha256", "{}"], methods: ["GET", "HEAD"], family: "deltas", handler: "hChunks" },
   { pattern: ["sync"], methods: ["GET", "HEAD", "DELETE"], family: "sync", handler: "hSync" },
   { pattern: ["sync", "{}"], methods: ["GET", "HEAD", "PATCH", "DELETE"], family: "sync", handler: "hSyncCollection" },
   { pattern: ["titles"], methods: ["GET", "HEAD"], family: "titles", handler: "hTitles" },
@@ -367,6 +414,12 @@ export interface LanternAppOptions {
   encryptedSaves?: boolean;
   /** Requests (SPEC.md § 11): where they are kept (true: MemoryRequestStore). Without it, the family is off. */
   requests?: RequestStore | true;
+  /**
+   * Browsers (SPEC.md § 2.5): the origins whose pages may read this server (`https://app.example.org`: a scheme,
+   * a host and a port, no path), or `["*"]` for every one. None by default: no origin is allowed until the owner
+   * names it. Credentials never go in a cookie, and `Access-Control-Allow-Credentials` is never sent.
+   */
+  corsOrigins?: readonly string[];
 }
 
 /** What a stream counts, and a stream's account checked again at each wake. */
@@ -420,6 +473,8 @@ export class LanternApp {
   readonly savesKept: number;
   readonly encryptedSaves: boolean;
   readonly requestStore: RequestStore | undefined;
+  /** The origins whose pages may read this server (SPEC.md § 2.5), `*` for every one. */
+  readonly corsOrigins: ReadonlySet<string>;
   readonly #grantKey: Promise<ed25519.KeyPair> | undefined;
   readonly #open = new Map<string, number>();
   onError: (error: unknown) => void;
@@ -507,6 +562,13 @@ export class LanternApp {
     if (this.saveBody > this.saveSize) throw new RangeError("saveBody is at most saveSize (SPEC.md § 9.2)");
     this.encryptedSaves = options.encryptedSaves ?? true;
     this.requestStore = options.requests === true ? new MemoryRequestStore() : options.requests;
+    for (const origin of options.corsOrigins ?? []) {
+      if (origin !== "*" && !ORIGIN.test(origin))
+        throw new RangeError(
+          `${JSON.stringify(origin.slice(0, 80))} is not an origin: a scheme, a host and a port, or *`,
+        );
+    }
+    this.corsOrigins = new Set(options.corsOrigins ?? []);
     if (this.hub !== undefined || this.requestStore !== undefined)
       library.subscribe?.((changes) => void this.libraryChanged(changes).catch((e) => this.onError(e)));
   }
@@ -728,15 +790,83 @@ export class LanternApp {
 
   // Dispatch.
 
-  /** The answer to `request`: never throws (a failure of the server answers 500 `internal`). */
+  /**
+   * The answer to `request`: never throws (a failure of the server answers 500 `internal`). To an origin the
+   * server allows it carries the CORS headers, errors included (SPEC.md § 2.5, L-2.5-2).
+   */
   async handle(request: ServerRequest): Promise<ServerResponse> {
+    let response: ServerResponse;
     try {
-      return await this.route(request);
+      response =
+        request.method === "OPTIONS" && this.#cors(request) !== undefined
+          ? this.#preflight(request)
+          : await this.route(request);
     } catch (e) {
-      if (e instanceof HttpProblem) return problemResponse(request, e);
-      this.onError(e);
-      return problemResponse(request, new HttpProblem(500, "internal", "The server failed; try again later."));
+      if (e instanceof HttpProblem) response = problemResponse(request, e);
+      else {
+        this.onError(e);
+        response = problemResponse(request, new HttpProblem(500, "internal", "The server failed; try again later."));
+      }
     }
+    return this.withCors(request, response);
+  }
+
+  // Browsers (SPEC.md § 2.5).
+
+  /**
+   * The Access-Control-Allow-Origin of this request: `*` or its Origin when the server allows it; undefined when it
+   * does not, the request has none, or it is not to one of Lantern's routes (the handshake, or below <base>).
+   */
+  #cors(request: ServerRequest): string | undefined {
+    const origin = request.header("Origin")?.trim() ?? "";
+    const path = request.path;
+    if (
+      this.corsOrigins.size === 0 ||
+      origin === "" ||
+      !(path === "/.well-known/lantern" || path.startsWith(`${this.base}/`))
+    )
+      return undefined;
+    if (this.corsOrigins.has("*")) return "*";
+    return this.corsOrigins.has(origin) ? origin : undefined;
+  }
+
+  /**
+   * A browser's preflight: 204, without a token, naming what the page may send. An OPTIONS that is not one of an
+   * origin the server allows is a method no route takes (405).
+   */
+  #preflight(request: ServerRequest): ServerResponse {
+    if (!request.header("Access-Control-Request-Method")) throw methodNotAllowed(CORS_METHODS.split(", "));
+    const asked = (request.header("Access-Control-Request-Headers") ?? "")
+      .split(",")
+      .map((h) => h.trim())
+      .filter((h) => h !== "");
+    const known = new Map(CORS_HEADERS.map((h) => [h.toLowerCase(), h]));
+    const allowed = asked.map((h) => known.get(h.toLowerCase())).filter((h): h is string => h !== undefined);
+    const response = emptyResponse(request, 204);
+    response.headers.set("Access-Control-Allow-Methods", CORS_METHODS);
+    response.headers.set("Access-Control-Allow-Headers", (allowed.length > 0 ? allowed : CORS_HEADERS).join(", "));
+    response.headers.set("Access-Control-Max-Age", String(CORS_MAX_AGE));
+    response.headers.set("Cache-Control", "no-store");
+    if (request.header("Access-Control-Request-Private-Network")?.trim().toLowerCase() === "true")
+      response.headers.set("Access-Control-Allow-Private-Network", "true");
+    return response;
+  }
+
+  /** `response` with the headers a page of an allowed origin needs (SPEC.md § 2.5); never Allow-Credentials. */
+  withCors(request: ServerRequest, response: ServerResponse): ServerResponse {
+    if (this.corsOrigins.size === 0) return response;
+    const allowed = this.#cors(request);
+    if (allowed !== undefined) {
+      response.headers.set("Access-Control-Allow-Origin", allowed);
+      if (!(request.method === "OPTIONS" && response.status === 204))
+        response.headers.set("Access-Control-Expose-Headers", CORS_EXPOSED);
+    }
+    if (!this.corsOrigins.has("*")) {
+      const vary = response.headers.get("Vary") ?? "";
+      if (!/(^|,\s*)origin\s*(,|$)/i.test(vary))
+        response.headers.set("Vary", vary === "" ? "Origin" : `${vary}, Origin`);
+    }
+    return response;
   }
 
   /** Whether `path` is one of Lantern's: the handshake, below <base>/v1/, or the approval page. */
@@ -928,6 +1058,7 @@ export class LanternApp {
     if (family === "saves") return this.saveStore !== undefined && this.saveStore.available !== false;
     if (family === "encrypted_saves") return this.encryptedSaves && this.offered("saves");
     if (family === "requests") return this.requestStore !== undefined;
+    if (family === "deltas") return this.library.families.has("deltas") && this.library.chunks !== undefined;
     if (family === "sections") return this.library.families.has("sections") && this.library.sections !== undefined;
     if (family === "pairing" || family === "signatures" || family === "admin") return this.accounts !== undefined;
     if (family === "changes") return this.library.families.has("library") && this.library.journal() !== undefined;
@@ -980,13 +1111,14 @@ export class LanternApp {
 
   /** The platforms the server has something for (SPEC.md § 4.2). */
   async platforms(): Promise<string[]> {
-    if (this.fixedPlatforms !== undefined) return [...new Set(this.fixedPlatforms)].sort();
+    if (this.fixedPlatforms !== undefined) return [...new Set(this.fixedPlatforms)].filter((p) => p !== "web").sort();
     const found = new Set<string>();
     const lib = this.library;
     if (lib.families.has("library")) for (const a of await lib.apps()) found.add(a.platform);
     if (lib.families.has("titles")) for (const t of await lib.titles([])) found.add(t.platform);
     if (lib.families.has("homebrew")) for (const h of await lib.homebrew([])) found.add(h.platform);
     if (lib.families.has("cheats")) for (const c of await lib.cheats()) found.add(c.platform);
+    found.delete("web"); // a browser has nothing to install (Annex A.7, L-A.7-1)
     return [...found].sort();
   }
 
@@ -1224,29 +1356,33 @@ export class LanternApp {
 
   // Grants (SPEC.md § 19.3).
 
-  async hGrant(request: ServerRequest, account: Account, args: string[]): Promise<ServerResponse> {
-    const sha = args[0] ?? "";
-    if (!SHA256_HEX.test(sha)) throw notFound("No such file on this server.");
+  /**
+   * The size of the app's or homebrew package's file of this SHA-256 that the caller may read (of its platform,
+   * within its rating cap: SPEC.md § 5.6); undefined as for a file the server does not have.
+   */
+  async #visibleFile(request: ServerRequest, account: Account, sha: string): Promise<number | undefined> {
+    if (!SHA256_HEX.test(sha)) return undefined;
     const platform = platformOf(request);
     const hide = await this.hides(account);
-    let size: number | undefined;
     for (const a of await this.library.apps()) {
-      if (a.sha256 === sha && (platform === undefined || a.platform === platform) && !hide(a.platform, a.title_id)) {
-        size = a.size;
-        break;
-      }
+      if (a.sha256 === sha && (platform === undefined || a.platform === platform) && !hide(a.platform, a.title_id))
+        return a.size;
     }
-    if (size === undefined && this.library.families.has("homebrew")) {
+    if (this.library.families.has("homebrew")) {
       for (const e of await this.library.homebrew(request.languages)) {
         if ((platform !== undefined && e.platform !== platform) || ratings.hidden(e.ratings, account.ratingCap))
           continue;
         const p = [e.package, ...(e.packages ?? [])].find((x) => x.sha256 === sha);
-        if (p !== undefined) {
-          size = p.size;
-          break;
-        }
+        if (p !== undefined) return p.size;
       }
     }
+    return undefined;
+  }
+
+  async hGrant(request: ServerRequest, account: Account, args: string[]): Promise<ServerResponse> {
+    const sha = args[0] ?? "";
+    if (!SHA256_HEX.test(sha)) throw notFound("No such file on this server.");
+    const size = await this.#visibleFile(request, account, sha);
     if (size === undefined) throw notFound("No such file on this server, or not for this caller.");
     const key = await (this.#grantKey as Promise<ed25519.KeyPair>);
     const exp = Math.trunc(Date.now() / 1000) + this.grantLifetime;
@@ -1261,6 +1397,22 @@ export class LanternApp {
     response.headers.set("Cache-Control", "no-store");
     response.headers.delete("ETag");
     return response;
+  }
+
+  // Differential updates (SPEC.md § 22).
+
+  /**
+   * The chunk index of a file the caller may read, its bytes as kept: those whose size and SHA-256 its app's or
+   * package's `chunks` gives (SPEC.md § 22.1, L-22.1-2). 404 for any other, as for a file the server does not have.
+   */
+  async hChunks(request: ServerRequest, account: Account, args: string[]): Promise<ServerResponse> {
+    const sha = args[0] ?? "";
+    if (!SHA256_HEX.test(sha)) throw notFound("A file is named by its SHA-256, lower-case hex.");
+    if ((await this.#visibleFile(request, account, sha)) === undefined)
+      throw notFound("No such file on this server, or not for this caller.");
+    const raw = await (this.library.chunks as NonNullable<Library["chunks"]>)(sha);
+    if (raw === undefined) throw notFound("This file has no chunk index: read it whole.");
+    return jsonResponse(request, undefined, 200, raw);
   }
 
   // Sync (SPEC.md § 20).
@@ -1909,6 +2061,7 @@ export class LanternApp {
     if (request.method === "HEAD") {
       const response = answer(204, upload.offset);
       response.headers.set("Upload-Length", String(upload.size));
+      response.headers.set("Lantern-Chunk-Size", String(this.saveChunk)); // the upload's chunk_size (L-9.3-3)
       return response;
     }
     if (request.method === "DELETE") {

@@ -156,6 +156,60 @@ class FileHandler final : public ResponseHandler
     std::optional<Error> error_;
 };
 
+// The bytes of one range of a file, from a source that streams from an
+// offset to the file's end: kept for the assembler, and the transfer stopped
+// once the range is read (L-22.3-3).
+class WindowSink final : public DownloadSink
+{
+  public:
+    WindowSink(DeltaAssembler& assembler, const ByteRange& range) noexcept
+        : assembler_(assembler)
+        , range_(range)
+        , position_(range.first)
+    {
+    }
+
+    Result<void> write(std::span<const std::byte> bytes) override
+    {
+        if (done_)
+            return fail(Category::limit, "the range is read");
+        const std::uint64_t end = position_ + bytes.size();
+        if (end > range_.first)
+        {
+            const std::uint64_t from = std::max(position_, range_.first);
+            const std::uint64_t to   = std::min(end, range_.last + 1);
+            const auto skip          = static_cast<std::size_t>(from - position_);
+            const auto count         = static_cast<std::size_t>(to - from);
+            if (auto fed = assembler_.feed(bytes.subspan(skip, count)); !fed)
+                return fed;
+            fed_ += count;
+            done_ = to == range_.last + 1;
+        }
+        position_ = end;
+        if (done_)
+            return fail(Category::limit, "the range is read");
+        return {};
+    }
+
+    // The source sends the file from its start (it cannot start at an offset).
+    Result<void> restart() override
+    {
+        if (fed_ != 0)
+            return fail(Category::invalid_response, "a source that starts again in the middle of a range");
+        position_ = 0;
+        return {};
+    }
+
+    [[nodiscard]] bool done() const noexcept { return done_; }
+
+  private:
+    DeltaAssembler& assembler_;
+    ByteRange range_;
+    std::uint64_t position_;
+    std::uint64_t fed_ = 0;
+    bool done_         = false;
+};
+
 // Percent-encodes what a path may hold that a request line may not.
 void append_path(String& url, std::string_view path)
 {
@@ -341,7 +395,8 @@ Read<StaticLibrary> StaticLibrary::open(StaticFiles& files, const DecodeOptions&
 
 Result<void> StaticLibrary::platform_ok(std::string_view platform) const
 {
-    if (!is_platform_name(platform)
+    // `web` has nothing to install and is never served (Annex A.7)
+    if (!is_served_platform(platform)
         || std::ranges::find(handshake_.platforms, platform) == handshake_.platforms.end())
         return fail(Category::usage, "a platform the static library does not have (SPEC.md 21.1)");
     return {};
@@ -550,6 +605,68 @@ Result<String> StaticLibrary::cheat_text(const CheatSet& set)
     return String(sink.text(), allocator_);
 }
 
+Read<ChunkIndex> StaticLibrary::chunk_index(const AppChunks& chunks, const DownloadTarget& target)
+{
+    if (chunks.size == 0 || chunks.size > chunk_index_limit)
+        return fail(Category::limit, "a chunk index of 0 bytes or above 8 MiB (SPEC.md 13)");
+    if (!is_static_path(chunks.url))
+        return fail(Category::invalid_response, "a chunk index that is not relative to the root (L-21.1-2)");
+    // Never more than `chunks` says (L-22.3-1)
+    MemorySink sink(static_cast<std::size_t>(chunks.size), allocator_);
+    if (auto done = files_->read(chunks.url, 0, sink); !done)
+        return std::unexpected(done.error());
+    return read_chunk_index(sink.text(), &chunks, target.sha256, target.size, allocator_);
+}
+
+Result<DeltaReport> StaticLibrary::download_with_seeds(const DownloadTarget& target, const AppChunks& chunks,
+    std::span<const Seed> seeds, DownloadSink& sink, std::uint64_t gap)
+{
+    // L-22.3-4: whatever goes wrong, the file is read whole
+    const auto whole = [&]() -> Result<DeltaReport>
+    {
+        if (auto dropped = sink.restart(); !dropped)
+            return std::unexpected(dropped.error());
+        DownloadState state;
+        if (auto done = download(target, state, sink); !done)
+            return std::unexpected(done.error());
+        DeltaReport report;
+        report.whole_file = true;
+        return report;
+    };
+    if (!is_static_path(target.url))
+        return fail(Category::invalid_response, "a file that is not relative to the root (L-21.1-2)");
+    const auto index = chunk_index(chunks, target);
+    if (!index || !*index)
+        return whole();
+    const ChunkIndex& read = **index;
+    if (read.size != target.size || !same_digest(read.sha256, target.sha256))
+        return whole();
+    const auto plan = plan_delta(read, seeds, allocator_);
+    if (!plan || plan->seeded == 0)
+        return whole();
+    DeltaAssembler assembler(read, *plan, seeds, sink, allocator_);
+    if (auto started = assembler.start(); !started)
+        return whole();
+    DeltaReport report;
+    for (const ByteRange& range : delta_ranges(*plan, gap, allocator_))
+    {
+        if (auto begun = assembler.begin_range(range); !begun)
+            return whole();
+        WindowSink window(assembler, range);
+        ++report.requests;
+        const auto read_it = files_->read(target.url, range.first, window);
+        if (!window.done() || (!read_it && read_it.error().category() != Category::limit))
+            return whole();
+        if (auto ended = assembler.end_range(); !ended)
+            return whole();
+    }
+    if (auto finished = assembler.finish(); !finished)
+        return whole();
+    report.from_seeds  = assembler.from_seeds();
+    report.from_ranges = assembler.from_ranges();
+    return report;
+}
+
 Result<void> StaticLibrary::download(const DownloadTarget& target, DownloadState& state, DownloadSink& sink)
 {
     if (!is_static_path(target.url))
@@ -734,6 +851,68 @@ Result<Vector<Homebrew>> StaticLibrary::homebrew_updates(
         cursor.assign((*page)->next);
     }
     return out;
+}
+
+namespace
+{
+
+// A document of the address that reads as a handshake of schema 1, or nothing.
+std::optional<Handshake> read_hello(
+    HttpStaticFiles& files, std::string_view path, const DecodeOptions& options)
+{
+    MemorySink sink(std::size_t { 1 } << 20U, options.memory);
+    if (!files.read(path, 0, sink))
+        return std::nullopt;
+    auto read = read_handshake(sink.text(), options);
+    if (!read || !*read)
+        return std::nullopt;
+    return Handshake(std::move(**read), options.memory);
+}
+
+} // namespace
+
+Result<std::optional<FoundLibrary>> find_library(
+    Transport& transport, std::string_view address, std::string_view user_agent, const DecodeOptions& options)
+{
+    const auto parts = split_url(address);
+    if (!parts)
+        return std::unexpected(parts.error());
+    if (auto scheme = check_scheme(*parts); !scheme)
+        return std::unexpected(scheme.error());
+    const Allocator allocator(options.memory);
+    // The origin's /.well-known/lantern: a server's handshake, not a static library's
+    String origin(parts->scheme, allocator);
+    origin.append("://");
+    origin.append(parts->authority);
+    String origin_root(origin, allocator);
+    origin_root.push_back('/');
+    auto at_origin = HttpStaticFiles::create(transport, origin_root, user_agent, allocator);
+    if (!at_origin)
+        return std::unexpected(at_origin.error());
+    if (auto hello = read_hello(*at_origin, ".well-known/lantern", options); hello && !hello->static_)
+    {
+        FoundLibrary found(allocator);
+        found.kind      = LibraryKind::server;
+        found.root      = std::move(origin);
+        found.handshake = std::move(*hello);
+        return std::optional<FoundLibrary>(std::move(found));
+    }
+    // Then <address>/lantern.json: a static library's handshake
+    String root(address, allocator);
+    if (!root.ends_with('/'))
+        root.push_back('/');
+    auto at_root = HttpStaticFiles::create(transport, root, user_agent, allocator);
+    if (!at_root)
+        return std::unexpected(at_root.error());
+    if (auto hello = read_hello(*at_root, "lantern.json", options); hello && hello->static_)
+    {
+        FoundLibrary found(allocator);
+        found.kind      = LibraryKind::static_library;
+        found.root      = std::move(root);
+        found.handshake = std::move(*hello);
+        return std::optional<FoundLibrary>(std::move(found));
+    }
+    return std::optional<FoundLibrary> {};
 }
 
 } // namespace lantern

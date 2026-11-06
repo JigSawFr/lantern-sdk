@@ -10,10 +10,13 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { toBase64Url } from "../bytes.ts";
+import * as chunks from "../chunks.ts";
 import type {
   App,
   CheatSet,
+  ChunksRef,
   Homebrew,
   ManifestEntry,
   Package,
@@ -24,6 +27,7 @@ import type {
 } from "../generated/models.ts";
 import * as hb from "../homebrew.ts";
 import { CHEAT_SET } from "../limits.ts";
+import { nodeSha256 } from "../node/hash.ts";
 import { profile, singleFilePath } from "../profiles.ts";
 import { definition } from "../schema.ts";
 import { utc } from "./accounts.ts";
@@ -33,7 +37,11 @@ import type { ServerRequest } from "./http.ts";
 import { readZip } from "./zip.ts";
 
 /** The families a Library may offer, beyond `changes` (which needs a Journal). */
-export const LIBRARY_FAMILIES = ["library", "titles", "sections", "homebrew", "cheats"] as const;
+export const LIBRARY_FAMILIES = ["library", "titles", "sections", "homebrew", "cheats", "deltas"] as const;
+
+/** The sizes of the files cut into chunks by default (SPEC.md § 22.1): a smaller one gains nothing, a larger one takes long to cut. */
+export const DELTAS_MIN = 128 << 10;
+export const DELTAS_MAX = 64 << 20;
 
 /**
  * The caller, as `authenticate` (or the server's Accounts) resolves it: its
@@ -110,6 +118,13 @@ export interface Library {
   deleteCheat?(cheatId: string): Maybe<boolean>;
   /** The file of <base>/v1/files/{fileId}: an app's or a homebrew package's. */
   file(fileId: string): Maybe<FileRef | undefined>;
+  /**
+   * The chunk index of the file whose SHA-256 is `sha256`, its canonical bytes as the app's or package's `chunks`
+   * gives their size and SHA-256 (SPEC.md § 22.1); undefined for a file with none. Optional: with it and the
+   * family `deltas` among `families`, the toolkit serves `<base>/v1/chunks/sha256/{hex}` and offers `features.deltas`.
+   * chunkReference() makes the `chunks` of a document.
+   */
+  chunks?(sha256: string): Maybe<Uint8Array | undefined>;
   /** A cheat set's text. */
   cheatFile(cheatId: string): Maybe<FileRef | undefined>;
   /** The change journal, or undefined: the family `changes` is then not offered. */
@@ -209,10 +224,59 @@ export class MemoryLibrary implements Library, Journal {
   readonly #journal: MemoryJournal | undefined;
   readonly #listeners: ((changes: LibraryChange[]) => void)[] = [];
 
-  constructor(options: { base?: string; families?: Iterable<string>; journal?: boolean } = {}) {
+  /**
+   * `deltas`: the sizes of the files cut into chunks, `min` to `max` bytes (128 KiB to 64 MiB by default), each
+   * one's index made once, by its SHA-256 (SPEC.md § 22); `false`: no file is, and the family is not offered.
+   */
+  constructor(
+    options: {
+      base?: string;
+      families?: Iterable<string>;
+      journal?: boolean;
+      deltas?: false | { min?: number; max?: number };
+    } = {},
+  ) {
     this.base = (options.base ?? "/api/lantern").replace(/\/+$/, "");
-    this.families = new Set(options.families ?? LIBRARY_FAMILIES);
+    this.#deltas = options.deltas === false ? undefined : { min: DELTAS_MIN, max: DELTAS_MAX, ...options.deltas };
+    const families = new Set(options.families ?? LIBRARY_FAMILIES);
+    if (this.#deltas === undefined) families.delete("deltas");
+    this.families = families;
     this.#journal = options.journal === false ? undefined : new MemoryJournal();
+  }
+
+  readonly #deltas: { min: number; max: number } | undefined;
+  readonly #indexes = new Map<string, Uint8Array>();
+
+  /**
+   * A file's `chunks` (SPEC.md § 22.1): its index made once and kept by the file's SHA-256, its reference to put in
+   * the app's or package's document; undefined for a file this library does not cut (too small to gain, too large
+   * for a scan, past the chunker's limits, or whose bytes are not at hand).
+   */
+  chunkReference(file: FileRef): ChunksRef | undefined {
+    const limits = this.#deltas;
+    if (limits === undefined || file.size < limits.min || file.size > limits.max) return undefined;
+    if (chunks.chunkSizeFor(file.size) === undefined) return undefined;
+    let raw = this.#indexes.get(file.sha256);
+    if (raw === undefined) {
+      let data = file.data;
+      if (data === undefined) {
+        try {
+          data = readFileSync(file.path);
+        } catch {
+          return undefined;
+        }
+      }
+      if (data.length !== file.size) return undefined;
+      const made = chunks.chunkIndex(data, undefined, { hash: nodeSha256 });
+      if (made.document.sha256 !== file.sha256) return undefined; // not the bytes it says: no index
+      raw = made.bytes;
+      this.#indexes.set(file.sha256, raw);
+    }
+    return chunks.chunksRef(`${this.base}/v1/chunks/sha256/${file.sha256}`, raw, { hash: nodeSha256 });
+  }
+
+  chunks(sha256: string): Uint8Array | undefined {
+    return this.#indexes.get(sha256);
   }
 
   subscribe(listener: (changes: LibraryChange[]) => void): void {
@@ -242,6 +306,9 @@ export class MemoryLibrary implements Library, Journal {
       if (file.size !== app.size || file.sha256 !== app.sha256)
         throw new RangeError(`app ${app.id}: its size and sha256 are not its file's`);
       app.file = this.addFile(file);
+      const chunked = this.chunkReference(file);
+      if (chunked !== undefined) app.chunks = chunked;
+      else delete app.chunks;
     }
     const problems = definition("app", app);
     if (problems.length > 0) throw new RangeError(`app ${app.id}: ${problems.slice(0, 3).join("; ")}`);
@@ -304,6 +371,9 @@ export class MemoryLibrary implements Library, Journal {
         if (file.size !== p.size || file.sha256 !== p.sha256)
           throw new RangeError(`homebrew ${entry.id}: ${p.file} is not its package's file`);
         p.file = this.addFile(file);
+        const chunked = this.chunkReference(file);
+        if (chunked !== undefined) p.chunks = chunked;
+        else delete p.chunks;
       }
     }
     delete (entry as { schema?: number }).schema;

@@ -11,12 +11,13 @@
  */
 
 import { createReadStream } from "node:fs";
-import { copyFile, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, open, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { DocumentError, SCHEMA } from "../base.ts";
 import type { LanternClient } from "../client/client.ts";
-import type { App, CheatSet, Homebrew, Image, Package, Title } from "../generated/models.ts";
+import type { App, CheatSet, ChunksRef, Homebrew, Image, Package, Title } from "../generated/models.ts";
 import type { Library } from "../server/library.ts";
+import { sha256Hex } from "../sha256.ts";
 import { HANDSHAKE, layoutPath, relativeOk, type StaticSource } from "../static.ts";
 import { FAMILIES } from "../vocabulary.ts";
 import { FileSink, sha256File } from "./index.ts";
@@ -61,6 +62,23 @@ export class FileStaticSource implements StaticSource {
     if (path === undefined || !(await stat(path)).isFile()) return undefined;
     return createReadStream(path) as AsyncIterable<Uint8Array>;
   }
+
+  async range(rel: string, start: number, end: number): Promise<Uint8Array | undefined> {
+    const path = await this.#path(rel);
+    if (path === undefined) return undefined;
+    const info = await stat(path);
+    if (!info.isFile()) return undefined;
+    if (start < 0 || end < start || end >= info.size) throw new DocumentError(`${rel}: no bytes ${start}-${end}`);
+    const file = await open(path, "r");
+    try {
+      const out = new Uint8Array(end - start + 1);
+      const { bytesRead } = await file.read(out, 0, out.length, start);
+      if (bytesRead !== out.length) throw new DocumentError(`${rel}: a short read`);
+      return out;
+    } finally {
+      await file.close();
+    }
+  }
 }
 
 /** What a static library is written from: documents, and a way to copy each file, checked. */
@@ -78,6 +96,11 @@ export interface StaticInput {
   copy(doc: { file: string; sha256: string; size: number }, dest: string): Promise<void>;
   /** Writes a cheat set's text to `dest`. */
   cheatText(cheat: CheatSet, dest: string): Promise<void>;
+  /**
+   * The canonical bytes of the chunk index an app or a package carries (SPEC.md § 22.1): those whose size and
+   * SHA-256 its `chunks` gives. Optional: a file whose index is not at hand is written without `chunks`.
+   */
+  chunkIndex?(doc: { sha256: string; chunks: ChunksRef }): Promise<Uint8Array | undefined>;
 }
 
 const fold = (text: string | undefined): string => (text ?? "").toLowerCase();
@@ -127,6 +150,7 @@ export class StaticWriter {
   #documents = 0;
   #files = 0;
   #written = new Set<string>();
+  #indexes = new Set<string>();
 
   constructor(out: string, options: { pageSize?: number; language?: string } = {}) {
     const size = options.pageSize ?? 100;
@@ -155,7 +179,37 @@ export class StaticWriter {
     return rel;
   }
 
-  async write(input: StaticInput): Promise<{ documents: number; files: number; platforms: string[] }> {
+  /**
+   * `doc`'s file and chunk index at their paths (SPEC.md § 22.1, § 21.1): the index is written once, by its file's
+   * SHA-256, as it is kept (its bytes are those `chunks` gives the size and SHA-256 of); `chunks` is left out when
+   * the index is not at hand or is not what `chunks` says.
+   */
+  async #file<T extends { file: string; sha256: string; size: number; chunks?: ChunksRef }>(
+    doc: T,
+    input: StaticInput,
+  ): Promise<T> {
+    const out: T = { ...doc, file: await this.#blob(doc, input) };
+    const ref = doc.chunks;
+    if (ref === undefined) return out;
+    let raw: Uint8Array | undefined;
+    if (!this.#indexes.has(doc.sha256)) {
+      raw = await input.chunkIndex?.({ sha256: doc.sha256, chunks: ref });
+      if (raw !== undefined && (raw.length !== ref.size || sha256Hex(raw) !== ref.sha256)) raw = undefined;
+      if (raw === undefined) {
+        delete out.chunks;
+        return out;
+      }
+      const rel = layoutPath("chunks", { id: doc.sha256 });
+      const target = join(this.out, ...rel.split("/"));
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, raw);
+      this.#indexes.add(doc.sha256);
+    }
+    out.chunks = { ...ref, url: layoutPath("chunks", { id: doc.sha256 }) };
+    return out;
+  }
+
+  async write(input: StaticInput): Promise<{ documents: number; files: number; indexes: number; platforms: string[] }> {
     await mkdir(this.out, { recursive: true });
     await rm(join(this.out, "v1"), { recursive: true, force: true }); // the earlier export's: replaced whole
     const platforms = [...new Set(input.platforms)].sort();
@@ -167,7 +221,7 @@ export class StaticWriter {
       const docs: App[] = [];
       for (const a of apps) {
         const { schema: _s, ...rest } = a as App & { schema?: number };
-        docs.push({ ...rest, file: await this.#blob(a, input) });
+        docs.push(await this.#file(rest as App, input));
       }
       const appPages = pages(docs, this.pageSize);
       for (const [i, chunk] of appPages.entries()) {
@@ -200,7 +254,12 @@ export class StaticWriter {
       for (const e of entries) {
         const { schema: _s, ...rest } = e as Homebrew & { schema?: number };
         const full: Homebrew = structuredClone(rest);
-        for (const pkg of [full.package, ...(full.packages ?? [])]) pkg.file = await this.#blob(pkg, input);
+        full.package = await this.#file(full.package, input);
+        if (full.packages !== undefined) {
+          const made: Package[] = [];
+          for (const pkg of full.packages) made.push(await this.#file(pkg, input));
+          full.packages = made;
+        }
         await this.#put(layoutPath("entry", { platform: p, id: e.id }), { schema: SCHEMA, ...full });
         const strip = (pkg: Package): Package => {
           const { manifest: _m, ...out } = pkg;
@@ -244,7 +303,13 @@ export class StaticWriter {
     }
     const features: Record<string, number> = {};
     for (const f of FAMILIES) features[f] = 0;
-    Object.assign(features, { library: 1, titles: 1, homebrew: 1, cheats: byTitle.size > 0 ? 1 : 0 });
+    Object.assign(features, {
+      library: 1,
+      titles: 1,
+      homebrew: 1,
+      cheats: byTitle.size > 0 ? 1 : 0,
+      deltas: this.#indexes.size > 0 ? 1 : 0,
+    });
     const generated = `${new Date().toISOString().slice(0, 19)}Z`;
     const hello: Record<string, unknown> = { schema: SCHEMA, uid: input.uid, name: input.name };
     if (input.software !== undefined) hello["software"] = input.software;
@@ -263,7 +328,7 @@ export class StaticWriter {
     await writeFile(temp, JSON.stringify(hello));
     await rename(temp, join(this.out, HANDSHAKE));
     this.#documents++;
-    return { documents: this.#documents, files: this.#files, platforms };
+    return { documents: this.#documents, files: this.#files, indexes: this.#indexes.size, platforms };
   }
 }
 
@@ -272,7 +337,7 @@ export function writeStatic(
   input: StaticInput,
   out: string,
   options: { pageSize?: number; language?: string } = {},
-): Promise<{ documents: number; files: number; platforms: string[] }> {
+): Promise<{ documents: number; files: number; indexes: number; platforms: string[] }> {
   return new StaticWriter(out, options).write(input);
 }
 
@@ -313,6 +378,7 @@ export async function libraryInput(
       if (ref === undefined) throw new DocumentError(`cheat set ${cheat.id}: no text`);
       await write(ref, dest);
     },
+    chunkIndex: async (doc) => (has("deltas") ? library.chunks?.(doc.sha256) : undefined),
   };
   if (options.software !== undefined) input.software = options.software;
   return input;
@@ -364,6 +430,13 @@ export async function clientInput(client: LanternClient & { downloadToFile?: unk
     copy: fetchTo,
     async cheatText(cheat, dest) {
       await writeFile(dest, await client.cheatText(cheat));
+    },
+    // The index as the server serves it, checked (SPEC.md § 22.3): one it cannot use is left out.
+    chunkIndex: async (doc) => {
+      const file = [...apps, ...homebrew.flatMap((e) => [e.package, ...(e.packages ?? [])])].find(
+        (x) => x.sha256 === doc.sha256,
+      );
+      return file === undefined || !offers("deltas") ? undefined : client.chunkIndexBytes(file);
     },
   };
   const { name, version } = hello.software ?? {};

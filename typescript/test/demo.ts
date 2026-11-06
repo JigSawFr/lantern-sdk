@@ -51,6 +51,8 @@ export const EVERY_SCOPE = [
 export const GRANT_SEED = new Uint8Array(createHash("sha256").update("Demo shelf's fictional grant key").digest());
 const AUTHOR_SEED = new Uint8Array(createHash("sha256").update("Mira's fictional signing key").digest()); // for the demo only
 const BASE = "/api/lantern";
+/** The one origin whose pages may read the demo (SPEC.md § 2.5); the suite's --origin. */
+export const DEMO_ORIGIN = "https://app.example.org";
 
 /** `size` bytes, the same each run, that are no real game's. */
 export function blob(label: string, size: number): Uint8Array {
@@ -78,7 +80,42 @@ async function sign(entry: Homebrew): Promise<void> {
   for (const p of entry.packages ?? []) p.signature = await signature(p);
 }
 
-export async function buildLibrary(): Promise<MemoryLibrary> {
+/**
+ * Two versions of one update, big enough to carry chunk indexes (SPEC.md § 22), and their title: the second is the
+ * first with 777 bytes inserted and 10,000 removed, which lantern-cdc-1 finds again in its chunks. Not in the
+ * default library, whose counts many tests rely on; the conformance runs and `node test/demo.ts` add them.
+ */
+export function addDeltaApps(lib: MemoryLibrary): void {
+  const ferry = blob("ferry-v1", 600000);
+  const newer = new Uint8Array(ferry.length + 777 - 10000);
+  newer.set(ferry.subarray(0, 200000));
+  newer.set(blob("ferry-insert", 777), 200000);
+  newer.set(ferry.subarray(200000, 400000), 200777);
+  newer.set(ferry.subarray(410000), 400777);
+  [ferry, newer].forEach((data, i) => {
+    lib.addAppFile({
+      data,
+      platform: "switch",
+      title_id: "0100AB1200020000",
+      app_id: "0100AB1200020800",
+      type: "update",
+      version_code: 65536 * (i + 1),
+      version_name: `1.${i}.0`,
+      name: "Lumen Drift: Ferry Pack",
+      format: "nsz",
+      added: `2026-10-${String(18 + i).padStart(2, "0")}T12:00:00Z`,
+    });
+  });
+  lib.addTitle({
+    platform: "switch",
+    title_id: "0100AB1200020000",
+    name: "Lumen Drift: Ferry Pack",
+    release: "2026-10-18",
+    genres: ["adventure"],
+  });
+}
+
+export async function buildLibrary(extras: { deltas?: boolean } = {}): Promise<MemoryLibrary> {
   const lib = new MemoryLibrary({ base: BASE });
   // Switch games: a base, two updates and an add-on; a second game; an Android app.
   const games: [string, string, string, string, number, string | undefined, string, number][] = [
@@ -162,6 +199,7 @@ export async function buildLibrary(): Promise<MemoryLibrary> {
   lib.addSection({ id: "new", title: "New", apps: [appIds[6] ?? "", appIds[4] ?? "", android.id] });
   lib.addSection({ id: "together", title: "Play together", apps: [appIds[0] ?? ""] });
   await addHomebrew(lib);
+  if (extras.deltas) addDeltaApps(lib);
   lib.addCheat({
     platform: "switch",
     title_id: "0100AB1200010000",
@@ -395,8 +433,11 @@ export async function demoAccounts(): Promise<MemoryAccounts> {
   return accounts;
 }
 
-export async function makeLantern(options: Partial<LanternAppOptions> = {}): Promise<LanternApp> {
-  return new LanternApp(await buildLibrary(), {
+export async function makeLantern(
+  options: Partial<LanternAppOptions> = {},
+  extras: { deltas?: boolean } = {},
+): Promise<LanternApp> {
+  return new LanternApp(await buildLibrary(extras), {
     uid: UID,
     name: "Demo shelf",
     base: BASE,
@@ -408,6 +449,7 @@ export async function makeLantern(options: Partial<LanternAppOptions> = {}): Pro
     sync: true,
     saves: true,
     requests: true,
+    corsOrigins: [DEMO_ORIGIN],
     ...options,
   });
 }
@@ -417,7 +459,7 @@ async function main(): Promise<void> {
     options: { port: { type: "string", default: "8080" }, "key-file": { type: "string" } },
   });
   if (values["key-file"] !== undefined) writeFileSync(values["key-file"], `${bytes.toBase64(DEMO_SEED)}\n`);
-  const app = await makeLantern();
+  const app = await makeLantern({}, { deltas: true });
   const served = await listen(app, { port: Number(values.port) });
   console.warn(`demo: ${served.url}; token ${DEMO_TOKEN}, bound to its key`);
   process.stdout.write(`${JSON.stringify({ url: served.url, token: DEMO_TOKEN })}\n`);

@@ -199,7 +199,7 @@ LANTERN_API const lantern_handshake* lantern_client_server(const lantern_client*
 
 LANTERN_API uint64_t lantern_client_offers(const lantern_client* client, lantern_family family)
 {
-    if (client == nullptr || family < LANTERN_FAMILY_LIBRARY || family > LANTERN_FAMILY_ENCRYPTED_SAVES)
+    if (client == nullptr || family < LANTERN_FAMILY_LIBRARY || family > LANTERN_FAMILY_DELTAS)
         return 0;
     return client->client.offers(static_cast<lantern::Family>(family));
 }

@@ -4,7 +4,8 @@ LanternClient, awaited."""
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterable, Sequence
+from contextlib import aclosing
 from pathlib import Path
 from typing import BinaryIO, TypeVar
 from urllib.parse import quote
@@ -50,13 +51,17 @@ from lantern._generated.models import (
     UploadRequest,
 )
 from lantern._generated.models import Homebrew as HomebrewEntry
+from lantern.canonical import canonical
+from lantern.chunks import INDEX_LIMIT, Collector, Index, Piece, Refused, Seed, UnusableIndex, read_index
 from lantern.client.auth import DeviceSigner, Pairing, check_pairing_code
 from lantern.client.core import (
     ERROR_BODY,
     JSON_DOCUMENT,
+    RESUME_CHUNK,
     USER_AGENT,
     Call,
     ClientCore,
+    UploadState,
     chunked,
     events_of,
     item_of,
@@ -65,6 +70,7 @@ from lantern.client.core import (
     retry_signature,
     token_record,
 )
+from lantern.client.delta import Assembly, DeltaReport, NothingShared, check_range, range_headers
 from lantern.client.download import Verifier
 from lantern.client.streams import AsyncEventStream
 from lantern.client.transport import (
@@ -156,6 +162,8 @@ class AsyncLanternClient:
         self._own_side_transports: list[AsyncTransport] = []
         self.timeout = timeout
         self.last_upload: str | None = None
+        #: What the last download_delta() did: a differential update, or why the whole file was read.
+        self.last_delta: DeltaReport | None = None
         self.last_header: bytes | None = None
         #: What the user agreed to sync with this server (SPEC.md § 20.1): no call of /v1/sync without it.
         self.sync_consent: syncing.SyncConsent | None = None
@@ -595,8 +603,9 @@ class AsyncLanternClient:
             upload = await self._send(self.core.upload_open(title_id, request, platform))
             address, chunk_size, offset = upload.upload, upload.chunk_size, upload.offset
         else:
-            address, chunk_size = resume, 1 << 20
-            offset, _ = await self._send(self.core.upload_state(resume))
+            address = resume
+            state = await self._send(self.core.upload_state(resume))  # Lantern-Chunk-Size (L-9.3-3)
+            offset, chunk_size = state.offset, state.chunk_size or RESUME_CHUNK
         if chunk_size < 1:
             raise UnexpectedResponse("upload: a chunk_size under 1")
         self.last_upload = address
@@ -682,8 +691,9 @@ class AsyncLanternClient:
             upload = await self._send(self.core.upload_open(title_id, request, platform))
             address, chunk_size, offset = upload.upload, upload.chunk_size, upload.offset
         else:
-            address, chunk_size = resume, 1 << 20
-            offset, _ = await self._send(self.core.upload_state(resume))
+            address = resume
+            state = await self._send(self.core.upload_state(resume))  # Lantern-Chunk-Size (L-9.3-3)
+            offset, chunk_size = state.offset, state.chunk_size or RESUME_CHUNK
         if chunk_size < 1:
             raise UnexpectedResponse("upload: a chunk_size under 1")
         self.last_upload, self.last_header = address, header
@@ -716,6 +726,11 @@ class AsyncLanternClient:
             sealed.unlink(missing_ok=True)
 
     async def upload_offset(self, upload: str) -> tuple[int, int | None]:
+        state = await self._send(self.core.upload_state(upload))
+        return state.offset, state.length
+
+    async def upload_state(self, upload: str) -> UploadState:
+        """LanternClient.upload_state(), awaited."""
         return await self._send(self.core.upload_state(upload))
 
     async def abandon_upload(self, upload: str) -> None:
@@ -958,22 +973,10 @@ class AsyncLanternClient:
             return target
         raise LanternError(f"{url}: the download could not be resumed")
 
-    async def download_from(
-        self,
-        file: App | Package,
-        dest: str | Path,
-        *,
-        mirrors: bool = True,
-        peers: Sequence[FoundPeer] = (),
-        platform: str | None = None,
-        progress: Progress | None = None,
-    ) -> Path:
-        """LanternClient.download_from(), awaited: an app's or a package's file from its mirrors and from
-        peers first, then from the server (SPEC.md § 19), checked by the size and SHA-256 of the server's
-        document before it is kept (L-19.1-1); a source that gives more, or bytes that fail the check, is
-        left for the next (L-19.1-3). No token, signature or cookie goes to a mirror or a peer; a peer gets
-        a grant, asked for once (L-19.1-2). Plain HTTP only to a private network's address (L-19.2-1,
-        L-19.4-6); at most 2 peers are tried (L-19.5-2)."""
+    async def _sources(
+        self, file: App | Package, mirrors: bool, peers: Sequence[FoundPeer], platform: str | None
+    ) -> list[tuple[str, bool, dict[str, str]]]:
+        """LanternClient._sources(), awaited: (url, from a peer, headers) of the mirrors, then the peers."""
         sources: list[tuple[str, bool, dict[str, str]]] = []
         if mirrors:
             for m in (file.mirrors or [])[:8]:
@@ -992,7 +995,25 @@ class AsyncLanternClient:
                     url = peer.blob_url(file.sha256)
                     if plain_http_to(url):
                         sources.append((url, True, {"Lantern-Grant": grant.grant}))
-        for url, from_peer, headers in sources:
+        return sources
+
+    async def download_from(
+        self,
+        file: App | Package,
+        dest: str | Path,
+        *,
+        mirrors: bool = True,
+        peers: Sequence[FoundPeer] = (),
+        platform: str | None = None,
+        progress: Progress | None = None,
+    ) -> Path:
+        """LanternClient.download_from(), awaited: an app's or a package's file from its mirrors and from
+        peers first, then from the server (SPEC.md § 19), checked by the size and SHA-256 of the server's
+        document before it is kept (L-19.1-1); a source that gives more, or bytes that fail the check, is
+        left for the next (L-19.1-3). No token, signature or cookie goes to a mirror or a peer; a peer gets
+        a grant, asked for once (L-19.1-2). Plain HTTP only to a private network's address (L-19.2-1,
+        L-19.4-6); at most 2 peers are tried (L-19.5-2)."""
+        for url, from_peer, headers in await self._sources(file, mirrors, peers, platform):
             try:
                 return await self._download_source(
                     url,
@@ -1006,6 +1027,183 @@ class AsyncLanternClient:
             except (IntegrityError, TransportError, UnexpectedResponse, DocumentError, ProblemError):
                 continue
         return await self.download(file.file, dest, sha256=file.sha256, size=file.size, resume=False, progress=progress)
+
+    # Differential updates (SPEC.md § 22).
+
+    async def chunk_index(self, file: App | Package) -> Index:
+        """LanternClient.chunk_index(), awaited."""
+        ref = file.chunks
+        if ref is None:
+            raise UnusableIndex("the document gives no chunk index for this file")
+        if not 0 < ref.size <= INDEX_LIMIT:
+            raise UnusableIndex(f"a chunk index of {ref.size} bytes")
+        try:
+            raw = await self.fetch(ref.url, sha256=ref.sha256, size=ref.size)
+        except IntegrityError as e:
+            raise UnusableIndex(str(e)) from None
+        return read_index(raw, sha256=file.sha256, size=file.size, ref=ref)
+
+    async def chunk_index_of(self, sha256: str, size: int, *, platform: str | None = None) -> Index:
+        """LanternClient.chunk_index_of(), awaited."""
+        doc = await self._send(self.core.chunk_index(sha256, platform))
+        return read_index(canonical(doc), sha256=sha256, size=size)
+
+    async def download_delta(
+        self,
+        file: App | Package,
+        dest: str | Path,
+        *,
+        seeds: Sequence[Seed],
+        mirrors: bool = True,
+        peers: Sequence[FoundPeer] = (),
+        platform: str | None = None,
+        progress: Progress | None = None,
+    ) -> Path:
+        """LanternClient.download_delta(), awaited: an app's or a package's file put together from `seeds`
+        (bytes, or the paths of files) and the ranges of the file they lack (SPEC.md § 22.3), each chunk and
+        then the whole file checked before `dest` exists; the whole file is read, as download_from() does,
+        when anything fails (L-22.3-4). The seeds are cut, and written pieces are read, in a worker thread."""
+        report = self.last_delta = DeltaReport()
+        part = Path(dest).with_name(Path(dest).name + ".part")
+        if file.chunks is None or not seeds:
+            report.reason = "the file has no chunk index" if file.chunks is None else "no seed"
+        else:
+            try:
+                return await self._delta(
+                    file,
+                    dest,
+                    part=part,
+                    seeds=seeds,
+                    mirrors=mirrors,
+                    peers=peers,
+                    platform=platform,
+                    progress=progress,
+                    report=report,
+                )
+            except (LanternError, ValueError, OSError) as e:
+                await asyncio.to_thread(part.unlink, missing_ok=True)
+                self.last_delta = DeltaReport(reason=f"{type(e).__name__}: {str(e)[:160]}")
+        return await self.download_from(file, dest, mirrors=mirrors, peers=peers, platform=platform, progress=progress)
+
+    async def _delta(
+        self,
+        file: App | Package,
+        dest: str | Path,
+        *,
+        part: Path,
+        seeds: Sequence[Seed],
+        mirrors: bool,
+        peers: Sequence[FoundPeer],
+        platform: str | None,
+        progress: Progress | None,
+        report: DeltaReport,
+    ) -> Path:
+        index = await self.chunk_index(file)
+        assembly = await asyncio.to_thread(Assembly, file, index, seeds)
+        assembly.report = report
+        if not assembly.shares:
+            raise NothingShared("no chunk of the seeds is in the file")
+        sources: list[tuple[str, bool | None, dict[str, str]]] = [
+            *await self._sources(file, mirrors, peers, platform),
+            (file.file, None, {}),
+        ]
+        f = await asyncio.to_thread(_open, part, "wb")
+        try:
+            for read, group in assembly.groups:
+                if read:
+                    await self._read_group(
+                        file=file, assembly=assembly, group=group, sources=sources, out=f, progress=progress
+                    )
+                    continue
+                for piece in group:
+                    body = await asyncio.to_thread(assembly.seed, piece)
+                    await asyncio.to_thread(f.write, assembly.take(piece, body))
+                    if progress is not None:
+                        progress(assembly.hasher.size, file.size)
+        finally:
+            await asyncio.to_thread(f.close)
+        assembly.finish()
+        await asyncio.to_thread(part.replace, dest)
+        report.used = True
+        return Path(dest)
+
+    async def _read_group(
+        self,
+        *,
+        file: App | Package,
+        assembly: Assembly,
+        group: list[Piece],
+        sources: list[tuple[str, bool | None, dict[str, str]]],
+        out: BinaryIO,
+        progress: Progress | None,
+    ) -> None:
+        """LanternClient._read_group(), awaited."""
+        done = 0
+        last: LanternError | None = None
+        for url, from_peer, headers in sources:
+            rest = group[done:]
+            collector = Collector(rest)
+            start, end = rest[0].offset, rest[-1].offset + rest[-1].length - 1
+            try:
+                chunks = self._range(file=file, url=url, from_peer=from_peer, headers=headers, start=start, end=end)
+                async with aclosing(chunks):
+                    async for data in chunks:
+                        for piece, body in collector.feed(data):
+                            await asyncio.to_thread(out.write, assembly.take(piece, body))
+                            assembly.report.read += piece.length
+                            done += 1
+                            if progress is not None:
+                                progress(assembly.hasher.size, file.size)
+                collector.finish()
+                assembly.report.ranges += 1
+                return
+            except (IntegrityError, TransportError, UnexpectedResponse, DocumentError, ProblemError) as e:
+                last = e
+        raise last or UnexpectedResponse("no source for a range")
+
+    async def _range(
+        self,
+        *,
+        file: App | Package,
+        url: str,
+        from_peer: bool | None,
+        headers: dict[str, str],
+        start: int,
+        end: int,
+    ) -> AsyncGenerator[bytes]:
+        """LanternClient._range(): the bytes `start` to `end` of the file at `url` as they arrive, 206 of
+        exactly that range, no more (L-22.3-3). `from_peer` None: the server, with the client's credentials."""
+        if from_peer is None:
+            request = self.core.prepare("GET", self.core.url(url), headers=range_headers(start, end))
+            transport = self.transport
+        else:
+            if not plain_http_to(url):
+                raise InsecureTransport(f"{url}: plain HTTP only to a private network's address (SPEC.md § 19.2)")
+            h = Headers({"User-Agent": self.core.user_agent, **range_headers(start, end)})
+            for k, v in headers.items():
+                h[k] = v
+            request = Request("GET", url, h)
+            transport = self._side_transport(from_peer)
+        async with await transport.send(request, timeout=self.timeout) as response:
+            if response.status >= 400:
+                raise self.core.error(url, response.status, response.headers, await _error_body(response))
+            check_range(
+                response.status,
+                response.headers,
+                start=start,
+                end=end,
+                size=file.size,
+                sha256=file.sha256,
+                what=url,
+            )
+            got = 0
+            async for chunk in response.iter_bytes():
+                got += len(chunk)
+                if got > end - start + 1:
+                    raise Refused(f"{url}: more than the {end - start + 1} bytes asked for")
+                yield chunk
+            if got != end - start + 1:
+                raise Refused(f"{url}: {got} of the {end - start + 1} bytes asked for")
 
     async def _download_source(
         self,

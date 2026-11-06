@@ -1,11 +1,12 @@
-// The client of draft 0.6: the handshake, pairing (with a device key, an
+// The client of draft 0.7: the handshake, pairing (with a device key, an
 // invitation, a QR code), signed requests, the apps' listing with its
 // cursors, what the device is missing, changes, titles, homebrew (the
 // listing, an entry, the updates), save backups (listed, downloaded, sent
 // in one request or resumably, removed, encrypted on the device), cheat
 // sets (read and written), requests, the administration API, events (a
-// stream, or long polling), grants, mirrors and peers, sync, and verified
-// downloads. Everything goes through the app's Transport.
+// stream, or long polling), grants, mirrors and peers, sync, verified
+// downloads, and differential updates from the chunks of what the app
+// holds. Everything goes through the app's Transport.
 #pragma once
 
 #include <array>
@@ -16,6 +17,7 @@
 #include <span>
 #include <string_view>
 
+#include <lantern/chunks.hpp>
 #include <lantern/credentials.hpp>
 #include <lantern/device_key.hpp>
 #include <lantern/document.hpp>
@@ -169,6 +171,14 @@ struct UploadProgress
     void reset() noexcept { *this = UploadProgress {}; }
 };
 
+// What a HEAD of an upload says (§ 9.3, L-9.3-3).
+struct UploadHead
+{
+    std::uint64_t offset = 0; // Upload-Offset
+    std::optional<std::uint64_t> length; // Upload-Length
+    std::optional<std::uint64_t> chunk_size; // Lantern-Chunk-Size
+};
+
 // A chunk sent: where the server is, and the save once the last chunk is in.
 struct ChunkResult
 {
@@ -178,6 +188,25 @@ struct ChunkResult
     std::optional<Save> save;
 
     explicit ChunkResult(const allocator_type& /*allocator*/ = {}) { }
+};
+
+// § 22.3: where a file's chunks to read come from, besides the server.
+struct DeltaPeer
+{
+    PeerEndpoint endpoint;
+    // The grant for this file (Client::grant()), which must outlive the call.
+    const Grant* grant = nullptr;
+};
+
+struct DeltaOptions
+{
+    // A peer is asked first, then the mirrors in turn, then the server
+    // (what failed is dropped, L-19.1-3).
+    std::span<const DeltaPeer> peers;
+    std::span<const Mirror> mirrors;
+    // Chunks to read are joined into one range when at most this many bytes
+    // of chunks found in a seed lie between them (Annex B.13).
+    std::uint64_t gap = 16384;
 };
 
 // § 5.7's pages.
@@ -233,6 +262,7 @@ enum class Family : std::uint8_t
     peers,
     sync,
     encrypted_saves,
+    deltas,
 };
 
 // What Client::events() and Client::wait_changes() take.
@@ -331,6 +361,9 @@ class Client
         std::string_view title_id, const UploadRequest& request, std::string_view platform = {});
     // HEAD: what the server has of the upload.
     [[nodiscard]] Result<std::uint64_t> upload_offset(std::string_view upload);
+    // HEAD: the same, with Upload-Length and Lantern-Chunk-Size (L-9.3-3),
+    // for a client that kept only the upload's address.
+    [[nodiscard]] Result<UploadHead> upload_head(std::string_view upload);
     // PATCH: a chunk at `offset`; a 409 gives the server's offset in the
     // error's detail and in `progress` through upload_resumable().
     [[nodiscard]] Result<ChunkResult> upload_chunk(
@@ -338,7 +371,8 @@ class Client
     [[nodiscard]] Result<void> abandon_upload(std::string_view upload);
     // § 9.3 whole: opens the upload when `progress` has none, or asks the
     // server where it is (HEAD) when it has one, then sends the rest in
-    // chunks of at most `max_chunk` bytes (and the server's chunk_size).
+    // chunks of at most `max_chunk` bytes (and the server's chunk_size, which
+    // the HEAD gives again when `progress` has lost it).
     // A lost connection leaves `progress` where the server is: call again
     // to resume. Success is the save entry, once the server checked the
     // whole archive's SHA-256.
@@ -444,6 +478,31 @@ class Client
     [[nodiscard]] Result<void> download(
         const DownloadTarget& target, DownloadState& state, DownloadSink& sink);
 
+    // § 22.1: the chunk index `chunks` points to (an app's or a package's),
+    // read within 8 MiB and checked as L-22.3-1 asks against `chunks` and
+    // `target` (the file's size and SHA-256). Absent for an index of a newer
+    // schema or a chunker this library does not know: read the file whole.
+    [[nodiscard]] Read<ChunkIndex> chunk_index(const AppChunks& chunks, const DownloadTarget& target);
+    // GET <base>/v1/chunks/sha256/{hex} (feature `deltas`): the index of a
+    // file the app holds, by its SHA-256 alone; `size` is the file's.
+    [[nodiscard]] Read<ChunkIndex> chunk_index_of(const Digest& sha256, std::uint64_t size);
+    // § 22.3: puts `target` together from `seeds` (bytes of an older version
+    // the app holds, which must outlive the call) and ranges of the file
+    // read from `options`' peers and mirrors, then the server; each chunk is
+    // checked by its SHA-256 and the file by `target`'s before the call
+    // succeeds. The sink is written in the file's order, never more than the
+    // file's size. An index that cannot be used, a source that fails or a
+    // chunk that does not match: the sink is emptied (restart()) and the file
+    // is read whole, as download_with_mirrors() would (L-22.3-4); an error
+    // only when that fails too. On success the sink holds the whole file.
+    [[nodiscard]] Result<DeltaReport> download_with_seeds(const DownloadTarget& target,
+        const AppChunks& chunks, std::span<const Seed> seeds, DownloadSink& sink,
+        const DeltaOptions& options = {});
+    // The same with an index already read (kept by the app, say).
+    [[nodiscard]] Result<DeltaReport> download_with_index(const DownloadTarget& target,
+        const ChunkIndex& index, std::span<const Seed> seeds, DownloadSink& sink,
+        const DeltaOptions& options = {});
+
     [[nodiscard]] Allocator allocator() const noexcept { return allocator_; }
 
   private:
@@ -479,6 +538,14 @@ class Client
     [[nodiscard]] Result<void> sync_generation_seen(std::string_view generation);
     [[nodiscard]] Result<void> transfer(
         const Call& base, const DownloadTarget& target, DownloadState& state, DownloadSink& sink);
+    struct RangeSource;
+    class RangeHandler;
+    [[nodiscard]] Result<void> fetch_range(DeltaAssembler& assembler, const ByteRange& range,
+        const DownloadTarget& target, const RangeSource& source);
+    [[nodiscard]] Result<void> read_range(DeltaAssembler& assembler, const ByteRange& range,
+        const DownloadTarget& target, Vector<RangeSource>& sources, DeltaReport& report);
+    [[nodiscard]] Result<void> download_whole(
+        const DownloadTarget& target, DownloadSink& sink, const DeltaOptions& options);
 
     Transport* transport_;
     Allocator allocator_;

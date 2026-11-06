@@ -61,7 +61,12 @@ export function nodeHandler(
       });
       const answer: Promise<ServerResponse> =
         size > limit
-          ? Promise.resolve(problemResponse(request, new HttpProblem(413, "too_large", `At most ${limit} bytes here.`)))
+          ? Promise.resolve(
+              app.withCors(
+                request,
+                problemResponse(request, new HttpProblem(413, "too_large", `At most ${limit} bytes here.`)),
+              ),
+            )
           : app.handle(request);
       answer.then(
         (response) => send(res, response),
@@ -168,7 +173,10 @@ export function fetchHandler(
       remote: options.remote?.(request) ?? "",
     });
     const response = tooLarge
-      ? problemResponse(lantern, new HttpProblem(413, "too_large", `At most ${limit} bytes here.`))
+      ? app.withCors(
+          lantern,
+          problemResponse(lantern, new HttpProblem(413, "too_large", `At most ${limit} bytes here.`)),
+        )
       : await app.handle(lantern);
     if (!response.headers.has("Date")) response.headers.set("Date", new Date().toUTCString());
     const out = response.body;

@@ -81,6 +81,9 @@ std::uint64_t feature(const Handshake& handshake, Family family) noexcept
         case Family::encrypted_saves:
             value = f.encrypted_saves;
             break;
+        case Family::deltas:
+            value = f.deltas;
+            break;
     }
     return value.value_or(0);
 }
@@ -119,6 +122,8 @@ std::string_view family_name(Family family) noexcept
             return "sync";
         case Family::encrypted_saves:
             return "encrypted_saves";
+        case Family::deltas:
+            return "deltas";
     }
     return "";
 }
@@ -186,6 +191,10 @@ class Client::Collector final : public ResponseHandler
             response_.retry_after.assign(value);
         else if (equal_ignoring_case(name, "Upload-Offset"))
             response_.upload_offset.assign(value);
+        else if (equal_ignoring_case(name, "Upload-Length"))
+            response_.upload_length.assign(value);
+        else if (equal_ignoring_case(name, "Lantern-Chunk-Size"))
+            response_.chunk_size.assign(value);
         else if (equal_ignoring_case(name, "Content-Encoding"))
             response_.content_encoding.assign(value);
         return true;
@@ -478,7 +487,7 @@ void Client::update_accept_schema()
         return;
     for (const Family family : { Family::library, Family::titles, Family::changes, Family::sections,
              Family::homebrew, Family::saves, Family::cheats, Family::requests, Family::admin, Family::events,
-             Family::peers, Family::sync, Family::encrypted_saves })
+             Family::peers, Family::sync, Family::encrypted_saves, Family::deltas })
     {
         if (feature(*handshake_, family) > known_schema)
         {
@@ -660,7 +669,9 @@ Result<void> Client::exchange(const Call& call, ResponseHandler& handler)
 Result<Client::Response> Client::fetch(const Call& call)
 {
     Response response(allocator_);
-    Collector collector(response, decode_.limits.max_document, max_error_body_);
+    const std::size_t max_body = call.max_body != 0 ? std::min(call.max_body, decode_.limits.max_document)
+                                                    : decode_.limits.max_document;
+    Collector collector(response, max_body, max_error_body_);
     Call asking         = call;
     asking.compressible = !call.untrusted;
     const auto sent     = exchange(asking, collector);
@@ -678,8 +689,7 @@ Result<Client::Response> Client::fetch(const Call& call)
             return fail(Category::invalid_response, "an answer in a coding that was not asked for");
         const bool ok = response.status >= 200 && response.status < 300;
         String plain(allocator_);
-        if (auto inflated = gunzip(
-                detail::bytes_of(response.body), ok ? decode_.limits.max_document : max_error_body_, plain);
+        if (auto inflated = gunzip(detail::bytes_of(response.body), ok ? max_body : max_error_body_, plain);
             !inflated)
         {
             // An error's body is only read for its detail: what it said is dropped, not refused

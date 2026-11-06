@@ -32,6 +32,7 @@ FAMILIES: tuple[str, ...] = (
     "peers",
     "sync",
     "encrypted_saves",
+    "deltas",
 )
 #: A platform's name (SPEC.md § 4.3).
 PLATFORM = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")

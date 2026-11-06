@@ -6,14 +6,17 @@
  *
  * The rule (§ 20.4): of the item kept and the one sent, the later `updated`
  * wins; on the same `updated`, a deletion wins; between two values, the one
- * whose canonical JSON (keys sorted, no space, characters other than ASCII as
- * they are, in UTF-8) is the greater string of bytes. An `updated` more than
+ * whose canonical JSON (RFC 8785, SPEC.md § 2.3: `1.0` and `1` are the same,
+ * and the server keeps its own) is the greater string of bytes. An `updated` more than
  * the server's skew ahead of its clock is taken as its own time.
  */
 
 import { DocumentError, isObject, LanternError } from "./base.ts";
 import { utf8 } from "./bytes.ts";
+import { canonicalJson } from "./canonical.ts";
 import type { SyncItem } from "./generated/models.ts";
+
+export { canonicalJson };
 
 /** The collections of this version (SPEC.md § 20.2); a later one may add others, which a reader skips. */
 export const COLLECTIONS = ["wishes", "installed"] as const;
@@ -42,35 +45,6 @@ export function syncTime(text: string): number | undefined {
 /** A time as items carry it: `2026-10-30T09:12:03.250Z`. */
 export function formatSyncTime(ms: number): string {
   return new Date(Math.trunc(ms)).toISOString();
-}
-
-/** The canonical JSON of a value (SPEC.md § 20.4): keys sorted by their UTF-16 code units, as JSON sorts them. */
-export function canonicalJson(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    if (typeof value === "number" && !Number.isFinite(value)) throw new DocumentError("not a JSON number", "value");
-    if (typeof value === "string") return quoteString(value);
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  const keys = Object.keys(value).sort(compareCodePoints);
-  return `{${keys.map((k) => `${quoteString(k)}:${canonicalJson((value as Record<string, unknown>)[k])}`).join(",")}}`;
-}
-
-/** A JSON string with only what JSON must escape escaped: characters other than ASCII as they are. */
-function quoteString(text: string): string {
-  return JSON.stringify(text);
-}
-
-/** Keys sorted as Python's sort_keys does: by code point. */
-function compareCodePoints(a: string, b: string): number {
-  const x = [...a];
-  const y = [...b];
-  for (let i = 0; i < Math.min(x.length, y.length); i++) {
-    const p = (x[i] as string).codePointAt(0) as number;
-    const q = (y[i] as string).codePointAt(0) as number;
-    if (p !== q) return p - q;
-  }
-  return x.length - y.length;
 }
 
 function compareBytes(a: Uint8Array, b: Uint8Array): number {

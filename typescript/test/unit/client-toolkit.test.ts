@@ -39,7 +39,7 @@ const folder = mkdtempSync(join(tmpdir(), "lantern-client-toolkit-"));
 const TITLE = "0500AB12CD030000"; // a Switch title the demo's library does not have
 
 before(async () => {
-  // chunk_size stays 1 MiB: a client that resumes an upload does not know the server's, and sends chunks of 1 MiB.
+  // chunk_size stays 1 MiB, the default (test/unit/deltas.test.ts resumes in a server's own, from HEAD's Lantern-Chunk-Size).
   app = await makeLantern({ saveBody: 256 << 10 });
   served = await listen(app);
   key = await DeviceKey.fromSeed(DEMO_SEED);
