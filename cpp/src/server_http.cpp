@@ -79,9 +79,12 @@ constexpr std::array status_names {
 
 const StatusName* find_status(std::uint16_t status) noexcept
 {
-    const auto found
-        = std::ranges::find_if(status_names, [&](const StatusName& name) { return name.status == status; });
-    return found == status_names.end() ? nullptr : &*found;
+    for (const StatusName& name : status_names)
+    {
+        if (name.status == status)
+            return &name;
+    }
+    return nullptr;
 }
 
 int hex_value(char c) noexcept
@@ -528,14 +531,18 @@ Answer preflight(const ServerState& state, const ServerRequest& request)
     {
         const std::size_t comma     = asked.find(',');
         const std::string_view item = trim(asked.substr(0, comma));
-        asked            = comma == std::string_view::npos ? std::string_view {} : asked.substr(comma + 1);
-        const auto known = std::ranges::find_if(
-            cors_headers, [&](std::string_view name) { return equal_fold(name, item); });
-        if (known != cors_headers.end() && !allowed.contains(*known))
+        asked = comma == std::string_view::npos ? std::string_view {} : asked.substr(comma + 1);
+        for (const std::string_view known : cors_headers)
         {
-            if (!allowed.empty())
-                allowed.append(", ");
-            allowed.append(*known);
+            if (!equal_fold(known, item))
+                continue;
+            if (!allowed.contains(known))
+            {
+                if (!allowed.empty())
+                    allowed.append(", ");
+                allowed.append(known);
+            }
+            break;
         }
     }
     if (allowed.empty())
