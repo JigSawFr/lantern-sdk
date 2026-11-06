@@ -1170,3 +1170,81 @@ TEST_CASE("server: the memory library refuses what breaks § 6.1 and its platfor
     CHECK(library.file(std::string(added->file.substr(added->file.rfind('/') + 1)), {})->has_value());
     CHECK_FALSE(library.file("f_none", {})->has_value());
 }
+
+TEST_CASE("server: JSON goes out as gzip when the client asks, with Vary and an ETag of its own (§ 2.1)")
+{
+    Fixture f;
+    const std::string target   = "/api/lantern/v1/apps?page_size=50";
+    const ServerResponse plain = get(f, target);
+    REQUIRE(plain.status == 200);
+    CHECK_FALSE(has_header(plain, "Content-Encoding"));
+    CHECK(header(plain, "Vary").find("Accept-Encoding") != std::string_view::npos);
+
+    const ServerResponse zipped = get(f, target, { { "Accept-Encoding", "br;q=0.5, gzip" } });
+    REQUIRE(zipped.status == 200);
+    CHECK(header(zipped, "Content-Encoding") == "gzip");
+    CHECK(header(zipped, "Vary").find("Accept-Encoding") != std::string_view::npos);
+    CHECK(header(zipped, "Content-Length") == std::to_string(zipped.body.size()));
+    CHECK(zipped.body.size() < plain.body.size());
+    CHECK(header(zipped, "Content-Type") == "application/json");
+    String back;
+    REQUIRE(gunzip(std::as_bytes(std::span(zipped.body.data(), zipped.body.size())), 1U << 20U, back));
+    CHECK(std::string_view(back) == std::string_view(plain.body));
+
+    // an ETag other than the uncompressed one's, which answers If-None-Match itself
+    CHECK(header(zipped, "ETag") != header(plain, "ETag"));
+    const ServerResponse again = get(f, target,
+        { { "Accept-Encoding", "gzip" }, { "If-None-Match", std::string(header(zipped, "ETag")) } });
+    CHECK(again.status == 304);
+    CHECK(again.body.empty());
+    CHECK_FALSE(has_header(again, "Content-Encoding"));
+
+    // HEAD says what GET would
+    Call head;
+    head.method                 = "HEAD";
+    head.target                 = target;
+    head.headers                = { { "Accept-Encoding", "gzip" } };
+    const ServerResponse headed = send(*f.server, head);
+    CHECK(headed.body.empty());
+    CHECK(header(headed, "Content-Encoding") == "gzip");
+    CHECK(header(headed, "Content-Length") == header(zipped, "Content-Length"));
+    CHECK(header(headed, "ETag") == header(zipped, "ETag"));
+}
+
+TEST_CASE("server: nothing is compressed that should not be, or when the client does not allow it")
+{
+    Fixture f;
+    const std::string target = "/api/lantern/v1/apps?page_size=50";
+    for (const std::string_view not_gzip : { "gzip;q=0", "br, zstd", "identity", "*;q=0", "" })
+    {
+        INFO(not_gzip);
+        const ServerResponse r = get(f, target, { { "Accept-Encoding", std::string(not_gzip) } });
+        CHECK(r.status == 200);
+        CHECK_FALSE(has_header(r, "Content-Encoding"));
+    }
+    // an error is small, and a small answer is not worth it
+    const ServerResponse missing = get(f, "/api/lantern/v1/nowhere", { { "Accept-Encoding", "gzip" } });
+    CHECK(missing.status == 404);
+    CHECK_FALSE(has_header(missing, "Content-Encoding"));
+
+    // files and ranges are the bytes as stored, whatever Accept-Encoding says (L-2.1-2)
+    const std::string file
+        = std::string(page_of(get(f, "/api/lantern/v1/apps?q=zeta&type=base")).items[0].file);
+    const ServerResponse whole = get(f, file, { { "Accept-Encoding", "gzip, *" } });
+    CHECK(whole.status == 200);
+    CHECK_FALSE(has_header(whole, "Content-Encoding"));
+    CHECK(body_of(whole) == "zeta-base-0123456789");
+    const ServerResponse part = get(f, file, { { "Accept-Encoding", "gzip" }, { "Range", "bytes=5-8" } });
+    CHECK(part.status == 206);
+    CHECK_FALSE(has_header(part, "Content-Encoding"));
+    CHECK(body_of(part) == "base");
+
+    // a server that does not offer it, or only above a size
+    f.options.compression = false;
+    f.remake();
+    CHECK_FALSE(has_header(get(f, target, { { "Accept-Encoding", "gzip" } }), "Content-Encoding"));
+    f.options.compression     = true;
+    f.options.compression_min = 1U << 20U;
+    f.remake();
+    CHECK_FALSE(has_header(get(f, target, { { "Accept-Encoding", "gzip" } }), "Content-Encoding"));
+}

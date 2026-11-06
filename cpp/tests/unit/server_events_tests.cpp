@@ -361,7 +361,8 @@ TEST_CASE(
     "events: a stream begins with retry and ready, gives what happens, and a heartbeat when nothing does")
 {
     const Fixture f;
-    const ServerResponse opened = f.open();
+    // never a Content-Encoding on a stream, whatever the client accepts (§ 2.1)
+    const ServerResponse opened = f.open(root, "/events", { { "Accept-Encoding", "gzip" } });
     REQUIRE(opened.stream != nullptr);
     CHECK(opened.headers.get("Content-Type") == "text/event-stream; charset=utf-8");
     CHECK(opened.headers.get("Cache-Control") == "no-store");

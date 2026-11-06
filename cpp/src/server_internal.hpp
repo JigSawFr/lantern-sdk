@@ -164,6 +164,8 @@ struct ServerState final : LibraryObserver, std::enable_shared_from_this<ServerS
     Vector<String> cors_origins;
     bool cors_any                   = false;
     bool hsts                       = false;
+    bool compression                = false;
+    std::uint32_t compression_min   = 0;
     std::uint32_t hsts_max_age      = 0;
     std::uint32_t page_limit        = 0;
     std::uint32_t default_page_size = 0;

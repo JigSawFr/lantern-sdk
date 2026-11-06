@@ -7,6 +7,7 @@
 #include <lantern/chunks.hpp>
 #include <lantern/client.hpp>
 #include <lantern/credentials.hpp>
+#include <lantern/deflate.hpp>
 #include <lantern/device_key.hpp>
 #include <lantern/digest.hpp>
 #include <lantern/discovery.hpp>
