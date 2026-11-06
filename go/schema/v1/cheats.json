@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/cheats.json",
+  "title": "Cheat sets",
+  "description": "GET <base>/v1/cheats (SPEC.md § 10).",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "$ref": "common.json#/$defs/schema1"
+    },
+    "cheats": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/cheat_set"
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "cheats"
+  ]
+}
