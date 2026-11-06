@@ -1,36 +1,139 @@
-# Lantern SDK
+<div align="center">
 
-Client and server libraries for the
-[Lantern protocol](https://github.com/JigSawFr/lantern), the open,
-versioned REST/JSON protocol between console homebrews and the library
-servers people run at home for their own games. Its specification lives at
-[lantern.boreale.dev](https://lantern.boreale.dev/?utm_source=github&utm_medium=readme).
+<img src=".github/readme/banner.png" alt="Lantern SDK" width="100%">
 
-**Status: not started.** The libraries begin once the specification's
-draft 0.3 is out; nothing here is usable yet.
+### One protocol between your console homebrews and your own library server
 
-## What it will hold
+**C++23 · C · Python · TypeScript**
 
-One repository for both sides of the protocol, in several languages, each
-sharing the same types, generated from the specification's schemas (the
-specification is pinned here as a submodule):
+[![ci](https://github.com/JigSawFr/lantern-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/JigSawFr/lantern-sdk/actions/workflows/ci.yml)
+[![Lantern draft 0.11](https://img.shields.io/badge/Lantern-draft%200.11-blue.svg)](https://lantern.boreale.dev/?utm_source=github&utm_medium=readme)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSES/MIT.txt)
 
-| Folder | Language | Side |
+[**Specification**](https://lantern.boreale.dev/?utm_source=github&utm_medium=readme) ·
+[**Packages**](#-packages) ·
+[**Quick&nbsp;start**](#-quick-start) ·
+[**Families**](#-families-by-language) ·
+[**Releases**](#-releases)
+
+</div>
+
+---
+
+Client and server libraries for the [Lantern protocol](https://github.com/JigSawFr/lantern), the open, versioned REST/JSON protocol between console homebrews and the library servers people run at home for their own games. The specification lives at [lantern.boreale.dev](https://lantern.boreale.dev/?utm_source=github&utm_medium=readme) and is pinned here as a submodule; the four libraries share the same types, generated from its schemas.
+
+> [!WARNING]
+> **Draft 0.11, nothing released yet.** The protocol and these APIs change until 1.0. The libraries are complete for the draft and pass its conformance suite in CI, but no package is published before the first release.
+
+## ✨ Features
+
+- 📱 **A whole client** — pairing with a device key, requests signed by it (RFC 9421), listings, `missing`, verified and resumable downloads, writes, events, mirrors and peers, sync, end-to-end encrypted saves, differential updates, static libraries.
+- 🖥️ **A server toolkit** — add Lantern to an existing server (Flask, FastAPI, Hono or `node:http`) or to your own, up to **Lantern Core +titles +homebrew +saves +cheats +requests +admin +events +peers +sync +encrypted_saves +deltas**.
+- 🧬 **One set of types** — generated from the specification's schemas, the same in every language.
+- 🛡️ **Distrustful by default** — HTTPS with the server's key pinned, a `.part` file renamed only when the SHA-256 matches, a `schema` newer than the library's treated as absent.
+- 🧪 **Tested against the worst** — every server passes the specification's conformance suite, every client a deliberately malicious test server, in CI, for every language.
+- 🔗 **Swift and Kotlin too** — a thin, stable C ABI over the C++ client, checked in CI.
+- 🗂️ **Static libraries** — a read-only library as JSON files (GitHub Pages, a NAS, a USB stick), and the generator that writes it.
+- 🔏 **Signed releases** — built from the tag by CI, reproducibly, with an SBOM and SLSA provenance.
+
+## 📦 Packages
+
+| Folder | Language | What it is |
 |---|---|---|
-| [`cpp/`](cpp/README.md) | C++23 | The client of the consoles and of apps built with [Aurore](https://github.com/JigSawFr/Aurore), and a server core; every platform Aurore runs on. The client of draft 0.11: pairing with a device key, signed requests, the routes that write, administration, events, grants with mirrors and peers (and a peer's side), sync, end-to-end encrypted saves, static libraries, discovery, and TLS transports over libcurl and mbedTLS; tested against every scenario of the malicious test server |
-| [`python/`](python/README.md) | Python | Client and server, with Flask and FastAPI integration (`lantern-protocol`): draft 0.11, the whole client (pairing with a device key, signed requests, writes, discovery, events, mirrors and peers, sync, encrypted saves, static libraries) and a server toolkit at Lantern Core +titles +homebrew +cheats +admin +events +peers +sync; a minimal peer, the generator of static libraries (Lantern Static); the malicious test server for clients (`python/tools/hostile_server.py`) |
-| [`typescript/`](typescript/README.md) | TypeScript | Client in the browser and Node, and a server toolkit for Node (`lantern-protocol`): draft 0.11, the whole client (pairing with a WebCrypto device key, signed requests, writes, pinning in Node, discovery, events over fetch streams, grants, mirrors and peers, sync, end-to-end encrypted saves, static libraries) with no runtime dependency, and a server toolkit at Lantern Core +titles +homebrew +cheats +admin +events +peers +sync, on `node:http` or any framework of web Requests (Hono), with a peer server and the `lantern-static` generator |
-| [`c/`](c/README.md) | C | A thin, stable C ABI over the C++ library, for Swift and Kotlin (JNI): draft 0.11, the whole client (events, grants, mirrors and peers with a peer's gate, sync, encrypted saves, static libraries included), its documents read through accessors generated from the schemas, the app's HTTP stack, random source, keychain and stores as callbacks, an ABI kept and checked; a Swift package and a JNI sketch as examples |
+| [`cpp/`](cpp/README.md) | C++23 | The client of consoles and of apps built with [Aurore](https://github.com/JigSawFr/Aurore), a server core and a peer's side; libcurl and mbedTLS transports |
+| [`c/`](c/README.md) | C | A C ABI over the C++ client, for Swift and Kotlin (JNI); documents read through accessors generated from the schemas |
+| [`python/`](python/README.md) | Python 3.11+ | `lantern-protocol`: the client (sync and async), a server toolkit with Flask and FastAPI adapters, the generator of static libraries, the malicious test server |
+| [`typescript/`](typescript/README.md) | TypeScript | `lantern-protocol`: the client for browsers and Node, with no runtime dependency, and a server toolkit for Node and web Requests (Hono) |
 
-## Families by language
+Each folder's README has the details: installing, every call, what is not there yet.
 
-Each family of the specification (SPEC.md § 4.2), read as a client and served
-(client / server): ✓ yes, – no, ◐ part of it. C++ has a peer's side
-(`PeerGate`, § 19.4) but no server core, and the C API wraps the C++ client.
-CI checks the rows against the Python and TypeScript libraries' families and
-against what their demo servers offer
-([`tools/check_matrix.py`](tools/check_matrix.py)); a server marked ✓ is one
-whose conformance suite runs in CI.
+## 🚀 Quick start
+
+Read a library, in each language. Servers and names are made up.
+
+<details open>
+<summary><b>Python</b></summary>
+
+```sh
+pip install lantern-protocol   # at the first release
+```
+
+```python
+import lantern
+
+with lantern.LanternClient(
+    "https://shelf.example.org/", platform="switch", user_agent="MyShelf/1.0", token=TOKEN
+) as client:
+    hello = client.handshake()                 # the server, the account, the families offered
+    for app in client.iter_apps(type="base"):  # every page, cursor by cursor
+        print(app.name, app.version_code)
+```
+
+</details>
+
+<details>
+<summary><b>TypeScript</b></summary>
+
+```sh
+npm install lantern-protocol   # at the first release
+```
+
+```ts
+import { NodeLanternClient } from "lantern-protocol/node";
+
+const client = new NodeLanternClient("https://shelf.example.org/", {
+  platform: "switch",
+  userAgent: "MyShelf/1.0",
+  token: TOKEN,
+});
+const hello = await client.handshake(); // the server, the account, the families offered
+for await (const app of client.iterApps({ type: "base" })) console.log(app.name, app.version_code);
+```
+
+</details>
+
+<details>
+<summary><b>C++</b></summary>
+
+```sh
+cd cpp && cmake --workflow --preset dev   # configure, build, run the tests
+```
+
+```cpp
+lantern::ClientConfig config;
+config.origin     = "https://shelf.example.org";
+config.user_agent = "MyShelf/1.0";
+config.platform   = "switch";
+auto client = lantern::Client::create(transport, config);
+
+const auto server = client->handshake();   // name, base path, features
+const auto page   = client->apps();
+```
+
+A complete example, with paging and a verified download: [`cpp/examples/read_library.cpp`](cpp/examples/read_library.cpp).
+
+</details>
+
+<details>
+<summary><b>Add Lantern to a Flask app</b></summary>
+
+```python
+from flask import Flask
+from lantern.server import Account, LanternApp, MemoryLibrary
+from lantern.server.flask import init_app
+
+library = MemoryLibrary(base="/api/lantern")   # or your own Library: apps, titles, files…
+app = Flask(__name__)
+init_app(app, LanternApp(library, uid=SERVER_UID, name="Living room shelf", authenticate=authenticate, secret=SECRET))
+```
+
+FastAPI is `lantern.server.fastapi.include(app, lantern_app)`; in Node, `LanternApp` runs on `node:http` or on any framework of web Requests.
+
+</details>
+
+## 🧩 Families by language
+
+Each family of the specification (SPEC.md § 4.2), read as a client and served (client / server): ✓ yes, – no, ◐ part of it. C++ has a peer's side (`PeerGate`, § 19.4) but no server core, and the C API wraps the C++ client. CI checks the rows against the Python and TypeScript libraries' families and against what their demo servers offer ([`tools/check_matrix.py`](tools/check_matrix.py)); a server marked ✓ is one whose conformance suite runs in CI.
 
 <!-- families:start -->
 | Family | C++ | C | Python | TypeScript |
@@ -53,32 +156,33 @@ whose conformance suite runs in CI.
 | `deltas` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ |
 <!-- families:end -->
 
-Every server in it passes the specification's conformance suite, and every
-client passes a deliberately malicious test server, in CI, for every
-language.
+## 📦 Releases
 
-## Releases
+Nothing is released yet. One version for the whole SDK, the same in every language, with notes by language: the C++ library and the C API as source and as CMake packages built for Linux x86_64, the Python package `lantern-protocol` on PyPI and the npm package `lantern-protocol`, all on [the releases page](https://github.com/JigSawFr/lantern-sdk/releases). Every file is built by this repository's CI from the tag, reproducibly, with its SBOM, and attested (SLSA build provenance, through Sigstore); the packages are published by trusted publishing, without any token. [SECURITY.md](SECURITY.md#verifying-a-release) says how to check a file, [RELEASING.md](RELEASING.md) how a release is made.
 
-One version for the whole SDK, the same in every language, with notes by
-language: the C++ library and the C API as source and as CMake packages
-built for Linux x86_64, the Python package `lantern-protocol` on PyPI and
-the npm package `lantern-protocol`, all on
-[the releases page](https://github.com/JigSawFr/lantern-sdk/releases). Every
-file is built by this repository's CI from the tag, reproducibly, with its
-SBOM, and attested (SLSA build provenance, through Sigstore); the packages
-are published by trusted publishing, without any token.
-[SECURITY.md](SECURITY.md#verifying-a-release) says how to check a file,
-[RELEASING.md](RELEASING.md) how a release is made.
+## 🤝 Contributing
 
-## Licence
+[CONTRIBUTING.md](CONTRIBUTING.md) · [Releasing](RELEASING.md) · [Code of conduct](CODE_OF_CONDUCT.md) · [Security](SECURITY.md)
 
-[MIT](LICENSES/MIT.txt). Every file says its licence
-([REUSE](https://reuse.software/)).
+Issues and pull requests go on this repository. A change to the protocol itself is proposed in [the specification's repository](https://github.com/JigSawFr/lantern). A security flaw is reported privately, as [SECURITY.md](SECURITY.md) says.
 
-## Contact
+## 🧭 How it's made
 
-Issues and pull requests on this repository: see
-[CONTRIBUTING.md](CONTRIBUTING.md). A change to the protocol itself is
-proposed in [the specification's repository](https://github.com/JigSawFr/lantern).
-A security flaw is reported privately, as [SECURITY.md](SECURITY.md) says.
-Everyone follows the [code of conduct](CODE_OF_CONDUCT.md).
+[![Human-led, AI-assisted](https://raw.githubusercontent.com/JigSawFr/boreale/main/branding/badge-ai.svg)](https://boreale.dev/how/?utm_source=github&utm_medium=readme)
+
+Lantern SDK is built by [JigSawFr](https://github.com/JigSawFr), a full-stack
+engineer who has shipped production software for years, with AI coding
+assistants as part of the toolbox.
+
+- **I decide**: architecture, scope, what ships and what doesn't.
+- **AI helps write**: first drafts of code and tests, docs, and the translations.
+- **I review everything**: every change is read, tested and signed before it
+  reaches `main`.
+
+Nothing in these libraries calls an AI service. More on [boreale.dev](https://boreale.dev/how/?utm_source=github&utm_medium=readme).
+
+## 📜 License and credits
+
+**MIT**, see [`LICENSES/MIT.txt`](LICENSES/MIT.txt); every file says its licence ([REUSE](https://reuse.software/)). Maintained by [JigSawFr](https://github.com/JigSawFr), part of [Boréale](https://boreale.dev/?utm_source=github&utm_medium=readme) with [PlayGuard](https://github.com/JigSawFr/PlayGuard), [PlayShelf](https://github.com/JigSawFr/PlayShelf) and [Aurore](https://github.com/JigSawFr/Aurore).
+
+The C++ library vendors [Monocypher](https://monocypher.org/) (BSD-2-Clause or CC0) and, for its tests, [doctest](https://github.com/doctest/doctest) (MIT): see [`cpp/THIRD_PARTY_NOTICES.md`](cpp/THIRD_PARTY_NOTICES.md).
