@@ -275,6 +275,7 @@ type call struct {
 	headers   http.Header
 	raw       []byte // a body that is not JSON: its Content-Type is in headers
 	what      string
+	timeout   time.Duration // longer than the client's, for a call that waits (a long poll)
 }
 
 type response struct {
@@ -411,7 +412,7 @@ func (c *Client) send(ctx context.Context, k *call, limit int64) (*response, err
 		if err != nil {
 			return nil, err
 		}
-		resp, err := c.do(ctx, req, limit)
+		resp, err := c.do(ctx, req, limit, k.timeout)
 		if err != nil {
 			return nil, err
 		}
@@ -444,8 +445,8 @@ func flat(h http.Header) map[string]string {
 	return out
 }
 
-func (c *Client) do(ctx context.Context, req *http.Request, limit int64) (*response, error) {
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+func (c *Client) do(ctx context.Context, req *http.Request, limit int64, longer time.Duration) (*response, error) {
+	ctx, cancel := context.WithTimeout(ctx, max(c.timeout, longer))
 	defer cancel()
 	resp, err := c.http.Do(req.WithContext(ctx))
 	if err != nil {

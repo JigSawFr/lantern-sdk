@@ -439,7 +439,7 @@
           "server": "yes"
         },
         "go": {
-          "client": "no",
+          "client": "yes",
           "server": "no"
         },
         "rust": {

@@ -858,3 +858,81 @@ func TestReferenceEncryptedSaves(t *testing.T) {
 		check(t, save, archive)
 	})
 }
+
+func TestReferenceEvents(t *testing.T) {
+	ref := startReference(t)
+	key, err := lantern.SigningKeyFromBase64(ref.AdminSeed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := client.New(ref.URL, client.Options{Token: ref.AdminTok, Key: key, Platform: "switch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	next := func(ctx context.Context, s *client.EventStream) *lantern.ServerEvent {
+		t.Helper()
+		for ev, err := range s.All(ctx) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			return ev
+		}
+		t.Fatal("the stream ended")
+		return nil
+	}
+	first, stop := context.WithCancel(ctx)
+	stream := c.Events(client.EventOptions{})
+	ready := next(first, stream)
+	stop()
+	if ready.Event != "ready" || ready.ID == "" {
+		t.Fatalf("%+v", ready)
+	}
+	made, _, err := c.RequestTitle(ctx, "0100FFFF00090000", "switch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// resumed from the first id: ready again, then the request, with its id
+	again := c.Events(client.EventOptions{Since: ready.ID})
+	var got []*lantern.ServerEvent
+	loop, stopLoop := context.WithCancel(ctx)
+	for ev, err := range again.All(loop) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, ev)
+		if ev.Event == "request" {
+			break
+		}
+	}
+	stopLoop()
+	if len(got) < 2 || got[0].ID != ready.ID || got[len(got)-1].Data["id"] != made.ID || got[len(got)-1].Data["status"] != "open" {
+		t.Fatalf("%+v", got)
+	}
+	if again.LastID() != got[len(got)-1].ID {
+		t.Errorf("LastID %q", again.LastID())
+	}
+	// long polling gives the same events, and then the withdrawal
+	polled, err := c.PollEvents(ctx, ready.ID, 5*time.Second)
+	if err != nil || len(polled.Events) != 1 || polled.Events[0].Event != "request" || polled.Events[0].ID != got[len(got)-1].ID {
+		t.Fatalf("%+v %v", polled, err)
+	}
+	if err := c.WithdrawRequest(ctx, made.ID); err != nil {
+		t.Fatal(err)
+	}
+	gone, err := c.PollEvents(ctx, polled.Since, 5*time.Second)
+	if err != nil || len(gone.Events) == 0 {
+		t.Fatalf("%+v %v", gone, err)
+	}
+	if d := gone.Events[0].Data.Extra["deleted"]; string(d) != "true" {
+		t.Errorf("%+v", gone.Events[0].Data)
+	}
+	// a token the server never gave
+	for _, err := range c.Events(client.EventOptions{Since: "s_never-given"}).All(ctx) {
+		if !errors.Is(err, lantern.ErrBadRequest) && !errors.Is(err, lantern.ErrGone) {
+			t.Fatalf("%v", err)
+		}
+		break
+	}
+}
