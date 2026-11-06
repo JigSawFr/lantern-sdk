@@ -3,23 +3,26 @@
 
     python3 run_conformance.py --demo lantern_demo_server --suite spec/conformance/run.py [--origin ORIGIN]
 
-The suite runs three times, each against a demo server of its own (the
+The suite runs four times, each against a demo server of its own (the
 pairing and invitation checks leave their address rate limited for a while):
 
 - anonymously, against the public demo;
 - with the demo console's token and its device key (--token, --key), against
   the public demo: the signed requests, the scopes, the pairing flow;
 - with the same token against the private demo (`--private`), which asks for
-  a token on the library.
+  a token on the library;
+- with the same token against a demo that keeps no encrypted backup
+  (`--no-encrypted-saves`), which must refuse one (L-9.4-5).
 
 Each run starts the demo (examples/demo_server.cpp, on a free loopback port,
 which the demo prints as its URL), runs `run.py URL --origin ORIGIN`, and stops
 the demo. It fails when a check fails, when a check of the families the demo
-serves (the library with its titles, changes and sections, homebrew, cheats, pairing, signatures) is
+serves (the library with its titles, changes and sections, homebrew, cheats, saves with the encrypted ones,
+pairing, signatures) is
 not a pass, when an unexpected
 warning is raised, or, with the token, when Lantern Core, +titles, +homebrew and +cheats are not among the
-levels reached (without one the suite cannot check signed requests, and says
-so).
+levels reached (without one the suite cannot check signed requests, nor
+the saves, which need the scope `saves`, and says so).
 Warnings allowed: plain HTTP on loopback, JSON that is not compressed. Standard
 library only; the suite's schema checks need jsonschema and referencing
 (spec/tools/requirements.txt), and are left out without them.
@@ -69,6 +72,13 @@ HOMEBREW = [
     "homebrew.updates", "homebrew.updates-platform", "homebrew.unknown", "schema.refused.homebrew",
 ]
 CHEATS = ["features.cheats", "cheats.sets", "cheats.text", "cheats.unknown"]
+# Save backups (§ 9), for a token with the scope saves: the listing, the resumable upload, one request, the
+# archive back, deletion; the encrypted ones (§ 9.4) are kept as sent.
+SAVES = [
+    "features.saves", "saves.limits", "saves.list", "saves.no-platform", "saves.upload", "saves.read",
+    "saves.upload-digest", "saves.upload-too-large", "saves.single", "saves.cleanup", "schema.refused.saves",
+]
+ENCRYPTED_SAVES = ["e2e.upload"]
 # Pairing (§ 5.2, § 5.4) is offered to every caller, anonymous included.
 PAIRING = [
     "handshake.auth", "pairing.offered", "pairing.code", "pairing.verify-complete", "pairing.waiting",
@@ -86,20 +96,29 @@ WITH_TOKEN = [
 ]
 # What only a private server shows.
 PRIVATE = ["auth.missing"]
+# A server that keeps no encrypted backup refuses one.
+NO_ENCRYPTED = ["e2e.not-offered"]
 # Anonymous callers: writing a cheat set is refused
 ANONYMOUS = ["cheats.write"]
 # Plain HTTP on loopback, and JSON that the server does not compress (§ 2.1).
 WARNINGS = ["transport.https", "compression.json"]
 
+BASE = LIBRARY + CATALOG + HOMEBREW + CHEATS + PAIRING
+CORE_LEVELS = ("Lantern Core", "+titles", "+homebrew", "+saves", "+cheats")
+
+# (name, the demo's flags, whether it has a token, the levels it must reach, the checks that must pass)
 RUNS = [
-    ("anonymous", False, False, LIBRARY + CATALOG + HOMEBREW + CHEATS + PAIRING + ANONYMOUS),
-    ("token", False, True, LIBRARY + CATALOG + HOMEBREW + CHEATS + PAIRING + WITH_TOKEN),
-    ("private, with a token", True, True, LIBRARY + CATALOG + HOMEBREW + CHEATS + PAIRING + WITH_TOKEN + PRIVATE),
+    ("anonymous", [], False, (), BASE + ANONYMOUS),
+    ("token", [], True, CORE_LEVELS + ("+encrypted_saves",), BASE + WITH_TOKEN + SAVES + ENCRYPTED_SAVES),
+    ("private, with a token", ["--private"], True, CORE_LEVELS + ("+encrypted_saves",),
+     BASE + WITH_TOKEN + SAVES + ENCRYPTED_SAVES + PRIVATE),
+    ("without encrypted saves", ["--no-encrypted-saves"], True, CORE_LEVELS,
+     BASE + WITH_TOKEN + SAVES + NO_ENCRYPTED),
 ]
 
 
-def run_once(args, key_file, name, private, token, required):
-    demo = subprocess.Popen([args.demo, "0"] + (["--private"] if private else []), stdout=subprocess.PIPE, text=True)
+def run_once(args, key_file, name, flags, token, levels_needed, required):
+    demo = subprocess.Popen([args.demo, "0"] + flags, stdout=subprocess.PIPE, text=True)
     try:
         url = demo.stdout.readline().strip()
         if not url.startswith("http://127.0.0.1:"):
@@ -127,8 +146,10 @@ def run_once(args, key_file, name, private, token, required):
     if int(summary.group(2)):
         problems.append(f"{summary.group(2)} check(s) failed")
     # Anonymously, the checks of signed requests are left out (a server that signs needs a token for them)
-    if token and not all(level in levels.group(1) for level in ("Lantern Core", "+titles", "+homebrew", "+cheats")):
+    if not all(level in levels.group(1) for level in levels_needed):
         problems.append(f"levels reached: {levels.group(1)}")
+    if token and "+encrypted_saves" not in levels_needed and "+encrypted_saves" in levels.group(1):
+        problems.append(f"levels reached: {levels.group(1)}, but this server keeps no encrypted backup")
     problems += [f"{check}: {status.get(check, 'absent')}, expected PASS" for check in required
                  if status.get(check) != "PASS"]
     problems += [f"{check}: an unexpected warning" for check, s in status.items()
@@ -154,8 +175,8 @@ def main():
         with open(key_file, "w", encoding="ascii") as handle:
             handle.write(seed)
         ok = True
-        for name, private, token, required in RUNS:
-            ok = run_once(args, key_file, name, private, token, required) and ok
+        for name, flags, token, levels_needed, required in RUNS:
+            ok = run_once(args, key_file, name, flags, token, levels_needed, required) and ok
     return 0 if ok else 1
 
 

@@ -5,6 +5,7 @@
 #include <cerrno>
 #include <charconv>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 #include <optional>
 #include <string>
@@ -152,12 +153,45 @@ std::string peer_address(int fd)
     return text.data();
 }
 
+// A body left on the connection, read when the server asks: first what came
+// with the head, then the socket's.
+class SocketBody final : public BodyReader
+{
+  public:
+    SocketBody(http1::TcpSocket& socket, std::string_view arrived) noexcept
+        : socket_(&socket)
+        , arrived_(arrived)
+    {
+    }
+
+    Result<std::size_t> read(std::span<std::byte> buffer) override
+    {
+        if (!arrived_.empty())
+        {
+            const std::size_t take = std::min(buffer.size(), arrived_.size());
+            std::memcpy(buffer.data(), arrived_.data(), take);
+            arrived_.remove_prefix(take);
+            return take;
+        }
+        const auto got
+            = socket_->read(std::span<char>(reinterpret_cast<char*>(buffer.data()), buffer.size()));
+        if (!got)
+            return fail(Category::transport, "the connection was cut");
+        return *got;
+    }
+
+  private:
+    http1::TcpSocket* socket_;
+    std::string_view arrived_;
+};
+
 } // namespace
 
 HttpListener::HttpListener(HttpListener&& other) noexcept
     : server_(other.server_)
     , timeout_(other.timeout_)
     , max_body_(other.max_body_)
+    , max_stream_(other.max_stream_)
     , fd_(std::exchange(other.fd_, -1))
     , port_(other.port_)
 {
@@ -168,6 +202,7 @@ HttpListener& HttpListener::operator=(HttpListener&& other) noexcept
     std::swap(server_, other.server_);
     std::swap(timeout_, other.timeout_);
     std::swap(max_body_, other.max_body_);
+    std::swap(max_stream_, other.max_stream_);
     std::swap(fd_, other.fd_);
     std::swap(port_, other.port_);
     return *this;
@@ -324,21 +359,24 @@ bool HttpListener::answer(int connection) const
     if (chunked)
         return refuse(400, Code::bad_request, "A request body of unknown length is not taken here.");
     const std::uint64_t body_size = content_length.value_or(0);
-    if (body_size > max_body_)
+    const bool streamed           = body_size > max_body_;
+    if (streamed && body_size > max_stream_)
         return refuse(413, Code::too_large, "That body is larger than this server takes.");
 
     // The body: what came with the head, then the rest
     constexpr std::string_view go_on = "HTTP/1.1 100 Continue\r\n\r\n";
     if (expect && body.size() < body_size)
         std::ignore = socket.write(std::span<const char>(go_on.data(), go_on.size()));
-    while (body.size() < body_size)
+    // A streamed body stays on the connection, but for what came with the head
+    while (!streamed && body.size() < body_size)
     {
         const auto got = socket.read(chunk);
         if (!got || *got == 0)
             return false;
         body.append(chunk.data(), *got);
     }
-    body.resize(static_cast<std::size_t>(body_size));
+    body.resize(static_cast<std::size_t>(std::min<std::uint64_t>(body.size(), body_size)));
+    SocketBody source(socket, body);
 
     const auto parsed = parse_target(target);
     if (!parsed)
@@ -354,10 +392,18 @@ bool HttpListener::answer(int connection) const
     request.path    = parsed->path;
     request.query   = query;
     request.headers = headers;
-    request.body    = std::as_bytes(std::span(body.data(), body.size()));
-    request.scheme  = "http";
-    request.target  = target;
-    request.remote  = remote;
+    if (streamed)
+    {
+        request.stream        = &source;
+        request.stream_length = body_size;
+    }
+    else
+    {
+        request.body = std::as_bytes(std::span(body.data(), body.size()));
+    }
+    request.scheme = "http";
+    request.target = target;
+    request.remote = remote;
     send_response(socket, server_->handle(request));
     return true;
 }

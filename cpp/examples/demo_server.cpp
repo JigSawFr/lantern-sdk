@@ -1,15 +1,18 @@
 // The server core over a small fictional library, for a look and for the
 // conformance run:
 //
-//     lantern_demo_server [port] [--private]
+//     lantern_demo_server [port] [--private] [--no-encrypted-saves]
 //     python3 spec/conformance/run.py http://127.0.0.1:PORT/ --origin https://app.example.org
 //
 // It serves the library (Lantern Core: the handshake, the apps, what a
 // device is missing, the files, with its changes and sections, its titles
 // with their images, its homebrew and its cheat sets) to anyone, takes cheat
-// sets from a token with the scope cheats.write, and pairs devices: the
-// accounts of demo_accounts.hpp, a token bound to a key, signed requests.
-// `--private` asks for a token on the library. Plain HTTP on 127.0.0.1; it
+// sets from a token with the scope cheats.write, keeps save backups (also
+// encrypted ones) in memory for the accounts with the scope saves, and pairs
+// devices: the accounts of demo_accounts.hpp, a token bound to a key, signed
+// requests.
+// `--private` asks for a token on the library; `--no-encrypted-saves` keeps
+// no backup encrypted on the device (a 400, § 9.4). Plain HTTP on 127.0.0.1; it
 // prints its URL and serves until it is stopped. No port, or 0: a free one.
 #include <atomic>
 #include <csignal>
@@ -48,6 +51,7 @@ int main(int argc, char** argv)
 {
     unsigned port   = 0;
     bool is_private = false;
+    bool encrypted  = true;
     for (int i = 1; i < argc; ++i)
     {
         if (std::string_view(argv[i]) == "--private")
@@ -55,11 +59,16 @@ int main(int argc, char** argv)
             is_private = true;
             continue;
         }
+        if (std::string_view(argv[i]) == "--no-encrypted-saves")
+        {
+            encrypted = false;
+            continue;
+        }
         char* end    = nullptr;
         const long n = std::strtol(argv[i], &end, 10);
         if (end == argv[i] || *end != '\0' || n < 0 || n > 65535)
         {
-            std::fprintf(stderr, "usage: lantern_demo_server [port] [--private]\n");
+            std::fprintf(stderr, "usage: lantern_demo_server [port] [--private] [--no-encrypted-saves]\n");
             return 2;
         }
         port = static_cast<unsigned>(n);
@@ -74,6 +83,7 @@ int main(int argc, char** argv)
     if (auto filled = lantern::demo::fill_accounts(accounts, clock.unix_seconds()); !filled)
         return report(filled.error());
 
+    lantern::MemorySaveStore saves;
     const std::array<std::string_view, 1> origins { lantern::demo::origin };
     lantern::ServerOptions options;
     options.uid              = lantern::demo::uid;
@@ -85,6 +95,8 @@ int main(int argc, char** argv)
     options.software_version = "0.1";
     options.accounts         = &accounts;
     options.require_auth     = is_private;
+    options.saves            = &saves;
+    options.encrypted_saves  = encrypted;
     lantern::posix::SystemRandom random;
     auto server = lantern::Server::create(library, options, random, clock);
     if (!server)
@@ -94,7 +106,9 @@ int main(int argc, char** argv)
     listen.port = static_cast<std::uint16_t>(port);
     // A cheat set is 1 MiB of text at most (§ 13), escaped in its JSON body
     listen.max_body = std::size_t { 3 } << 20U;
-    auto listener   = lantern::posix::HttpListener::listen(*server, listen);
+    // A save of up to save_limits.size is streamed to the store, never buffered
+    listen.max_stream = options.save_limits.size;
+    auto listener     = lantern::posix::HttpListener::listen(*server, listen);
     if (!listener)
         return report(listener.error());
 

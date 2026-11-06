@@ -182,7 +182,7 @@ std::optional<ProblemError> verify_signature(
     if (!uri)
         return detail::bad_request(state, "No Host this server can read.");
 
-    const bool has_body = !request.body.empty();
+    const bool has_body = request.body_size() != 0;
     SignatureCheck check;
     check.method     = request.method;
     check.target_uri = *uri;
@@ -196,7 +196,8 @@ std::optional<ProblemError> verify_signature(
     const std::int64_t now = state.clock->unix_seconds();
     check.now              = now;
     check.skew             = state.skew;
-    if (has_body)
+    // A body the adapter did not buffer is checked against its Content-Digest by the route that reads it
+    if (has_body && request.stream == nullptr)
         check.body_sha256 = Sha256::of(request.body);
     const SignatureVerdict verdict = check_signature(check);
 
@@ -357,6 +358,7 @@ std::expected<Caller, ProblemError> identify(const ServerState& state, const Ser
         return std::unexpected(unauthorized(state, "Unknown, revoked or expired token.", true));
     caller.state = (*account)->frozen ? Caller::State::frozen : Caller::State::active;
     caller.name  = (*account)->name;
+    caller.device.assign((*device)->name);
     // A token never holds a scope its account does not (§ 5.1)
     for (const std::string_view known : known_scopes)
     {
@@ -378,7 +380,7 @@ std::optional<ProblemError> check_request_signature(
         const PublicKey none {};
         ProblemError error = signature_problem(state, Code::signature_required,
             "This server takes only tokens bound to a device key: pair this device again, with a key.", true,
-            !request.body.empty(), none);
+            request.body_size() != 0, none);
         error.headers.erase("Accept-Signature");
         return error;
     }

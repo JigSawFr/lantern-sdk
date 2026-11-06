@@ -18,8 +18,9 @@ draft 0.11, a TLS floor of 1.2 in both transports and `is_valid_server_uid()`
 (a `uid` is a lower case UUID, version 4 or 7). Of a
 server, a peer's side, and the first slices of a server core
 (Lantern Core, read-only, with its changes, sections, titles, homebrew and
-cheat sets, and the
-tokens, pairing and signed requests that give a device its access: see
+cheat sets, the
+tokens, pairing and signed requests that give a device its access, and the
+save backups, encrypted ones included: see
 [Server core](#server-core); the other families come in later steps); the C API is in [`../c/`](../c/README.md).
 
 ## What it does
@@ -152,18 +153,21 @@ tokens, pairing and signed requests that give a device its access: see
 ## Server core
 
 `lantern/server.hpp`: what answers the protocol's routes, with no HTTP
-framework and no socket of its own, as `PeerGate` is for a peer. Three slices so
-far: **Lantern Core, read-only**, **tokens, pairing and signatures**, and the
-library's **changes, sections, titles, homebrew and cheat sets**.
+framework and no socket of its own, as `PeerGate` is for a peer. Four slices so
+far: **Lantern Core, read-only**, **tokens, pairing and signatures**, the
+library's **changes, sections, titles, homebrew and cheat sets**, and the
+**save backups**.
 
 - the handshake at `/.well-known/lantern` and `<base>/v1` (§ 4.2), which lists
   only what the server serves: `features` says `library`, `titles`, `changes`,
   `sections`, `homebrew` and `cheats` when the library offers them (the last for
   a caller with the scope `cheats`, which anonymous callers hold on a public
-  server), and `pairing` and `signatures`
+  server), `saves` and `encrypted_saves` for a caller with the scope `saves`
+  when the server has a `SaveStore`, and `pairing` and `signatures`
   when the server has accounts, and nothing else; the account is
   the caller's (`anonymous`, `active` or `frozen`, its scopes, whether its
-  token is bound), `limits.page_size` is the largest page;
+  token is bound), `limits.page_size` is the largest page, and, with saves,
+  `save_body`, `save_size` and `saves_kept_per_title`;
 - the platforms (§ 4.3), the listing of apps (§ 6.2) with `platform`, `type`,
   `format`, `title_id`, `q`, the sorts `name`, `added` and `release`,
   `page_size` and cursors that are sealed (HMAC-SHA-256, a secret drawn from
@@ -326,6 +330,46 @@ server->approve_pairing(typed_code, "lea");              // the scopes asked for
   `Clock` given to `Server::create()`. A pairing made with a key polls with
   requests signed by it. `options.bound_only` refuses tokens without a key.
 
+**Save backups** (§ 9, the scope `saves`; `options.saves`, which needs accounts).
+A backup belongs to the account whose token wrote it, and no other sees it.
+
+- the listing (§ 9.1), newest first per title, filtered by `platform` and
+  `title_id`, with its ETag; a backup's archive as a file (§ 6.6: `Range`,
+  `Repr-Digest`) and its removal (204, then 404);
+- a save in one request (§ 9.2): the `Content-Digest` is required (400) and
+  checked as the body is read (422 `digest_mismatch`), the fields of the
+  `Lantern-*` headers are held to § 13, a body above `save_limits.body` is a
+  413, and an archive that is no zip a 400;
+- the resumable upload (§ 9.3): open (413 above `save_limits.size`), `HEAD`
+  for `Upload-Offset`, `Upload-Length` and `Lantern-Chunk-Size`, `PATCH` a
+  chunk (409 with the server's offset, 413 above the chunk size, the chunk's
+  own `Content-Digest` checked and a chunk that fails it taken back), `DELETE`;
+  the last chunk checks the whole archive's SHA-256, and an upload not
+  finished by `options.save_limits.upload_hours` is gone. A chunk cut by a
+  lost connection stays as far as it came (HEAD says how far), unless it
+  carried its digest. Resuming appends from the server's offset; this server
+  does no delta of its own, as the Python one does none;
+- the oldest backups beyond `save_limits.kept` per title, platform and account
+  are dropped;
+- `encrypted_saves` (§ 9.4, `options.encrypted_saves`, on by default): a backup
+  with an `encryption` (`lantern-save-e2e-1` and a key id of 16 hex digits,
+  in the upload's document or in `Lantern-Save-Encryption`) is kept as sent,
+  never read, its `sha256` and `size` those of the encrypted bytes, only
+  checked to begin with `LTNE2E01` and its key id; the listing gives its
+  `encryption` and the archive is `application/octet-stream`. With the option
+  off, such a backup is a 400 (L-9.4-5) and the handshake does not offer it.
+
+`SaveStore` (`lantern/saves.hpp`) is the app's own store, behind a few
+methods: the backups and the uploads per account. A body never reaches it
+whole: `append()` takes it piece by piece (a save sent in one request goes
+through an upload of the store's too), and `upload_state()` gives the
+SHA-256 of what the upload holds. `MemorySaveStore` is a complete one, for
+tests and demos. To keep a large save out of memory, an adapter that does
+not buffer a body sets `ServerRequest::stream` (a `BodyReader`) and
+`stream_length` and leaves `body` empty; the server reads it on the upload
+routes alone and answers 413 on any other. The POSIX listener does so for a
+body above `max_body` and up to `ListenOptions::max_stream`.
+
 `AccountStore` is the app's own store behind a few methods (accounts, devices
 by token hash, pairings); each must be atomic and safe from several threads.
 `MemoryAccountStore` is a complete one, for tests and demos. The `random`
@@ -335,8 +379,9 @@ codes and the poll addresses.
 `adapters/posix/server_posix.hpp` is a blocking HTTP/1.1 listener for the demo
 and the conformance run: one connection at a time, `Connection: close`, a body
 of `Content-Length` bytes, plain HTTP on loopback by default. It is not for an
-app, and has no TLS. `lantern_demo_server [port] [--private]` (`examples/`)
-serves a small fictional library through it, with the accounts of
+app, and has no TLS. `lantern_demo_server [port] [--private] [--no-encrypted-saves]`
+(`examples/`) serves a small fictional library through it, keeps backups in
+memory (`MemorySaveStore`), with the accounts of
 `examples/demo_accounts.hpp` (mira, noor and the token of mira's console,
 bound to a key made from a fixed phrase), and prints its URL; the conformance
 suite runs against it:
@@ -346,18 +391,22 @@ build/dev/examples/lantern_demo_server 8080 &
 python3 ../spec/conformance/run.py http://127.0.0.1:8080/ --origin https://app.example.org
 ```
 
-`ctest -R conformance` plays the suite three times, each against a demo of its
-own: anonymously, with the console's token and its device key, and with the
-token against `--private`. No check fails; the two warnings are plain HTTP on
+`ctest -R conformance` plays the suite four times, each against a demo of its
+own: anonymously, with the console's token and its device key, with the
+token against `--private`, and with the token against
+`--no-encrypted-saves`. No check fails; the two warnings are plain HTTP on
 loopback and JSON that is not compressed; with the token the run reaches
-**Lantern Core**, +titles, +homebrew and +cheats (a set written, replaced and
-deleted); anonymously the suite leaves out the signed requests it has no key
+**Lantern Core**, +titles, +homebrew, +saves, +cheats (a set written, replaced
+and deleted) and +encrypted_saves (except without it, where a backup with an
+encryption must be a 400); anonymously the suite leaves out the signed requests it has no key
 for and the writing of a set. `ctest -R server` plays the library read by this library's own
 client over the listener, `ctest -R unit` the server's cases in memory.
 
 Not in this slice, and so not offered by the handshake: invitations (§ 5.5; a
 code in a pairing request is unknown) and the administration API, so rating
-caps (§ 5.6) too (so no set or entry is hidden by a cap); saves, requests, events,
+caps (§ 5.6) too (so no set or entry is hidden by a cap); an account's
+backups are not erased with it (`SaveStore::forget()` is there for the day the
+administration API deletes accounts); requests, events,
 peers, sync and discovery; chunks and differential updates for the homebrew
 packages (§ 22); compression of the JSON (§ 2.1: the
 library can read gzip, not write it); a `release` sort that means anything (it

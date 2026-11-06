@@ -46,6 +46,7 @@ if (LANTERN_BUILD_TESTS)
         unit/server_auth_tests.cpp
         unit/server_catalog_tests.cpp
         unit/server_homebrew_tests.cpp
+        unit/server_saves_tests.cpp
         unit/server_tests.cpp
         unit/signing_tests.cpp
         unit/v04_client_tests.cpp

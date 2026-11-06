@@ -143,7 +143,7 @@ Each family of the specification (SPEC.md § 4.2), read as a client and served (
 | `changes` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ |
 | `sections` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ |
 | `homebrew` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ |
-| `saves` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ |
+| `saves` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ |
 | `cheats` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ |
 | `requests` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ |
 | `pairing` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ |
@@ -152,7 +152,7 @@ Each family of the specification (SPEC.md § 4.2), read as a client and served (
 | `events` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ |
 | `peers` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ |
 | `sync` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ |
-| `encrypted_saves` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ |
+| `encrypted_saves` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ |
 | `deltas` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ |
 <!-- families:end -->
 

@@ -1,7 +1,10 @@
 // A minimal blocking HTTP/1.1 listener over POSIX sockets, for the demo
 // server and the conformance run: it accepts one connection at a time,
 // reads one request (the head, then a body of Content-Length bytes), has the
-// Server answer, writes the answer and closes (Connection: close). Plain
+// Server answer, writes the answer and closes (Connection: close). A body
+// above `max_body` is not buffered when `max_stream` allows it: the server
+// reads it from the connection piece by piece (ServerRequest::stream), as
+// the save uploads do, and answers 413 on the routes that take none. Plain
 // HTTP, on loopback unless the app names another address; no TLS, no
 // keep-alive, no chunked request bodies. Never for production: an app puts
 // Server::handle() behind the HTTP server of its platform.
@@ -28,6 +31,9 @@ struct ListenOptions
     std::chrono::milliseconds timeout = std::chrono::seconds(15);
     // The largest body taken (Content-Length); a larger one is a 413.
     std::size_t max_body = std::size_t { 1 } << 20;
+    // The largest body streamed rather than buffered (a body above `max_body`
+    // and up to this); a larger one is a 413. 0: none is streamed.
+    std::uint64_t max_stream = 0;
 };
 
 class HttpListener
@@ -54,6 +60,7 @@ class HttpListener
         : server_(&server)
         , timeout_(options.timeout)
         , max_body_(options.max_body)
+        , max_stream_(options.max_stream)
         , fd_(fd)
         , port_(port)
     {
@@ -65,6 +72,7 @@ class HttpListener
     const Server* server_;
     std::chrono::milliseconds timeout_;
     std::size_t max_body_;
+    std::uint64_t max_stream_;
     int fd_             = -1;
     std::uint16_t port_ = 0;
 };
