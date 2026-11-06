@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/requests.json",
+  "title": "Requests",
+  "description": "GET <base>/v1/requests (SPEC.md § 11).",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "$ref": "common.json#/$defs/schema1"
+    },
+    "requests": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/request"
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "requests"
+  ]
+}

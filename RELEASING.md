@@ -8,7 +8,10 @@ by this repository's workflows: nobody builds or uploads anything by hand.
 ## The version
 
 The SDK has one [semantic version](https://semver.org/), the same for the
-C++ library, the C API, the Python package and the npm package. It is the
+C++ library, the C API, the Python package, the npm package and the Go
+module (`go/version.go`; a Go module in a folder is published by a tag named
+after it, `go/vX.Y.Z`, which the release will push once the module is
+released: see `go/README.md`). It is the
 SDK's own: it does not follow the specification's drafts, which each
 library states on its own (`lantern::spec_draft`, `LANTERN_SPEC_DRAFT`,
 `lantern.SPEC_DRAFT`, its README), and which the release notes list. The
