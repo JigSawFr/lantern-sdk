@@ -26,8 +26,23 @@ README says what is there.
 - The readers are fuzzed (`fuzz/`, cargo-fuzz): `cargo +nightly fuzz run
   documents` (or `answers`, `fields`), run for 30 seconds each in CI.
 
-What follows, a slice at a time, the same as the other languages: the client
-(signatures, pairing, downloads), then the server toolkit. The table of families in the repository's README says where each
+- **Signed requests** (SPEC.md § 5.4, RFC 9421): `DeviceKey` (an Ed25519 key
+  from a seed the caller draws), `sign_request` and, for a server,
+  `verify_request` with its `NonceCache`; the strict Ed25519 equation that
+  refuses small-order keys (`tests/signatures.rs`, the specification's
+  `signatures` and `ed25519-refused` vectors).
+- **The client** over a `Transport` trait that the caller implements (the
+  library does no input or output, draws no random bytes and reads no clock
+  but the ones it is given): the handshake, the apps list and `missing`,
+  pairing with a bound key, credentials and signature for the server's origin
+  alone, a clock mended after `signature_expired`, downloads resumed with a
+  `Range` and committed only once size and SHA-256 are right
+  (`tests/client.rs`, against a scripted server). The `os-entropy` feature
+  gives `OsEntropy`.
+
+What follows, a slice at a time, the same as the other languages: the HTTP
+adapters and discovery, the rest of the client (titles, homebrew, saves,
+deltas), then the server toolkit. The table of families in the repository's README says where each
 stands.
 
 ## Checks
