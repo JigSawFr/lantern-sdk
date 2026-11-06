@@ -3,17 +3,19 @@
 The C++23 client library of the [Lantern protocol](https://lantern.boreale.dev/?utm_source=github&utm_medium=readme),
 for the consoles and the apps built with [Aurore](https://github.com/JigSawFr/Aurore):
 `Lantern::lantern`, and two optional TLS transports, `Lantern::curl` and
-`Lantern::mbedtls`. It follows the specification's **draft 0.9**
+`Lantern::mbedtls`. It follows the specification's **draft 0.11**
 (`spec/`, pinned as a submodule of this repository).
 
-**Status: draft 0.9, the client whole.** Pairing with a device key, signed
+**Status: draft 0.11, the client whole.** Pairing with a device key, signed
 requests, invitations, the routes that write and the administration API,
 over TLS with the server's key pinned; events, grants with mirrors and
 peers, sync, end-to-end encrypted saves, static libraries, and, since
 draft 0.7, differential updates (a newer package put together from the
 chunks of an older one) and canonical JSON as RFC 8785 writes it, and, since
 draft 0.9, variants of one game and packages a device cannot use (`requires`,
-`includes`, the `format` filter, `formats` and `satisfies`). Of a
+`includes`, the `format` filter, `formats` and `satisfies`), and, since
+draft 0.11, a TLS floor of 1.2 in both transports and `is_valid_server_uid()`
+(a `uid` is a lower case UUID, version 4 or 7). Of a
 server, only a peer's side for now; a server core is for later (see
 [Not there yet](#not-there-yet)); the C API is in [`../c/`](../c/README.md).
 
@@ -305,6 +307,12 @@ A `RequestSigner` (`ClientConfig::signer`) sees every request's method,
 target, headers and body digest and may add headers. The client's own,
 `DeviceSigner`, signs with the device key (below); an app's runs after
 it.
+
+**The TLS floor** (SPEC.md § 2, L-2-9): neither transport offers a protocol
+older than TLS 1.2. `Lantern::curl` sets `CURLOPT_SSLVERSION` to
+`CURL_SSLVERSION_TLSv1_2` (a minimum; no maximum), `Lantern::mbedtls` sets
+`MBEDTLS_SSL_VERSION_TLS1_2` as the configuration's minimum; each reports it
+as `minimum_tls()`. A transport of the app's own must do the same.
 
 ## Pairing and signed requests
 

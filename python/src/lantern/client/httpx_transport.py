@@ -19,7 +19,14 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from lantern.client.tls import check_pin, fetch_certificate, peer_spki, pinned_context
+from lantern.client.tls import (
+    check_pin,
+    fetch_certificate,
+    peer_spki,
+    pinned_context,
+    unverified_context,
+    verified_context,
+)
 from lantern.client.transport import AsyncResponse, Request, Response
 from lantern.errors import TransportError
 from lantern.http import Headers
@@ -36,6 +43,14 @@ def _spki(answer: httpx.Response) -> str | None:
     stream: Any = answer.extensions.get("network_stream")
     ssl_object = stream.get_extra_info("ssl_object") if stream is not None else None
     return peer_spki(ssl_object) if isinstance(ssl_object, ssl.SSLObject | ssl.SSLSocket) else None
+
+
+def _context(verify: str | bool, pin: str | None) -> ssl.SSLContext:
+    """The context of the transport's own client: TLS 1.2 at least (SPEC.md § 2, L-2-9), CAs checked unless
+    `verify` is False or a pin checks the key instead; `verify` as a string is a CA file."""
+    if pin is not None or verify is False:
+        return unverified_context()
+    return verified_context(verify if isinstance(verify, str) else None)
 
 
 class _Pinned:
@@ -67,7 +82,7 @@ class HttpxTransport:
         self._own = client is None
         self.verify = verify is not False and pin is None
         self.pin = pin
-        self.client = client or httpx.Client(verify=verify if pin is None else False)
+        self.client = client or httpx.Client(verify=_context(verify, pin))
         self._pinned = _Pinned()
         self._clients: dict[int, httpx.Client] = {}
 
@@ -120,7 +135,7 @@ class AsyncHttpxTransport:
         self._own = client is None
         self.verify = verify is not False and pin is None
         self.pin = pin
-        self.client = client or httpx.AsyncClient(verify=verify if pin is None else False)
+        self.client = client or httpx.AsyncClient(verify=_context(verify, pin))
         self._pinned = _Pinned()
         self._clients: dict[int, httpx.AsyncClient] = {}
 

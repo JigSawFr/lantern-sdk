@@ -65,7 +65,8 @@ export class NodeTransport implements Transport {
     const keepAlive = options.keepAlive ?? true;
     this.#http = new http.Agent({ keepAlive });
     const transport = this;
-    const base: https.AgentOptions = { keepAlive, maxCachedSessions: 0 };
+    // No protocol older than TLS 1.2 (SPEC.md § 2, L-2-9, RFC 8996). A browser sets this floor itself.
+    const base: https.AgentOptions = { keepAlive, maxCachedSessions: 0, minVersion: "TLSv1.2" };
     if (options.ca !== undefined) base.ca = options.ca;
     class PinningAgent extends https.Agent {
       override createConnection(
@@ -74,7 +75,7 @@ export class NodeTransport implements Transport {
       ): Duplex | undefined {
         const pinned = transport.pin;
         const strict = transport.verify && pinned === undefined;
-        const tlsOptions: tls.ConnectionOptions = { ...connect, rejectUnauthorized: strict };
+        const tlsOptions: tls.ConnectionOptions = { ...connect, rejectUnauthorized: strict, minVersion: "TLSv1.2" };
         if (typeof tlsOptions.servername !== "string" || tlsOptions.servername === "" || isIP(tlsOptions.servername)) {
           delete tlsOptions.servername;
         }

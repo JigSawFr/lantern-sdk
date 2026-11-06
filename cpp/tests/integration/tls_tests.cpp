@@ -102,6 +102,14 @@ TEST_CASE("tls: the server's key pinned: the library, a download; a wrong pin re
     CHECK(client->apps(query));
 }
 
+TEST_CASE("tls: the adapter offers nothing older than TLS 1.2 (L-2-9)")
+{
+    // The reference server itself starts at TLS 1.2, so it cannot refuse a
+    // TLS 1.1 client here: the adapter's configured minimum is checked
+    CHECK(test::adapter_minimum_tls() == TlsVersion::tls_1_2);
+    CHECK(minimum_tls_version == TlsVersion::tls_1_2);
+}
+
 TEST_CASE("tls: the CA store decides when nothing is pinned")
 {
     posix::SystemRandom random;

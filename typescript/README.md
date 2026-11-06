@@ -6,10 +6,10 @@ servers people run at home for their own games
 ([lantern.boreale.dev](https://lantern.boreale.dev/?utm_source=github&utm_medium=readme)):
 a client for the browser and Node, a toolkit to add Lantern to a Node
 server, and the checks both sides share. It follows the specification's
-**draft 0.9**, as the [Python library](../python/README.md) does, whose
+**draft 0.11**, as the [Python library](../python/README.md) does, whose
 scope and names it mirrors.
 
-**Status: early, complete for draft 0.9, client and server toolkit.** The client speaks every
+**Status: early, complete for draft 0.11, client and server toolkit.** The client speaks every
 route of the protocol: pairing with a device key, requests signed by it
 (RFC 9421), the writes, LAN discovery (Node), events (a stream over fetch
 and long polls), grants, mirrors and peers, sync, end-to-end encrypted
@@ -19,12 +19,23 @@ requests, and serves the read routes, sections, save backups (encrypted ones
 kept as sent), cheat writes, requests, invitations, rating caps, the
 administration API (deleting accounts included), events, grants and sync,
 chunk indexes and the answers a browser's page needs (CORS), with a peer server and a static library generator beside it; it reaches
-every level of draft 0.9, **Lantern Core +titles +homebrew +saves +cheats
+every level of draft 0.11, **Lantern Core +titles +homebrew +saves +cheats
 +requests +admin +events +peers +sync +encrypted_saves +deltas**, in the
 specification's conformance suite, through `node:http` and through web
 Requests, and its static libraries reach **Lantern Static**. See
 [What is not there yet](#what-is-not-there-yet). Nothing is published on npm
 before the first release (`"private": true` until then).
+
+## TLS floor, HSTS and immutable caching (draft 0.11)
+
+- The Node client never offers a protocol older than TLS 1.2 (`minVersion: "TLSv1.2"` on every agent it builds,
+  pinning included); a browser sets this floor itself. `listen(app, { tls })` serves TLS with the same floor.
+- `Strict-Transport-Security: max-age=31536000` is sent when the app is told it is served over HTTPS
+  (`hsts: true` or `scheme: "https"`), and by `listen()`/`nodeHandler()` on a TLS socket; never over plain HTTP.
+- Chunk indexes (`/v1/chunks/sha256/{hex}`) carry `Cache-Control: public, max-age=31536000, immutable`
+  (`private` for an authenticated caller). A static library's host should do the same for `files/sha256/*`
+  and `chunks/sha256/*`.
+- A configured `uid` must be a lower-case UUID v4 or v7, else the constructor throws.
 
 ## Installing
 

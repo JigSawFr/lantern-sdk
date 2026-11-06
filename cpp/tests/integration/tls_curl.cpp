@@ -22,6 +22,11 @@ std::unique_ptr<Transport> make_tls_transport(
     return std::make_unique<curl::CurlTransport>(std::move(*made));
 }
 
+TlsVersion adapter_minimum_tls()
+{
+    return curl::CurlTransport::minimum_tls();
+}
+
 bool tls_checks_ip_names()
 {
     return true;

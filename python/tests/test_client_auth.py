@@ -413,7 +413,10 @@ def test_a_paired_client() -> None:
     c = LanternClient.paired(RECORD, user_agent="LanternTest/1.0")
     assert c.core.pipeline.signer is not None and c.transport.verify is True  # type: ignore[attr-defined]
     pinned = LanternClient.paired(
-        ServerRecord(uid="u", url="https://192.0.2.10/", token="et_lea", spki="0" * 64), user_agent="LanternTest/1.0"
+        ServerRecord(
+            uid="6f1c2a8e-2b1d-4c3e-9f00-112233445566", url="https://192.0.2.10/", token="et_lea", spki="0" * 64
+        ),
+        user_agent="LanternTest/1.0",
     )
     assert pinned.transport.pin == "0" * 64 and pinned.core.pipeline.signer is None  # type: ignore[attr-defined]
 

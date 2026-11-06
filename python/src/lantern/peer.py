@@ -41,7 +41,6 @@ import socket
 import ssl
 import sys
 import threading
-import uuid
 from collections.abc import Callable, Generator, Iterable, Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -56,6 +55,7 @@ from lantern.limits import DATAGRAM, NAME, clip
 from lantern.server.files import FileRef, file_response
 from lantern.server.http import ProblemError, ServerRequest, ServerResponse, problem_response
 from lantern.server.pairing import Limiter
+from lantern.uid import check_uid, new_uid
 
 BASE = "/lantern"
 PEER_PORT = 47116
@@ -148,10 +148,11 @@ class Peer(ThreadingHTTPServer):
             self.address_family = socket.AF_INET6
         super().__init__(address, _Handler)
         if tls is not None:
+            tls.minimum_version = max(tls.minimum_version, ssl.TLSVersion.TLSv1_2)  # SPEC.md § 2, L-2-10
             self.socket = tls.wrap_socket(self.socket, server_side=True, do_handshake_on_connect=False)
         self.files, self.keys = dict(files), dict(keys)
         self.slots, self.name, self.base, self.tls = slots, name, base.rstrip("/"), tls is not None
-        self.uid, self.quiet = uid or str(uuid.uuid4()), quiet
+        self.uid, self.quiet = check_uid(uid) if uid is not None else new_uid(), quiet
         self.limiter = Limiter(*rate)
         self.active = 0
         self._lock = threading.Lock()
@@ -196,7 +197,8 @@ class Peer(ThreadingHTTPServer):
         except BaseException:
             self._release()
             raise
-        response.headers["Cache-Control"] = "no-store"
+        # The grant decides who reads it, what the address names never changes (SPEC.md § 14, L-14-5).
+        response.headers["Cache-Control"] = "private, max-age=31536000, immutable"
         response.headers.pop("Vary", None)
         if request.method == "HEAD":
             self._release()
@@ -373,6 +375,7 @@ def main(argv: list[str] | None = None) -> int:
     tls = None
     if args.tls_cert:
         tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        tls.minimum_version = ssl.TLSVersion.TLSv1_2  # SPEC.md § 2, L-2-10
         tls.load_cert_chain(args.tls_cert, args.tls_key)
     try:
         peer = Peer(

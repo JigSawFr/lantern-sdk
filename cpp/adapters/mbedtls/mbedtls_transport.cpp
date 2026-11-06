@@ -226,14 +226,25 @@ Result<MbedTlsTransport> MbedTlsTransport::create(const Options& options)
             &state.config, MBEDTLS_SSL_IS_CLIENT, MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT)
         != 0)
         return fail(Category::transport, "mbedTLS's defaults could not be set");
-    // REQUIRED: a certificate the callback leaves flagged ends the handshake.
-    // The CA chain is set even when empty: without one, mbedTLS refuses
-    // before asking the callback
+        // REQUIRED: a certificate the callback leaves flagged ends the handshake.
+        // The CA chain is set even when empty: without one, mbedTLS refuses
+        // before asking the callback
+        // Nothing older than TLS 1.2 (SPEC.md § 2, L-2-9)
+#if MBEDTLS_VERSION_MAJOR >= 3
+    mbedtls_ssl_conf_min_tls_version(&state.config, MBEDTLS_SSL_VERSION_TLS1_2);
+#else
+    mbedtls_ssl_conf_min_version(&state.config, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_3);
+#endif
     mbedtls_ssl_conf_authmode(&state.config, MBEDTLS_SSL_VERIFY_REQUIRED);
     mbedtls_ssl_conf_ca_chain(&state.config, &state.ca, nullptr);
     mbedtls_ssl_conf_rng(&state.config, random_bytes, options.random);
     mbedtls_ssl_conf_read_timeout(&state.config, static_cast<std::uint32_t>(options.timeout.count()));
     return transport;
+}
+
+TlsVersion MbedTlsTransport::minimum_tls() noexcept
+{
+    return minimum_tls_version;
 }
 
 MbedTlsTransport::MbedTlsTransport(MbedTlsTransport&& other) noexcept            = default;

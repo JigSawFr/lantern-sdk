@@ -17,10 +17,20 @@ import ssl
 from lantern.errors import PinMismatch, TransportError
 from lantern.spki import CertificateError, spki_sha256
 
+#: The oldest protocol the client offers (SPEC.md § 2, L-2-9, RFC 8996).
+MINIMUM_VERSION = ssl.TLSVersion.TLSv1_2
+
+
+def verified_context(cafile: str | None = None) -> ssl.SSLContext:
+    """The default client context (system CAs, or `cafile`), offering no protocol older than TLS 1.2."""
+    context = ssl.create_default_context(cafile=cafile)
+    context.minimum_version = MINIMUM_VERSION
+    return context
+
 
 def unverified_context() -> ssl.SSLContext:
     """A context that checks no CA and no host name: the key is checked by its pin instead."""
-    context = ssl.create_default_context()
+    context = verified_context()
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
     return context
@@ -65,6 +75,7 @@ def pinned_context(certificate: bytes) -> ssl.SSLContext:
     for a transport that cannot see the key before it sends (httpx), once
     the certificate's key was checked against the pin."""
     context = ssl.create_default_context(cadata=ssl.DER_cert_to_PEM_cert(certificate))
+    context.minimum_version = MINIMUM_VERSION
     context.check_hostname = False
     context.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
     return context

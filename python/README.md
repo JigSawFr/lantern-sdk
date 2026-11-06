@@ -7,9 +7,9 @@ servers people run at home for their own games
 a client, a toolkit to add Lantern to an existing server, the checks both
 sides share, a minimal peer, the generator of static libraries, and a
 malicious test server for clients. It follows the specification's **draft
-0.9**.
+0.11**.
 
-**Status: early, complete for draft 0.9's client and server toolkit.** The client speaks every
+**Status: early, complete for draft 0.11's client and server toolkit.** The client speaks every
 route of the protocol: pairing with a device key, requests signed by it
 (RFC 9421), the writes, LAN discovery; event streams and long polls, files
 from mirrors and peers, newer versions put together from older ones by
@@ -682,6 +682,19 @@ before serving an entry), `make_package()` and `zip_manifest()`.
 anonymous: it gets `anonymous_scopes` on a `public` server, nothing on a
 private one.
 
+### TLS floor, HSTS, `uid` and immutable answers (draft 0.11)
+
+- The client offers nothing older than TLS 1.2 on any context it builds (the standard-library and httpx
+  transports, pinned and unverified contexts); a context handed to `StdlibTransport` is raised to it. A `Peer`
+  given a TLS context, and the one `lantern-peer --tls-cert` builds, never negotiate below TLS 1.2 either.
+- `LanternApp(..., hsts=True, hsts_max_age=31536000)` sends `Strict-Transport-Security` also when TLS ends before
+  the app (a reverse proxy). Without it the header goes out when the request itself came over HTTPS, and never over
+  plain HTTP. `hsts_max_age` is six months (15552000 s) or more.
+- `uid` must be a random lower-case UUID of version 4 or 7 (`lantern.uid.check_uid`, `new_uid`); `LanternApp`,
+  `static.export` and `Peer` raise `ValueError` on anything else, and what the toolkit generates is a version 4.
+- Chunk indexes (`/v1/chunks/sha256/{hex}`) and a peer's blobs carry `Cache-Control: public|private,
+  max-age=31536000, immutable` (`private` when the caller is authenticated); the ETag and 304 stay.
+
 ## Errors
 
 A server's error answer raises the `lantern.ProblemError` of its status:
@@ -767,7 +780,7 @@ runs the specification's conformance suite against the demo server
 (`tests/demo.py`), through Flask and FastAPI, anonymously and with a token
 bound to its key, with a peer of the toolkit and LAN discovery: it reaches
 Lantern Core +titles +homebrew +saves +cheats +requests +admin +events
-+peers +sync +encrypted_saves +deltas, every level of the draft 0.9, the
++peers +sync +encrypted_saves +deltas, every level of the draft 0.11, the
 origin of a page being allowed for the browser checks (`--origin`); and
 against the static library the generator writes (`--static`): Lantern
 Static. `tests/test_hostile.py` runs the client against the malicious test

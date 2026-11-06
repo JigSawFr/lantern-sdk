@@ -198,6 +198,22 @@ export function methodNotAllowed(allowed: readonly string[]): HttpProblem {
   });
 }
 
+/** A server's uid (SPEC.md § 4.2, L-4.2-9): a UUID of version 4 or 7 (RFC 9562), lower case. */
+const UID = /^[0-9a-f]{8}-[0-9a-f]{4}-[47][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+/** Throws a RangeError unless `uid` is a lower-case UUID of version 4 or 7 (L-4.2-9). */
+export function checkUid(uid: unknown): string {
+  if (typeof uid !== "string" || !UID.test(uid))
+    throw new RangeError("uid is a random UUID of version 4 or 7, in lower case (SPEC.md § 4.2, RFC 9562)");
+  return uid;
+}
+
+/** What an address names by a SHA-256 never changes (SPEC.md § 14, L-14-5, RFC 8246): a year, immutable. */
+export const IMMUTABLE = "max-age=31536000, immutable";
+
+/** The `Strict-Transport-Security` of a server reached over HTTPS (SPEC.md § 2, L-2-11): a year. */
+export const HSTS = "max-age=31536000";
+
 /** Vary and Cache-Control for an answer to `request` (SPEC.md § 14). */
 export function cachingHeaders(request: ServerRequest): Headers {
   const h = new Headers({ Vary: `Authorization, ${PLATFORM_HEADER}, Accept-Language` });
@@ -252,9 +268,13 @@ export function jsonResponse(
   status = 200,
   /** The document's bytes as they are kept, served as they are (a chunk index's canonical JSON, SPEC.md § 22.1). */
   raw?: Uint8Array,
+  /** Content addressed by its SHA-256 (L-14-5): a long lifetime with `immutable`, `private` for a caller's own grants. */
+  immutable?: boolean,
 ): ServerResponse {
   let body: Uint8Array = raw ?? encoder.encode(JSON.stringify(document));
   const headers = cachingHeaders(request);
+  if (immutable === true)
+    headers.set("Cache-Control", `${request.header("Authorization") ? "private" : "public"}, ${IMMUTABLE}`);
   headers.set("Vary", `${headers.get("Vary") ?? ""}, Accept-Encoding`);
   headers.set("Content-Type", JSON_TYPE);
   const coding = body.length >= COMPRESS_FROM ? contentCoding(request.header("Accept-Encoding")) : undefined;

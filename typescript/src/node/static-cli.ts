@@ -20,7 +20,9 @@ import { clientInput, writeStatic } from "./static.ts";
 
 const USAGE =
   "usage: lantern-static --from URL --out DIR [--token T --key FILE] [--pin SPKI | --insecure] " +
-  "[--page-size N] [--language TAG] [--name NAME]";
+  "[--page-size N] [--language TAG] [--name NAME]\n" +
+  "host the output over HTTPS (TLS 1.2 at least) with Strict-Transport-Security: max-age=31536000, and send\n" +
+  "files/sha256/* and chunks/sha256/* with Cache-Control: public, max-age=31536000, immutable (SPEC.md § 2, § 14).";
 
 export async function main(argv: string[]): Promise<number> {
   let values: Record<string, string | boolean | undefined>;

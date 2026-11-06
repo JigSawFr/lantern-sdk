@@ -13,17 +13,20 @@
 
 import { createReadStream } from "node:fs";
 import * as http from "node:http";
+import * as https from "node:https";
 import type { AddressInfo } from "node:net";
 import { Readable } from "node:stream";
-import type { TLSSocket } from "node:tls";
+import type { SecureContextOptions, TLSSocket } from "node:tls";
 import type { LanternApp } from "./app.ts";
-import { HttpProblem, isStream, problemResponse, ServerRequest, type ServerResponse } from "./http.ts";
+import { HSTS, HttpProblem, isStream, problemResponse, ServerRequest, type ServerResponse } from "./http.ts";
 
 export interface AdapterOptions {
   /** The largest body read; above it the request is answered 413 (its body read and dropped). */
   bodyLimit?: number;
   /** The scheme clients reach the server by, when a proxy in front of it ends TLS. */
   scheme?: string;
+  /** On a TLS socket, send `Strict-Transport-Security` (SPEC.md § 2, L-2-11): true by default; false to leave it to a proxy. */
+  hsts?: boolean;
 }
 
 /** A node:http request handler that answers every request with `app` (a route that is not Lantern's answers 404). */
@@ -69,7 +72,11 @@ export function nodeHandler(
             )
           : app.handle(request);
       answer.then(
-        (response) => send(res, response),
+        (response) => {
+          if ((req.socket as TLSSocket).encrypted && options.hsts !== false)
+            response.headers.set("Strict-Transport-Security", HSTS);
+          send(res, response);
+        },
         () => res.destroy(),
       );
     });
@@ -123,9 +130,18 @@ function send(res: http.ServerResponse, response: ServerResponse): void {
 /** Serves `app` alone on node:http, on loopback by default; resolves once it listens, with its URL and a close(). */
 export async function listen(
   app: LanternApp,
-  options: AdapterOptions & { port?: number; host?: string } = {},
+  options: AdapterOptions & {
+    port?: number;
+    host?: string;
+    /** key, cert… : serves TLS itself, never older than TLS 1.2 (SPEC.md § 2, L-2-10, RFC 8996). */
+    tls?: SecureContextOptions;
+  } = {},
 ): Promise<{ url: string; server: http.Server; close(): Promise<void> }> {
-  const server = http.createServer(nodeHandler(app, options));
+  const handler = nodeHandler(app, options);
+  const server: http.Server =
+    options.tls === undefined
+      ? http.createServer(handler)
+      : https.createServer({ ...options.tls, minVersion: "TLSv1.2" }, handler);
   server.keepAliveTimeout = 5000;
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -134,7 +150,7 @@ export async function listen(
   const address = server.address() as AddressInfo;
   const host = address.family === "IPv6" ? `[${address.address}]` : address.address;
   return {
-    url: `http://${host}:${address.port}/`,
+    url: `${options.tls === undefined ? "http" : "https"}://${host}:${address.port}/`,
     server,
     close: () =>
       new Promise<void>((resolve) => {

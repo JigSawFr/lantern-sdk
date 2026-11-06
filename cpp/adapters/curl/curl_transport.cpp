@@ -217,6 +217,11 @@ CurlTransport::~CurlTransport()
         curl_easy_cleanup(static_cast<CURL*>(handle_));
 }
 
+TlsVersion CurlTransport::minimum_tls() noexcept
+{
+    return minimum_tls_version;
+}
+
 Result<void> CurlTransport::send(const Request& request, ResponseHandler& handler)
 {
     const auto url = split_url(request.url);
@@ -288,6 +293,10 @@ Result<void> CurlTransport::send(const Request& request, ResponseHandler& handle
             break;
         }
     }
+
+    // Nothing older than TLS 1.2 (SPEC.md § 2, L-2-9); the maximum is left
+    // to the TLS library
+    curl_easy_setopt(handle, CURLOPT_SSLVERSION, static_cast<long>(CURL_SSLVERSION_TLSv1_2));
 
     // The server's key (SPEC.md § 5.3)
     if (options_.trust != nullptr)

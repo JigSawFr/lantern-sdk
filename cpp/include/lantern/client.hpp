@@ -1,4 +1,4 @@
-// The client of draft 0.9: the handshake, pairing (with a device key, an
+// The client of draft 0.11: the handshake, pairing (with a device key, an
 // invitation, a QR code), signed requests, the apps' listing with its
 // cursors, what the device is missing, changes, titles, homebrew (the
 // listing, an entry, the updates), save backups (listed, downloaded, sent
@@ -50,6 +50,13 @@ class DeprecationLog
     // `deprecation` as sent ("@1793318400"), `sunset` an HTTP date or empty.
     virtual void deprecated(std::string_view url, std::string_view deprecation, std::string_view sunset) = 0;
 };
+
+// Whether `uid` has the form SPEC.md § 4.2 asks of a server's identity
+// (L-4.2-9): a random UUID, version 4 or 7, RFC 9562 variant, in lower case.
+// The client does not refuse a handshake over it (an older server's uid is
+// tolerated): an app that wants to warn about a server that does not follow
+// the rule calls this on `Handshake::uid`.
+[[nodiscard]] bool is_valid_server_uid(std::string_view uid) noexcept;
 
 struct ClientConfig
 {

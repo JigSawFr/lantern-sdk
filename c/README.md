@@ -6,9 +6,9 @@ client library: a thin, stable C ABI over the C++23 library of
 through JNI) and any language with a C FFI. One header,
 `include/lantern/lantern.h` (C11 or later, and C++), and one library,
 `Lantern::c` (shared) or `Lantern::c_static`. It follows the
-specification's **draft 0.9** (C API version 7).
+specification's **draft 0.11** (C API version 7).
 
-**Status: draft 0.9, the C++ client whole.** The handshake, pairing with a
+**Status: draft 0.11, the C++ client whole.** The handshake, pairing with a
 device key, signed requests, invitations, the library and its cursors,
 `missing`, `changes`, titles, homebrew (manifest and path checks, install
 plans, signatures and pins, ports' data, requirements), cheat sets, verified
@@ -22,7 +22,11 @@ ranges), a library found at an address, the upload's HEAD with its chunk
 size, and canonical JSON as RFC 8785 writes it; and since draft 0.9,
 packages a device cannot use (an app's `requires` and `includes`, the
 format filter, `formats` and `satisfies` of what is missing, the install
-decision, the preferred variant): each a C function.
+decision, the preferred variant): each a C function. Draft 0.11 changes
+nothing in the C API (still version 7): `lantern_transport_create_curl()` and
+`lantern_transport_create_mbedtls()` offer no protocol older than TLS 1.2
+(SPEC.md § 2), as the C++ adapters do; the `uid` shape check of the C++
+`is_valid_server_uid()` is not exported.
 
 ## Building
 

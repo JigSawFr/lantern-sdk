@@ -347,7 +347,7 @@ def test_missing_cursor_scope_includes_the_filters(demo: LanternApp) -> None:
 def test_static_export_and_missing(tmp_path: Path) -> None:
     """[L-21.3-2] A static library carries requires and includes, and what is missing is computed with the filters."""
     out = tmp_path / "lib"
-    static.export(build_library(), out, uid="u_demo", name="Demo")
+    static.export(build_library(), out, uid="6f1c2a8e-2b1d-4c3e-9f00-112233445566", name="Demo")
     with static.StaticLibrary(out) as s:
         apps = list(s.iter_apps("switch"))
         xcz = next(a for a in apps if a.format == "xcz")

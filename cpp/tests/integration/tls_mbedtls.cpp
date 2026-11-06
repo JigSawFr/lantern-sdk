@@ -31,6 +31,11 @@ std::unique_ptr<Transport> make_tls_transport(
     return std::make_unique<mbedtls::MbedTlsTransport>(std::move(*made));
 }
 
+TlsVersion adapter_minimum_tls()
+{
+    return mbedtls::MbedTlsTransport::minimum_tls();
+}
+
 bool tls_checks_ip_names()
 {
     return MBEDTLS_VERSION_MAJOR >= 3;
