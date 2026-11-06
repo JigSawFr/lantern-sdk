@@ -936,3 +936,30 @@ func TestReferenceEvents(t *testing.T) {
 		break
 	}
 }
+
+func TestReferenceGrants(t *testing.T) {
+	ref := startReference(t, "--public")
+	ctx := context.Background()
+	c, err := client.New(ref.URL, client.Options{Token: ref.Token})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for app, err := range c.Apps(ctx, client.ListOptions{PageSize: 1}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		g, err := c.Grant(ctx, app.SHA256)
+		if err != nil || g.SHA256 != app.SHA256 || g.Size != app.Size {
+			t.Fatalf("%+v %v", g, err)
+		}
+		// the grant names this server and verifies with its handshake's key
+		hello := c.Hello()
+		if p := lantern.VerifyGrant(g.Grant, map[string]string{hello.UID: hello.Peers.Key}, time.Now().Unix()); p == nil || p.SHA256 != app.SHA256 {
+			t.Fatalf("%+v", p)
+		}
+		break
+	}
+	if _, err := c.Grant(ctx, strings.Repeat("0", 64)); !errors.Is(err, lantern.ErrNotFound) {
+		t.Errorf("a file the library does not have: %v", err)
+	}
+}

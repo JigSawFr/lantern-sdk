@@ -80,6 +80,8 @@ type Client struct {
 	root      string // scheme://host[:port]
 	origin    lantern.Origin
 	http      *http.Client
+	mirror    *http.Client // mirrors and peers: none of the server's credentials, nor its pin
+	peer      *http.Client
 	userAgent string
 	platform  string
 	language  string
@@ -155,6 +157,7 @@ func New(rawURL string, opts Options) (*Client, error) {
 		}
 		c.http = &http.Client{Transport: tr}
 	}
+	c.mirror, c.peer = newSourceClients()
 	c.http.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return c, nil
 }
