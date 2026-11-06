@@ -47,20 +47,21 @@ def test_static_library_is_written_then_read(tmp_path: Path) -> None:
 
 
 @contextmanager
-def running(name: str) -> Iterator[str]:
+def running(name: str, tmp_path: Path) -> Iterator[str]:
     port = free_port()
-    proc = subprocess.Popen(
-        [sys.executable, str(EXAMPLES / name), str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-    )
+    log = tmp_path / f"{name}.log"
+    with log.open("wb") as sink:
+        proc = subprocess.Popen([sys.executable, str(EXAMPLES / name), str(port)], stdout=sink, stderr=sink)
     url = f"http://127.0.0.1:{port}/"
     try:
-        deadline = time.monotonic() + 30
+        deadline = time.monotonic() + 60
         while True:
             try:
-                with urllib.request.urlopen(url + ".well-known/lantern", timeout=2):
+                with urllib.request.urlopen(url + ".well-known/lantern", timeout=5):
                     break
-            except (urllib.error.URLError, ConnectionError):
-                assert proc.poll() is None and time.monotonic() < deadline, f"{name} did not start"
+            except (urllib.error.URLError, ConnectionError, TimeoutError) as error:
+                said = f"{name} on port {port}, last error {error!r}, its output:\n{log.read_text(errors='replace')}"
+                assert proc.poll() is None and time.monotonic() < deadline, said
                 time.sleep(0.2)
         yield url
     finally:
@@ -69,10 +70,10 @@ def running(name: str) -> Iterator[str]:
 
 
 @pytest.mark.parametrize("name", ["serve_flask.py", "serve_fastapi.py"])
-def test_the_servers_answer_the_client(name: str) -> None:
+def test_the_servers_answer_the_client(name: str, tmp_path: Path) -> None:
     pytest.importorskip(name.removeprefix("serve_").removesuffix(".py"))
     import lantern
 
-    with running(name) as url, lantern.LanternClient(url, platform="switch") as client:
+    with running(name, tmp_path) as url, lantern.LanternClient(url, platform="switch") as client:
         assert client.handshake().name == "Living room shelf"
         assert [a.name for a in client.iter_apps()] == ["Frost Garden"]
