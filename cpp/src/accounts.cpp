@@ -211,7 +211,7 @@ Result<Vector<PairedDevice>> MemoryAccountStore::devices(
     const std::scoped_lock lock(mutex_);
     for (const StoredDevice& item : devices_)
     {
-        if (item.device.user == user && !(item.device.expires && *item.device.expires <= now))
+        if (item.device.user == user && (!item.device.expires || *item.device.expires > now))
             out.emplace_back(item.device);
     }
     std::ranges::stable_sort(

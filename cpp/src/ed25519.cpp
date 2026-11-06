@@ -94,7 +94,7 @@ bool ed25519_is_device_key(const PublicKey& key) noexcept
     constexpr Encoding base_point
         = encoding("5866666666666666666666666666666666666666666666666666666666666666");
     std::array<std::uint8_t, 64> signature {};
-    std::copy(base_point.begin(), base_point.end(), signature.begin());
+    std::ranges::copy(base_point, signature.begin());
     signature[32] = 1;
     const std::array<std::uint8_t, 32> zero {};
     return crypto_eddsa_check_equation(signature.data(), key.data(), zero.data()) == 0;
