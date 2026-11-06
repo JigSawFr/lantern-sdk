@@ -62,6 +62,11 @@ README says what is there.
   the packages for an architecture, and the key pinned at the first install
   (`check_pin`) with both short fingerprints to show on a change.
 
+- **Cheats and requests** (SPEC.md §§ 10, 11): the sets of a build, their text
+  checked against `size` and `sha256` (1 MiB at most), adding, replacing and
+  deleting a set (scope `cheats.write`), and the account's requests: list,
+  ask, withdraw.
+
 - **A server that means harm** (`tests/hostile.rs`): a body that never ends,
   a document nested without end, something that is not JSON, a listing that
   never stops (a client follows at most 10 000 pages), a download that never
