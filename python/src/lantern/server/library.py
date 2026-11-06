@@ -46,6 +46,8 @@ from lantern.server.files import FileRef
 from lantern.server.http import ServerRequest
 
 #: The families a Library may offer, beyond `changes` (which needs a Journal); `sections` needs a
+_IMAGE_TYPES = {"png": "image/png", "jpg": "image/jpeg", "webp": "image/webp", "gif": "image/gif"}
+
 #: SectionSource, and `deltas` (SPEC.md § 22) a `chunk_index()` (ChunkSource).
 LIBRARY_FAMILIES = ("library", "titles", "homebrew", "cheats", "sections")
 #: The sizes of the files a MemoryLibrary cuts into chunks when asked to (SPEC.md § 22): a smaller one gains
@@ -159,6 +161,17 @@ class ChunkSource(Protocol):
     def chunk_index(self, sha256: str) -> bytes | None:
         """The canonical bytes (SPEC.md § 2.3, § 22.1) of the chunk index of the file whose SHA-256 is
         `sha256`, or None for a file it did not cut."""
+        ...
+
+
+@runtime_checkable
+class MediaSource(Protocol):
+    """A library that serves its titles' images on its own origin (SPEC.md § 7.1, L-7.1-2): give an image's
+    `url` as `<base>/v1/media/<sha256>.<ext>` (its `sha256` set), and LanternApp serves that name for a year,
+    immutable, to whoever may see a title that shows it."""
+
+    def media(self, name: str) -> FileRef | None:
+        """The image named `<sha256>.<ext>`, or None."""
         ...
 
 
@@ -300,6 +313,7 @@ class MemoryLibrary:
         self._cheats: dict[str, CheatSet] = {}
         self._files: dict[str, FileRef] = {}
         self._cheat_files: dict[str, FileRef] = {}
+        self._media: dict[str, FileRef] = {}
         self._sections: dict[str, Section] = {}
         self._journal = MemoryJournal() if journal else None
         self._lock = threading.RLock()
@@ -603,6 +617,20 @@ class MemoryLibrary:
     def cheat_file(self, cheat_id: str) -> FileRef | None:
         with self._lock:
             return self._cheat_files.get(cheat_id)
+
+    def media(self, name: str) -> FileRef | None:
+        with self._lock:
+            return self._media.get(name)
+
+    def add_media(self, image: FileRef, extension: str) -> str:
+        """Serve an image on this library's origin; returns its name, `<sha256>.<extension>`: the `url` of
+        a title's image is `<base>/v1/media/<name>`, with `sha256` set (SPEC.md § 7.1)."""
+        if image.content_type not in _IMAGE_TYPES.values() or _IMAGE_TYPES.get(extension) != image.content_type:
+            raise ValueError("an image is a png, jpg, webp or gif, its extension saying which")
+        name = f"{image.sha256}.{extension}"
+        with self._lock:
+            self._media[name] = image
+        return name
 
     def journal(self) -> Journal | None:
         return self if self._journal is not None else None

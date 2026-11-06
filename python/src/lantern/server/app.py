@@ -109,7 +109,7 @@ from lantern.server.http import (
     read_document,
     unauthorized,
 )
-from lantern.server.library import Account, Authenticate, CheatWriter, ChunkSource, Library, SectionSource
+from lantern.server.library import Account, Authenticate, CheatWriter, ChunkSource, Library, MediaSource, SectionSource
 from lantern.server.paging import Cursors, Sealer, SinceTokens, SortKey, page_size
 from lantern.server.pairing import Limiter, PairingDesk, Pending, approval_page, slow_down
 from lantern.server.saves import (
@@ -242,6 +242,7 @@ ROUTES = (
     Route(("sync",), ("DELETE",), "sync.write", "sync_erase"),
     Route(("sync", "{}"), ("GET", "HEAD"), "sync", "sync_read"),
     Route(("sync", "{}"), ("PATCH", "DELETE"), "sync.write", "sync_write"),
+    Route(("media", "{}"), ("GET", "HEAD"), "titles", "media"),
     Route(("titles",), ("GET", "HEAD"), "titles", "titles"),
     Route(("titles", "changes"), ("GET", "HEAD"), "titles", "title_changes"),
     Route(("titles", "{}"), ("GET", "HEAD"), "titles", "title"),
@@ -1389,6 +1390,28 @@ class LanternApp:
 
     def _title(self, title: Title) -> JSONObject:
         return title.to_json()
+
+    def h_media(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
+        """An image of a title, on this origin, content-addressed (SPEC.md § 7.1, L-7.1-2): hidden like the
+        titles that show it."""
+        name = args[0]
+        suffix = "/v1/media/" + name
+        hide = self.hides(account)
+        shown = any(
+            not hide(t.platform, t.title_id)
+            for t in self.library.titles(())
+            for i in [t.icon, t.banner, *(t.screenshots or ())]
+            if i is not None and i.url.endswith(suffix)
+        )
+        file = self.library.media(name) if shown and isinstance(self.library, MediaSource) else None
+        if file is None:
+            raise not_found("No such image.")
+        response = file_response(request, file)
+        if response.status in (200, 206, 304):
+            response.headers["Cache-Control"] = (
+                "private, " if request.header("Authorization") else "public, "
+            ) + IMMUTABLE
+        return response
 
     def h_titles(self, request: ServerRequest, account: Account, args: Sequence[str]) -> ServerResponse:
         platform = platform_of(request)

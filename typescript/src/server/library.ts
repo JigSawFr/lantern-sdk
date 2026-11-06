@@ -40,6 +40,8 @@ import { readZip } from "./zip.ts";
 /** The families a Library may offer, beyond `changes` (which needs a Journal). */
 export const LIBRARY_FAMILIES = ["library", "titles", "sections", "homebrew", "cheats", "deltas"] as const;
 
+const IMAGE_TYPES = { png: "image/png", jpg: "image/jpeg", webp: "image/webp", gif: "image/gif" } as const;
+
 /** The sizes of the files cut into chunks by default (SPEC.md § 22.1): a smaller one gains nothing, a larger one takes long to cut. */
 export const DELTAS_MIN = 128 << 10;
 export const DELTAS_MAX = 64 << 20;
@@ -126,6 +128,12 @@ export interface Library {
    * chunkReference() makes the `chunks` of a document.
    */
   chunks?(sha256: string): Maybe<Uint8Array | undefined>;
+  /**
+   * An image of a title served on this origin (SPEC.md § 7.1, L-7.1-2): the file named `<sha256>.<ext>`, or
+   * undefined. Optional: with it, the toolkit serves `<base>/v1/media/{name}` for a year, immutable, to whoever may
+   * see a title that shows it (an image whose `url` ends with `/v1/media/<name>`).
+   */
+  media?(name: string): Maybe<FileRef | undefined>;
   /** A cheat set's text. */
   cheatFile(cheatId: string): Maybe<FileRef | undefined>;
   /** The change journal, or undefined: the family `changes` is then not offered. */
@@ -221,6 +229,7 @@ export class MemoryLibrary implements Library, Journal {
   readonly #cheats = new Map<string, CheatSet>();
   readonly #files = new Map<string, FileRef>();
   readonly #cheatFiles = new Map<string, FileRef>();
+  readonly #media = new Map<string, FileRef>();
   readonly #sections = new Map<string, Section>();
   readonly #journal: MemoryJournal | undefined;
   readonly #listeners: ((changes: LibraryChange[]) => void)[] = [];
@@ -478,6 +487,20 @@ export class MemoryLibrary implements Library, Journal {
   }
   cheatFile(cheatId: string): FileRef | undefined {
     return this.#cheatFiles.get(cheatId);
+  }
+  media(name: string): FileRef | undefined {
+    return this.#media.get(name);
+  }
+  /**
+   * Serves an image on this library's origin; returns its name, `<sha256>.<extension>`: the `url` of a title's
+   * image is `<base>/v1/media/<name>`, with `sha256` set (SPEC.md § 7.1).
+   */
+  addMedia(image: FileRef, extension: "png" | "jpg" | "webp" | "gif"): string {
+    if (IMAGE_TYPES[extension] !== image.contentType)
+      throw new RangeError("an image is a png, jpg, webp or gif, its extension saying which");
+    const name = `${image.sha256}.${extension}`;
+    this.#media.set(name, image);
+    return name;
   }
   journal(): Journal | undefined {
     return this.#journal !== undefined ? this : undefined;
