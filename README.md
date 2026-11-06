@@ -157,7 +157,7 @@ Each family of the specification (SPEC.md § 4.2), read as a client and served (
 | `peers` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | ✓ / – | – / – |
 | `sync` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | ✓ / – | – / – |
 | `encrypted_saves` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | ✓ / – | – / – |
-| `deltas` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
+| `deltas` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | ✓ / – | – / – |
 <!-- families:end -->
 
 `sdk.json` says all this, and the versions, the levels each server reaches and the examples, to [the site's SDK page](https://lantern.boreale.dev/sdk/?utm_source=github&utm_medium=readme); [`tools/site_data.py`](tools/site_data.py) writes it from the sources and CI checks it.
