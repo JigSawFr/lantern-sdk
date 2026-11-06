@@ -54,8 +54,8 @@ jobs:
           ref: ${{ fromJSON(steps.release.outputs.pr || '{}').headBranchName }}
           persist-credentials: false
       # What release-please cannot write: the lock file's copy of the
-      # version, and the C API's ABI dump, which records the header's
-      # version string. Committed through GitHub's API, as the app, so the
+      # version, the C API's ABI dump, which records the header's
+      # version string, and sdk.json, which says the version to the site. Committed through GitHub's API, as the app, so the
       # commit is signed by GitHub and starts the checks.
       - name: The files made from the version
         if: steps.release.outputs.pr
@@ -69,6 +69,7 @@ jobs:
             > "$RUNNER_TEMP/package-lock.json"
           mv "$RUNNER_TEMP/package-lock.json" typescript/package-lock.json
           python3 c/tools/abi_dump.py --update
+          python3 tools/site_data.py --write
           python3 tools/release_versions.py --expect "$version"
           changed=$(git diff --name-only)
           if [ -z "$changed" ]; then
@@ -84,7 +85,7 @@ jobs:
               variables: { input: {
                 branch: { repositoryNameWithOwner: $repo, branchName: $branch },
                 expectedHeadOid: $head,
-                message: { headline: "chore(release): the lock file and the ABI dump at the new version" },
+                message: { headline: "chore(release): the lock file, the ABI dump and sdk.json at the new version" },
                 fileChanges: { additions: $additions }
               } }
             }' | gh api graphql --input - --jq .data.createCommitOnBranch.commit.oid
