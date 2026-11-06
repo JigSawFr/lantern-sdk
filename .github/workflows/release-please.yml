@@ -51,7 +51,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.release.outputs.pr
         with:
-          ref: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+          ref: ${{ fromJSON(steps.release.outputs.pr || '{}').headBranchName }}
           persist-credentials: false
       # What release-please cannot write: the lock file's copy of the
       # version, and the C API's ABI dump, which records the header's
@@ -61,7 +61,7 @@ jobs:
         if: steps.release.outputs.pr
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          BRANCH: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+          BRANCH: ${{ fromJSON(steps.release.outputs.pr || '{}').headBranchName }}
         run: |
           version=$(jq -r .version typescript/package.json)
           # The root package's two copies of the version, nothing else of the lock
