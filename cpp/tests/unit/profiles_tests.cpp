@@ -31,6 +31,11 @@ TEST_CASE("profiles: names of the core")
     CHECK(is_platform_name("switch"));
     CHECK(is_platform_name("3ds"));
     CHECK(is_platform_name("x-example-console"));
+    // A.7: a browser client installs nothing, and no server serves it
+    CHECK(is_platform_name("web"));
+    CHECK_FALSE(is_served_platform("web"));
+    CHECK(is_served_platform("switch"));
+    CHECK_FALSE(is_served_platform("Switch"));
     CHECK_FALSE(is_platform_name("Switch"));
     CHECK_FALSE(is_platform_name("-switch"));
     CHECK_FALSE(is_platform_name(""));

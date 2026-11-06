@@ -45,7 +45,7 @@
  * adds to the API (functions, members appended to a struct, constants);
  * nothing is ever removed or changed while LANTERN_C_ABI_VERSION, the
  * shared library's SONAME version, stays the same. */
-#define LANTERN_C_API_VERSION 5
+#define LANTERN_C_API_VERSION 6
 #define LANTERN_C_ABI_VERSION 1
 #define LANTERN_VERSION_STRING "0.5.0"
 #define LANTERN_SPEC_DRAFT "0.7"
@@ -782,7 +782,9 @@ enum
     LANTERN_FAMILY_EVENTS          = 11,
     LANTERN_FAMILY_PEERS           = 12,
     LANTERN_FAMILY_SYNC            = 13,
-    LANTERN_FAMILY_ENCRYPTED_SAVES = 14
+    LANTERN_FAMILY_ENCRYPTED_SAVES = 14,
+    /* Since API 6 (draft 0.7) */
+    LANTERN_FAMILY_DELTAS = 15
 };
 /* The schema the server writes for a family, 0 when it does not offer it
  * to this caller. */
@@ -1246,6 +1248,20 @@ LANTERN_API lantern_status lantern_client_open_upload(lantern_client* client, co
     lantern_error* error);
 LANTERN_API lantern_status lantern_client_upload_offset(
     lantern_client* client, const char* upload, uint64_t* offset, lantern_error* error);
+/* § 9.3, L-9.3-3: HEAD, with Upload-Length and Lantern-Chunk-Size when the
+ * server sends them, for an app that kept only the upload's address (the
+ * resumable call below reads the chunk size from it). Since API 6. */
+typedef struct lantern_upload_head
+{
+    size_t struct_size;
+    uint64_t offset;
+    bool has_length;
+    uint64_t length;
+    bool has_chunk_size;
+    uint64_t chunk_size;
+} lantern_upload_head;
+LANTERN_API lantern_status lantern_client_upload_head(
+    lantern_client* client, const char* upload, lantern_upload_head* out, lantern_error* error);
 /* *save is set (owned) once the last chunk is in, NULL before; a 409
  * (conflict) says the offset is not the server's: ask upload_offset(). */
 LANTERN_API lantern_status lantern_client_upload_chunk(lantern_client* client, const char* upload,
@@ -1647,6 +1663,97 @@ LANTERN_API lantern_status lantern_client_peer_holds(lantern_client* client,
 LANTERN_API lantern_status lantern_client_download_from_peer(lantern_client* client,
     const lantern_peer_endpoint* peer, const lantern_grant* grant, const lantern_download_target* target,
     lantern_download_state* state, lantern_download_sink* sink, lantern_error* error);
+/* ----------------------------------------- Differential updates (§ 22) */
+
+/* A chunk index (§ 22.1), read and checked as L-22.3-1 asks: owned. Since
+ * API 6 (draft 0.7), like everything below. */
+typedef struct lantern_chunk_index lantern_chunk_index;
+LANTERN_API void lantern_chunk_index_free(lantern_chunk_index* index);
+/* The whole file's size and SHA-256, and the chunker's size (`lantern-cdc-1`,
+ * 64 KiB to 4 MiB). */
+LANTERN_API uint64_t lantern_chunk_index_size(const lantern_chunk_index* index);
+LANTERN_API void lantern_chunk_index_sha256(const lantern_chunk_index* index, uint8_t out[32]);
+LANTERN_API uint64_t lantern_chunk_index_chunker_size(const lantern_chunk_index* index);
+LANTERN_API size_t lantern_chunk_index_count(const lantern_chunk_index* index);
+/* The chunk at `at`, in the file's order: false when out of range. */
+LANTERN_API bool lantern_chunk_index_at(
+    const lantern_chunk_index* index, size_t at, uint32_t* size, uint8_t sha256[32]);
+/* The index of the file of `sha256` and `file_size` from the bytes read at
+ * `chunks`'s url (NULL: an index asked for by the file's SHA-256, which has
+ * no `chunks` to compare with). LANTERN_ABSENT for a schema above 1 or a
+ * chunker unknown here: read the file whole; an error for an index that is
+ * not usable (L-22.3-1). */
+LANTERN_API lantern_status lantern_read_chunk_index(const char* bytes, size_t size,
+    const lantern_app_chunks* chunks, const uint8_t sha256[32], uint64_t file_size,
+    const lantern_allocator* allocator, lantern_chunk_index** out, lantern_error* error);
+/* § 22.1: the index `chunks` (an app's or a package's) points to, within its
+ * size, checked against `chunks` and `target` (the file's size and SHA-256);
+ * LANTERN_ABSENT as above. */
+LANTERN_API lantern_status lantern_client_chunk_index(lantern_client* client,
+    const lantern_app_chunks* chunks, const lantern_download_target* target, lantern_chunk_index** out,
+    lantern_error* error);
+/* GET <base>/v1/chunks/sha256/{hex} (family LANTERN_FAMILY_DELTAS): the index
+ * of a file the app holds, by its SHA-256; `file_size` is the file's. */
+LANTERN_API lantern_status lantern_client_chunk_index_of(lantern_client* client, const uint8_t sha256[32],
+    uint64_t file_size, lantern_chunk_index** out, lantern_error* error);
+
+/* Bytes the app holds of an older version of the file, borrowed for the call. */
+typedef struct lantern_seed
+{
+    const uint8_t* bytes;
+    size_t size;
+} lantern_seed;
+/* A peer asked for ranges, with the grant for this file (lantern_client_grant). */
+typedef struct lantern_delta_peer
+{
+    size_t struct_size;
+    const lantern_peer_endpoint* endpoint;
+    const lantern_grant* grant;
+} lantern_delta_peer;
+typedef struct lantern_delta_options
+{
+    size_t struct_size;
+    /* Asked first (8 at most), then the mirrors in turn (8), then the server;
+     * what fails is dropped (L-19.1-3). */
+    const lantern_delta_peer* peers;
+    size_t peer_count;
+    const lantern_mirror* const* mirrors;
+    size_t mirror_count;
+    /* Chunks to read are joined into one range when at most this many bytes
+     * of chunks found in a seed lie between them (Annex B.13); used when
+     * `has_gap`, 16 KiB otherwise. */
+    bool has_gap;
+    uint64_t gap;
+} lantern_delta_options;
+typedef struct lantern_delta_report
+{
+    size_t struct_size;
+    /* Bytes taken from the seeds, and bytes read as ranges and verified. */
+    uint64_t from_seeds;
+    uint64_t from_ranges;
+    uint32_t requests;
+    /* The index could not be used, or a source failed: the file was read
+     * whole (L-22.3-4). */
+    bool whole_file;
+} lantern_delta_report;
+/* § 22.3: `target` put together from `seeds` and ranges of the file read from
+ * the options' peers and mirrors, then the server; each chunk is checked by
+ * its SHA-256 and the file by the target's before the call succeeds, nothing
+ * past the file's size is written, nothing past a range asked is read. The
+ * sink is written in the file's order. An index that cannot be used, a
+ * source that fails or a chunk that does not match: the sink is emptied
+ * (restart) and the file read whole; an error only when that fails too.
+ * `options` and `report` may be NULL. */
+LANTERN_API lantern_status lantern_client_download_with_seeds(lantern_client* client,
+    const lantern_download_target* target, const lantern_app_chunks* chunks, const lantern_seed* seeds,
+    size_t seed_count, lantern_download_sink* sink, const lantern_delta_options* options,
+    lantern_delta_report* report, lantern_error* error);
+/* The same with an index already read (kept by the app, say). */
+LANTERN_API lantern_status lantern_client_download_with_index(lantern_client* client,
+    const lantern_download_target* target, const lantern_chunk_index* index, const lantern_seed* seeds,
+    size_t seed_count, lantern_download_sink* sink, const lantern_delta_options* options,
+    lantern_delta_report* report, lantern_error* error);
+
 /* 10/8, 172.16/12, 192.168/16, fc00::/7 or fe80::/10, written as an address. */
 LANTERN_API bool lantern_is_private_host(const char* host);
 /* The discovery datagram asking for the peers too. */
@@ -1768,7 +1875,11 @@ LANTERN_API bool lantern_is_sync_collection(const char* name);
 LANTERN_API bool lantern_parse_sync_time(const char* text, int64_t* milliseconds);
 /* Written to the millisecond, and a NUL. */
 LANTERN_API void lantern_format_sync_time(int64_t milliseconds, char out[32]);
-/* § 20.4's canonical JSON: keys sorted, no space. */
+/* § 2.3's canonical JSON (RFC 8785), what § 20.4's merge rule compares:
+ * no space, members sorted by their names as UTF-16 code units, only what
+ * JSON must escape escaped, numbers as ECMAScript writes them (since
+ * draft 0.7, API 6: before, keys were sorted by their UTF-8 bytes and
+ * numbers kept as written). */
 LANTERN_API lantern_status lantern_canonical_json(const char* json, size_t size,
     const lantern_allocator* allocator, lantern_string** out, lantern_error* error);
 typedef struct lantern_sync_merge
@@ -1980,6 +2091,51 @@ LANTERN_API lantern_status lantern_static_library_missing(lantern_static_library
 LANTERN_API lantern_status lantern_static_library_homebrew_updates(lantern_static_library* library,
     const char* platform, const lantern_homebrew_updates_request* request, lantern_homebrew_list** out,
     lantern_error* error);
+
+/* § 22 over files: the index at `chunks`'s path (a path below the root),
+ * and the update put together from `seeds` and the ranges of the library's
+ * file; any failure reads the whole file. Only `gap` of `options` is used.
+ * Since API 6. */
+LANTERN_API lantern_status lantern_static_library_chunk_index(lantern_static_library* library,
+    const lantern_app_chunks* chunks, const lantern_download_target* target, lantern_chunk_index** out,
+    lantern_error* error);
+LANTERN_API lantern_status lantern_static_library_download_with_seeds(lantern_static_library* library,
+    const lantern_download_target* target, const lantern_app_chunks* chunks, const lantern_seed* seeds,
+    size_t seed_count, lantern_download_sink* sink, const lantern_delta_options* options,
+    lantern_delta_report* report, lantern_error* error);
+
+/* § 21.3: what an address is. The origin's /.well-known/lantern, when it
+ * answers a server's handshake (one without `static`), makes it that
+ * server; else <address>/lantern.json, when it answers a handshake with
+ * `static`, makes it a static library whose root is the address. Errors,
+ * documents of a newer schema or not JSON, and a document of the other kind
+ * are passed over (L-21.3-3): LANTERN_ABSENT when it is neither. Since
+ * API 6. */
+typedef int32_t lantern_library_kind;
+enum
+{
+    LANTERN_LIBRARY_SERVER = 0,
+    LANTERN_LIBRARY_STATIC = 1
+};
+typedef struct lantern_found_library lantern_found_library;
+LANTERN_API lantern_status lantern_find_library(lantern_transport* transport, const char* address,
+    const char* user_agent, const lantern_limits* limits, const lantern_allocator* allocator,
+    lantern_found_library** out, lantern_error* error);
+LANTERN_API void lantern_found_library_free(lantern_found_library* found);
+LANTERN_API lantern_library_kind lantern_found_library_kind(const lantern_found_library* found);
+/* A server's origin; a static library's root, ending with "/". Borrowed. */
+LANTERN_API lantern_str lantern_found_library_root(const lantern_found_library* found);
+/* Borrowed. */
+LANTERN_API const lantern_handshake* lantern_found_library_handshake(const lantern_found_library* found);
+
+/* ------------------------------------------------- Canonical JSON (§ 2.3) */
+
+/* One JSON number, as the document wrote it, written as ECMAScript writes
+ * numbers (RFC 8785): `1.0` is `1`, `1e21` is `1e+21`. An error for text
+ * that is not a JSON number, or one beyond a double's range. See also
+ * lantern_canonical_json(). Since API 6. */
+LANTERN_API lantern_status lantern_canonical_number(
+    const char* number, const lantern_allocator* allocator, lantern_string** out, lantern_error* error);
 
 /* ------------------------------------------ Deleting an account (§ 5.7) */
 

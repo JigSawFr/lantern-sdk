@@ -100,6 +100,7 @@ set(LANTERN_C_SOURCES
     src/client.cpp
     src/common.cpp
     src/crypto.cpp
+    src/deltas.cpp
     src/discovery.cpp
     src/events.cpp
     src/generated/documents.cpp

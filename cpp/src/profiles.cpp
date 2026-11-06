@@ -321,6 +321,11 @@ bool is_platform_name(std::string_view name) noexcept
         && all_of(name, [](char c) { return lower(c) || digit(c) || c == '-'; });
 }
 
+bool is_served_platform(std::string_view name) noexcept
+{
+    return is_platform_name(name) && name != "web";
+}
+
 bool is_arch_name(std::string_view name) noexcept
 {
     return !name.empty() && name.size() <= 32

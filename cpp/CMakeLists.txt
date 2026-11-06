@@ -52,8 +52,11 @@ set_target_properties(lantern_monocypher PROPERTIES
 
 add_library(lantern
     src/admin.cpp
+    src/canonical.cpp
+    src/chunks.cpp
     src/client.cpp
     src/device_key.cpp
+    src/delta.cpp
     src/digest.cpp
     src/discovery.cpp
     src/dnssd.cpp

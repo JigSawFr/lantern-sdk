@@ -6,7 +6,7 @@ client library: a thin, stable C ABI over the C++23 library of
 through JNI) and any language with a C FFI. One header,
 `include/lantern/lantern.h` (C11 or later, and C++), and one library,
 `Lantern::c` (shared) or `Lantern::c_static`. It follows the
-specification's **draft 0.7** (C API version 5).
+specification's **draft 0.7** (C API version 6).
 
 **Status: draft 0.7, the C++ client whole.** The handshake, pairing with a
 device key, signed requests, invitations, the library and its cursors,
@@ -16,7 +16,10 @@ downloads, saves (single and resumable), requests, the administration API
 (requests decided and accounts deleted included), LAN discovery, and the server key's
 fingerprint; and since draft 0.5, events (a stream, or long polling),
 grants, mirrors and peers (a peer's gate included), sync with its consent,
-end-to-end encrypted saves, and static libraries: each a C function.
+end-to-end encrypted saves, and static libraries; and since draft 0.7,
+differential updates (a chunk index, a file put together from seeds and
+ranges), a library found at an address, the upload's HEAD with its chunk
+size, and canonical JSON as RFC 8785 writes it: each a C function.
 
 ## Building
 
@@ -349,6 +352,32 @@ Each family maps onto the C++ client's, with the rules above:
   files; `missing` and homebrew updates computed on the device
   (`lantern_app_list`, `lantern_homebrew_list`).
 
+- **Differential updates (§ 22).** `lantern_client_chunk_index()` (by an
+  app's or package's `chunks`) and `lantern_client_chunk_index_of()` (by the
+  file's SHA-256) give a `lantern_chunk_index`, checked as L-22.3-1 asks
+  (`LANTERN_ABSENT` for a schema or a chunker this version does not know);
+  `lantern_client_download_with_seeds()` takes `lantern_seed`s (bytes of an
+  older version, borrowed) and reads the other chunks as ranges from the
+  `lantern_delta_options`' peers and mirrors, then the server, each chunk
+  and the file checked; any failure empties the sink and reads the file
+  whole (`lantern_delta_report.whole_file`). `lantern_read_chunk_index()`
+  reads one the app kept; `lantern_static_library_chunk_index()` and
+  `lantern_static_library_download_with_seeds()` do it over files.
+- **Where an address leads (§ 21.3).** `lantern_find_library()`: the
+  origin's server, else the address's static library
+  (`lantern_found_library`).
+- **Canonical JSON (§ 2.3).** `lantern_canonical_json()` is RFC 8785's since
+  draft 0.7 (before, keys were sorted by their UTF-8 bytes and numbers kept
+  as written); `lantern_canonical_number()` writes one number.
+- **The upload's HEAD.** `lantern_client_upload_head()` gives its offset,
+  length and `Lantern-Chunk-Size`; the resumable upload uses the last when
+  the app kept the upload's address alone.
+
+Version 6 of the API (draft 0.7) only added to version 5: `LANTERN_FAMILY_DELTAS`
+(15), `lantern_upload_head`, the differential-update and library-discovery
+functions and structs above, and `lantern_canonical_number()`; no existing
+struct changed (`abi/lantern.abi` shows each).
+
 Version 2 of the API only added to version 1: functions, the families
 `LANTERN_FAMILY_EVENTS` to `_ENCRYPTED_SAVES`, `LANTERN_CODE_PRECONDITION_FAILED`
 (20: the C++ library put it among its codes, the C API's values do not
@@ -537,7 +566,8 @@ the reference server.
   specification's examples; the `schema` rule for every document reader
   (absent, newer, an unknown member); `spec/vectors` (signatures byte for
   byte, refused requests with their codes, SPKI fingerprints, paths, and
-  draft 0.5's grants, sync-merge, static-layout and encrypted-saves) written
+  draft 0.5's grants, sync-merge, static-layout and encrypted-saves, and
+  draft 0.7's canonical-json and chunks) written
   as a C header by `tests/support/vectors.py`; an allocator that counts,
   back to zero; structs of an older header. Linked once against the shared
   library (what it exports is enough) and once against the static one.
@@ -550,7 +580,9 @@ the reference server.
   long polling, a grant and the reference peer's file, a mirror, the peer's
   discovery, sync, an encrypted backup sent resumably and opened back, an
   account deleted, and the library as a static library over HTTP and from
-  its folder.
+  its folder; and draft 0.7's differential update of the reference library
+  (an older package as the seed, the ranges read from the server) and the
+  library found at an address.
 - **The header** compiled alone as C11, C17 and C++23 with every warning,
   and **the ABI** (`tools/abi_dump.py --check`, with the library's exports).
 - ASan and UBSan builds (`asan`, `ubsan` presets), and clang-tidy with

@@ -211,7 +211,7 @@ Read<UploadSession> Client::open_upload(
     return session;
 }
 
-Result<std::uint64_t> Client::upload_offset(std::string_view upload)
+Result<UploadHead> Client::upload_head(std::string_view upload)
 {
     const auto url = resolve_url(origin(), upload, allocator_);
     if (!url)
@@ -225,7 +225,32 @@ Result<std::uint64_t> Client::upload_offset(std::string_view upload)
     const auto offset = parse_u64(answer->upload_offset);
     if (!offset)
         return fail(Category::invalid_response, "an upload's HEAD without its Upload-Offset (SPEC.md 9.3)");
-    return *offset;
+    UploadHead head;
+    head.offset = *offset;
+    // Both are optional for a client: a server of an earlier draft sends neither
+    if (!answer->upload_length.empty())
+    {
+        head.length = parse_u64(answer->upload_length);
+        if (!head.length)
+            return fail(
+                Category::invalid_response, "an upload's HEAD with an Upload-Length that is not a number");
+    }
+    if (!answer->chunk_size.empty())
+    {
+        head.chunk_size = parse_u64(answer->chunk_size);
+        if (!head.chunk_size || *head.chunk_size == 0)
+            return fail(
+                Category::invalid_response, "an upload's HEAD with a Lantern-Chunk-Size that is not a size");
+    }
+    return head;
+}
+
+Result<std::uint64_t> Client::upload_offset(std::string_view upload)
+{
+    const auto head = upload_head(upload);
+    if (!head)
+        return std::unexpected(head.error());
+    return head->offset;
 }
 
 Result<ChunkResult> Client::upload_chunk(
@@ -311,15 +336,23 @@ Read<Save> Client::upload_resumable(std::string_view title_id, const UploadReque
     }
     else
     {
-        // Where the server is, after an interruption (§ 9.3, Annex B.4)
-        const auto at = upload_offset(progress.url_view());
-        if (!at)
+        // Where the server is, and in what chunks, after an interruption
+        // (§ 9.3, L-9.3-3, Annex B.4): the app may have kept the address alone
+        const auto head = upload_head(progress.url_view());
+        if (!head)
         {
-            if (at.error().status() == 404 || at.error().status() == 410)
+            if (head.error().status() == 404 || head.error().status() == 410)
                 progress.reset(); // gone: the next call opens a new one
-            return std::unexpected(at.error());
+            return std::unexpected(head.error());
         }
-        progress.offset = *at;
+        if (head->length && *head->length != request.size)
+            return fail(
+                Category::invalid_response, "an upload of another size than the archive's (SPEC.md 9.3)");
+        if (head->chunk_size)
+            progress.chunk_size = *head->chunk_size;
+        if (progress.chunk_size == 0)
+            return fail(Category::invalid_response, "an upload whose chunk size nothing says (SPEC.md 9.3)");
+        progress.offset = head->offset;
     }
 
     const auto chunk = static_cast<std::size_t>(std::min<std::uint64_t>(progress.chunk_size, max_chunk));

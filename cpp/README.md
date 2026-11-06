@@ -9,9 +9,11 @@ for the consoles and the apps built with [Aurore](https://github.com/JigSawFr/Au
 **Status: draft 0.7, the client whole.** Pairing with a device key, signed
 requests, invitations, the routes that write and the administration API,
 over TLS with the server's key pinned; events, grants with mirrors and
-peers, sync, end-to-end encrypted saves and static libraries. Of a server,
-only a peer's side for now; a server core and a C API are for later (see
-[Not there yet](#not-there-yet)).
+peers, sync, end-to-end encrypted saves, static libraries, and, since
+draft 0.7, differential updates (a newer package put together from the
+chunks of an older one) and canonical JSON as RFC 8785 writes it. Of a
+server, only a peer's side for now; a server core is for later (see
+[Not there yet](#not-there-yet)); the C API is in [`../c/`](../c/README.md).
 
 ## What it does
 
@@ -50,8 +52,10 @@ only a peer's side for now; a server core and a C API are for later (see
 - **The routes that write**: save backups (§ 9) listed, downloaded,
   removed, sent in one request with their `Content-Digest` and § 9.2's
   headers, or resumably (§ 9.3): `POST` the upload, `PATCH` chunks with
-  `Upload-Offset`, `HEAD` to resume after a cut or a `409`, the whole
-  archive's SHA-256 checked by the server; cheat sets written, replaced and
+  `Upload-Offset`, `HEAD` to resume after a cut or a `409` (its
+  `Lantern-Chunk-Size` gives the chunks back to an app that kept the
+  upload's address alone: `Client::upload_head()`), the whole archive's
+  SHA-256 checked by the server; cheat sets written, replaced and
   removed (§ 10); requests made, listed and withdrawn (§ 11).
 - **The administration API** (§ 5.7): accounts, devices, the pairings
   waiting (each with its code and key, to compare with the console's
@@ -85,7 +89,10 @@ only a peer's side for now; a server core and a C API are for later (see
 - **Static libraries** (§ 21, `static_library.hpp`): a library read as
   files, over HTTP(S) or through the app's own file I/O, its pages
   chained, its files checked, and what a server would answer computed on
-  the device (what is missing, homebrew updates).
+  the device (what is missing, homebrew updates). `find_library()` looks
+  for one at an address in § 21.3's order: the origin's
+  `/.well-known/lantern` (a server's handshake, not a static library's),
+  then `<address>/lantern.json`.
 - **Discovery** (§ 4.1): the datagram to UDP 47115, the replies read
   bounded and with the `schema` rule, each server once, through a
   `UdpSocket` the app gives (`adapters/posix` has one); with `peers`, the
@@ -397,6 +404,15 @@ if (opening.finish())
     restore(file);                                // only now
 ```
 
+## Differential updates
+
+```cpp
+std::vector<lantern::Seed> seeds { lantern::Seed(older_package) };   // bytes the app holds
+lantern::DeltaOptions options;                                        // peers, mirrors, the gap between ranges
+auto report = client.download_with_seeds({ app.file, app.size, app.sha256 }, *app.chunks, seeds, sink, options);
+// report->from_seeds, report->from_ranges, report->whole_file (read whole after a failure)
+```
+
 ## Static libraries
 
 ```cpp
@@ -530,7 +546,7 @@ if (done)
   for a later version.
 - **Annex B's retries** (backoff with jitter, `Retry-After` as a floor):
   the errors carry what they need, the app retries.
-- A server core (beyond a peer's `PeerGate`), and a C API.
+- A server core (beyond a peer's `PeerGate`). The C API is in [`../c/`](../c/README.md).
 
 ## Layout
 

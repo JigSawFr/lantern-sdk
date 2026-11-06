@@ -81,6 +81,11 @@ struct Profile
 // A platform name (§ 4.3): 1 to 32 lower-case letters, digits and "-",
 // starting with a letter or a digit.
 [[nodiscard]] bool is_platform_name(std::string_view name) noexcept;
+// The platform of what a server serves (§ 4.3, Annex A.7): any platform's
+// name but `web`, a client in a browser, which installs nothing. A server
+// lists no app, title, homebrew, cheat set or save of it, nor `web` among
+// its handshake's `platforms` (L-A.7-1).
+[[nodiscard]] bool is_served_platform(std::string_view name) noexcept;
 // An architecture's name (§ 8.2): 1 to 32 lower-case letters, digits and "_".
 [[nodiscard]] bool is_arch_name(std::string_view name) noexcept;
 // A homebrew id (§ 8.1): reverse-DNS, lower-case, at most 128 bytes.

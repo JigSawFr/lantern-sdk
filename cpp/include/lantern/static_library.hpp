@@ -23,6 +23,7 @@
 #include <span>
 #include <string_view>
 
+#include <lantern/chunks.hpp>
 #include <lantern/document.hpp>
 #include <lantern/download.hpp>
 #include <lantern/error.hpp>
@@ -101,6 +102,17 @@ class StaticLibrary
     [[nodiscard]] Result<void> download(
         const DownloadTarget& target, DownloadState& state, DownloadSink& sink);
 
+    // § 22.1: the chunk index `chunks` points to (a path below the root),
+    // read within `chunks.size` bytes and checked as L-22.3-1 asks. Absent
+    // for a newer schema or a chunker this library does not know.
+    [[nodiscard]] Read<ChunkIndex> chunk_index(const AppChunks& chunks, const DownloadTarget& target);
+    // § 22.3 over files: the file put together from `seeds` and the ranges of
+    // the library's file that the chunks found nowhere else need, each chunk
+    // and the whole checked; any failure reads the whole file (L-22.3-4).
+    // `sink` holds the file on success.
+    [[nodiscard]] Result<DeltaReport> download_with_seeds(const DownloadTarget& target,
+        const AppChunks& chunks, std::span<const Seed> seeds, DownloadSink& sink, std::uint64_t gap = 16384);
+
     // § 6.3 over the whole listing of `platform` (L-21.3-2): the apps
     // `request` says the device is missing, by the server's rules.
     [[nodiscard]] Result<Vector<App>> missing(std::string_view platform, const MissingRequest& request);
@@ -120,5 +132,63 @@ class StaticLibrary
     Allocator allocator_;
     Handshake handshake_;
 };
+
+// § 21.3: what an address is. A server's handshake at the origin's
+// /.well-known/lantern (one without `static`) makes the address the server
+// of that origin; else a handshake with `static` at <address>/lantern.json
+// makes it a static library whose root is the address. An error, a
+// document this library cannot read (not JSON, a newer schema) and a
+// document of the other kind are passed over, and a static library's
+// handshake at /.well-known/lantern never makes the origin's root a
+// library (L-21.3-3). A folder on a storage has no origin: open() it.
+enum class LibraryKind : std::uint8_t
+{
+    server,
+    static_library,
+};
+
+struct FoundLibrary
+{
+    using allocator_type = Allocator;
+
+    LibraryKind kind = LibraryKind::server;
+    // A server's origin ("https://shelf.example.org"); a static library's
+    // root, ending with "/".
+    String root;
+    Handshake handshake;
+
+    FoundLibrary()
+        : FoundLibrary(allocator_type {})
+    {
+    }
+    explicit FoundLibrary(const allocator_type& allocator)
+        : root(allocator)
+        , handshake(allocator)
+    {
+    }
+    FoundLibrary(const FoundLibrary& other, const allocator_type& allocator)
+        : kind(other.kind)
+        , root(other.root, allocator)
+        , handshake(other.handshake, allocator)
+    {
+    }
+    FoundLibrary(FoundLibrary&& other, const allocator_type& allocator)
+        : kind(other.kind)
+        , root(std::move(other.root), allocator)
+        , handshake(std::move(other.handshake), allocator)
+    {
+    }
+    FoundLibrary(const FoundLibrary&)            = default;
+    FoundLibrary(FoundLibrary&&) noexcept        = default;
+    FoundLibrary& operator=(const FoundLibrary&) = default;
+    FoundLibrary& operator=(FoundLibrary&&)      = default;
+    ~FoundLibrary()                              = default;
+};
+
+// An empty optional when `address` is neither. An error only for an
+// address that is not an http(s) one this library may use (§ 2), or a
+// transport that cannot be used.
+[[nodiscard]] Result<std::optional<FoundLibrary>> find_library(Transport& transport, std::string_view address,
+    std::string_view user_agent, const DecodeOptions& options = {});
 
 } // namespace lantern

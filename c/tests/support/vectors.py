@@ -310,6 +310,62 @@ def main():
         lines.append(f"    {{ {c_string(ph['name'])}, {c_string(ph['phrase'])}, {'true' if ph['accepted'] else 'false'} }},")
     lines.append("};")
     lines.append("")
+    # Draft 0.7: canonical JSON, and differential updates' chunk indexes
+    canonical = json.loads((vectors / "canonical-json.json").read_text(encoding="utf-8"))
+    chunks = json.loads((vectors / "chunks.json").read_text(encoding="utf-8"))
+    lines.append("typedef struct canonical_case")
+    lines.append("{")
+    lines.append("    const char* name;")
+    lines.append("    const char* json;")
+    lines.append("    const char* canonical;")
+    lines.append("    const char* sha256;")
+    lines.append("} canonical_case;")
+    lines.append("static const canonical_case canonical_cases[] = {")
+    for case in canonical["cases"]:
+        lines.append(f"    {{ {c_string(case['name'])}, {c_string(case['json'])}, {c_string(case['canonical'])}, "
+                     f"{c_string(case['sha256'])} }},")
+    lines.append("};")
+    lines.append("typedef struct chunk_case")
+    lines.append("{")
+    lines.append("    const char* name;")
+    lines.append("    const char* seed; /* the file's bytes are SHA-256(seed, i on 8 bytes big-endian), cut to file_size; \"\" for an edit */")
+    lines.append("    uint64_t file_size;")
+    lines.append("    const char* file_sha256;")
+    lines.append("    uint64_t chunker_size;")
+    lines.append("    size_t chunk_count;")
+    lines.append("    uint64_t index_size;")
+    lines.append("    const char* index_sha256;")
+    lines.append("    const char* index;")
+    lines.append("} chunk_case;")
+    lines.append("static const chunk_case chunk_cases[] = {")
+    for case in chunks["cases"]:
+        seed = case["file"].get("seed", "") if "size" in case["file"] else ""
+        lines.append(f"    {{ {c_string(case['name'])}, {c_string(seed)}, {case['file_size']}U, "
+                     f"{c_string(case['file_sha256'])}, {case['chunker']['size']}U, {len(case['chunks'])}U, "
+                     f"{case['index_size']}U, {c_string(case['index_sha256'])}, {c_string(case['index'])} }},")
+    lines.append("};")
+    lines.append("typedef struct refused_index")
+    lines.append("{")
+    lines.append("    const char* name;")
+    lines.append("    const char* file_sha256;")
+    lines.append("    uint64_t file_size;")
+    lines.append("    uint64_t ref_size;")
+    lines.append("    const char* ref_sha256;")
+    lines.append("    const char* index;")
+    lines.append("} refused_index;")
+    lines.append("static const refused_index refused_indexes[] = {")
+    for r in chunks["refused"]:
+        assert r["usable"] is False
+        lines.append(f"    {{ {c_string(r['name'])}, {c_string(r['file_sha256'])}, {r['file_size']}U, "
+                     f"{r['chunks']['size']}U, {c_string(r['chunks']['sha256'])}, {c_string(r['index'])} }},")
+    lines.append("};")
+    update = chunks["update"]
+    lines.append(f"static const uint64_t update_read = {update['read']}U;")
+    lines.append("static const char* const update_ranges[] = {")
+    for r in update["ranges"]:
+        lines.append(f"    {c_string(r)},")
+    lines.append("};")
+    lines.append("")
     lines.append("#endif")
     lines.append("")
     Path(args.out).write_text("\n".join(lines), encoding="utf-8")

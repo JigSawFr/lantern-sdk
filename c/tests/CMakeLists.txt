@@ -13,7 +13,8 @@ add_custom_command(OUTPUT ${LANTERN_C_VECTORS}
         --spec ${LANTERN_SPEC_DIR} --out ${LANTERN_C_VECTORS}
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/support/vectors.py
         ${LANTERN_SPEC_DIR}/vectors/signatures.json ${LANTERN_SPEC_DIR}/vectors/spki.json
-        ${LANTERN_SPEC_DIR}/vectors/paths.json
+        ${LANTERN_SPEC_DIR}/vectors/paths.json ${LANTERN_SPEC_DIR}/vectors/canonical-json.json
+        ${LANTERN_SPEC_DIR}/vectors/chunks.json
     COMMENT "spec/vectors as a C header")
 add_custom_target(lantern_c_vectors DEPENDS ${LANTERN_C_VECTORS})
 
@@ -34,7 +35,8 @@ set(LANTERN_C_UNIT_SOURCES
     unit/discovery_tests.c
     unit/documents_tests.c
     unit/homebrew_tests.c
-    unit/v05_tests.c)
+    unit/v05_tests.c
+    unit/v07_tests.c)
 
 # Against the shared library (what it exports is enough) and the static one
 set(LANTERN_C_UNIT_VARIANTS static)

@@ -2,6 +2,8 @@
 // Everything at once; each header can also be included alone.
 #pragma once
 
+#include <lantern/canonical.hpp>
+#include <lantern/chunks.hpp>
 #include <lantern/client.hpp>
 #include <lantern/credentials.hpp>
 #include <lantern/device_key.hpp>

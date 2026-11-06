@@ -1792,6 +1792,124 @@ static void v05_static_library(void)
     lantern_transport_free(transport);
 }
 
+/* Draft 0.7: the update of the reference library (400,000 bytes, a few
+ * kilobytes changed) put together from the older version and ranges. */
+static void v07_differential_update(void)
+{
+    device d;
+    OPEN(d, "LANTERN_TEST_PUBLIC", "switch", false);
+    CHECK(lantern_client_offers(d.client, LANTERN_FAMILY_DELTAS) == 1);
+    lantern_error error      = LANTERN_INIT(lantern_error);
+    lantern_apps_query query = LANTERN_INIT(lantern_apps_query);
+    query.page_size          = 100;
+    lantern_apps_page* page  = NULL;
+    REQUIRE_CALL(lantern_client_apps(d.client, &query, &page, &error), LANTERN_OK, &error);
+    const lantern_app* older = NULL;
+    const lantern_app* newer = NULL;
+    for (size_t i = 0; i < lantern_apps_page_get_items_count(page); ++i)
+    {
+        const lantern_app* app = lantern_apps_page_get_items_at(page, i);
+        uint64_t version       = 0;
+        lantern_app_get_version_code(app, &version);
+        if (lantern_app_get_chunks(app) == NULL)
+            continue;
+        uint64_t other = 0;
+        if (older == NULL)
+            older = app;
+        else if (lantern_app_get_version_code(older, &other) && other < version)
+            newer = app;
+        else
+        {
+            newer = older;
+            older = app;
+        }
+    }
+    REQUIRE(older != NULL && newer != NULL);
+    lantern_download_target old_target;
+    lantern_download_target new_target;
+    target_of_app(older, &old_target);
+    target_of_app(newer, &new_target);
+
+    /* The older version, whole: the seed. The newer one, whole: what to get */
+    memory_sink seed;
+    memory_sink expected;
+    lantern_download_sink* seed_sink     = memory_sink_make(&seed);
+    lantern_download_sink* expected_sink = memory_sink_make(&expected);
+    lantern_download_state* state        = NULL;
+    REQUIRE_STATUS(lantern_download_state_create(NULL, &state, NULL), LANTERN_OK);
+    REQUIRE_CALL(
+        lantern_client_download(d.client, &old_target, state, seed_sink, &error), LANTERN_OK, &error);
+    lantern_download_state_reset(state);
+    REQUIRE_CALL(
+        lantern_client_download(d.client, &new_target, state, expected_sink, &error), LANTERN_OK, &error);
+
+    /* The index, by `chunks.url` and by the file's SHA-256 */
+    lantern_chunk_index* index = NULL;
+    REQUIRE_CALL(
+        lantern_client_chunk_index(d.client, lantern_app_get_chunks(newer), &new_target, &index, &error),
+        LANTERN_OK, &error);
+    lantern_chunk_index* by_hash = NULL;
+    REQUIRE_CALL(
+        lantern_client_chunk_index_of(d.client, new_target.sha256, new_target.size, &by_hash, &error),
+        LANTERN_OK, &error);
+    CHECK(lantern_chunk_index_count(index) == lantern_chunk_index_count(by_hash));
+    CHECK(lantern_chunk_index_count(index) > 3);
+    lantern_chunk_index_free(by_hash);
+    lantern_chunk_index_free(index);
+
+    memory_sink sink;
+    lantern_download_sink* out  = memory_sink_make(&sink);
+    const lantern_seed seeds[1] = { { seed.bytes, seed.size } };
+    lantern_delta_report report = LANTERN_INIT(lantern_delta_report);
+    const size_t before         = test_loopback_requests();
+    REQUIRE_CALL(lantern_client_download_with_seeds(d.client, &new_target, lantern_app_get_chunks(newer),
+                     seeds, 1, out, NULL, &report, &error),
+        LANTERN_OK, &error);
+    CHECK(!report.whole_file);
+    CHECK(sink.size == expected.size && memcmp(sink.bytes, expected.bytes, expected.size) == 0);
+    CHECK(report.from_ranges < expected.size / 2);
+    CHECK(report.from_seeds + report.from_ranges == expected.size);
+    CHECK(test_loopback_requests() == before + 1 + report.requests);
+
+    /* A seed of other bytes: the file whole */
+    uint8_t other[1000];
+    memset(other, 'x', sizeof(other));
+    const lantern_seed nothing[1] = { { other, sizeof(other) } };
+    memory_sink_clear(&sink);
+    lantern_download_sink_free(out);
+    out = memory_sink_make(&sink);
+    REQUIRE_CALL(lantern_client_download_with_seeds(d.client, &new_target, lantern_app_get_chunks(newer),
+                     nothing, 1, out, NULL, &report, &error),
+        LANTERN_OK, &error);
+    CHECK(report.whole_file);
+    CHECK(sink.size == expected.size && memcmp(sink.bytes, expected.bytes, expected.size) == 0);
+
+    /* An address is a server, or a static library */
+    lantern_found_library* found = NULL;
+    REQUIRE_CALL(lantern_find_library(d.transport, env("LANTERN_TEST_PUBLIC"), "LanternCTests/0.7", NULL,
+                     NULL, &found, &error),
+        LANTERN_OK, &error);
+    CHECK(lantern_found_library_kind(found) == LANTERN_LIBRARY_SERVER);
+    lantern_found_library_free(found);
+    found = NULL;
+    REQUIRE_CALL(lantern_find_library(d.transport, env("LANTERN_TEST_STATIC"), "LanternCTests/0.7", NULL,
+                     NULL, &found, &error),
+        LANTERN_OK, &error);
+    CHECK(lantern_found_library_kind(found) == LANTERN_LIBRARY_STATIC);
+    CHECK(STR_EQ(lantern_found_library_root(found), env("LANTERN_TEST_STATIC")));
+    lantern_found_library_free(found);
+
+    memory_sink_clear(&sink);
+    memory_sink_clear(&seed);
+    memory_sink_clear(&expected);
+    lantern_download_sink_free(out);
+    lantern_download_sink_free(seed_sink);
+    lantern_download_sink_free(expected_sink);
+    lantern_download_state_free(state);
+    lantern_apps_page_free(page);
+    device_close(&d);
+}
+
 int main(int argc, char** argv)
 {
     static const test_case tests[] = {
@@ -1817,6 +1935,7 @@ int main(int argc, char** argv)
         { "integration v05: an encrypted backup, resumable and whole, opened back", v05_encrypted_backups },
         { "integration v05: an account deleted, its name typed again", v05_account_deletion },
         { "integration v05: the static library, over HTTP and from its folder", v05_static_library },
+        { "integration v07: a differential update, and an address's library", v07_differential_update },
     };
     const test_case* const lists[] = { tests };
     const size_t counts[]          = { sizeof(tests) / sizeof(tests[0]) };

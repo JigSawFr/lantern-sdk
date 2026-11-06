@@ -42,6 +42,8 @@ struct Client::Call
     bool untrusted = false;
     // A JSON document: Accept-Encoding gzip (§ 2.1).
     bool compressible = false;
+    // The most a 2xx answer's body may hold (0: the document limit).
+    std::size_t max_body = 0;
 };
 
 // A whole answer, for the documents and the errors.
@@ -52,6 +54,8 @@ struct Client::Response
     String content_type;
     String retry_after;
     String upload_offset;
+    String upload_length;
+    String chunk_size;
     String content_encoding;
 
     explicit Response(Allocator allocator)
@@ -59,6 +63,8 @@ struct Client::Response
         , content_type(allocator)
         , retry_after(allocator)
         , upload_offset(allocator)
+        , upload_length(allocator)
+        , chunk_size(allocator)
         , content_encoding(allocator)
     {
     }
@@ -158,6 +164,31 @@ inline std::optional<std::uint64_t> parse_u64(std::string_view text) noexcept
     if (text.empty() || result.ec != std::errc {} || result.ptr != end)
         return std::nullopt;
     return value;
+}
+
+// A Content-Range: "bytes 100-199/200".
+struct ContentRange
+{
+    std::uint64_t first = 0;
+    std::uint64_t last  = 0;
+    std::uint64_t total = 0;
+};
+
+inline std::optional<ContentRange> parse_content_range(std::string_view value) noexcept
+{
+    if (!value.starts_with("bytes "))
+        return std::nullopt;
+    value.remove_prefix(6);
+    const std::size_t dash  = value.find('-');
+    const std::size_t slash = value.find('/');
+    if (dash == std::string_view::npos || slash == std::string_view::npos || dash > slash)
+        return std::nullopt;
+    const auto first = parse_u64(value.substr(0, dash));
+    const auto last  = parse_u64(value.substr(dash + 1, slash - dash - 1));
+    const auto total = parse_u64(value.substr(slash + 1));
+    if (!first || !last || !total || *first > *last || *last >= *total)
+        return std::nullopt;
+    return ContentRange { *first, *last, *total };
 }
 
 inline std::span<const std::byte> bytes_of(std::string_view text) noexcept

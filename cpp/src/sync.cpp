@@ -8,6 +8,7 @@
 #include <system_error>
 #include <utility>
 
+#include <lantern/canonical.hpp>
 #include <lantern/profiles.hpp>
 
 namespace lantern
@@ -62,62 +63,6 @@ std::optional<unsigned> digits(std::string_view text) noexcept
         value = value * 10 + static_cast<unsigned>(c - '0');
     }
     return value;
-}
-
-void write_canonical(const json::Value& value, String& out, Allocator allocator, bool& duplicate)
-{
-    switch (value.kind())
-    {
-        case json::Kind::object:
-        {
-            Vector<const json::Member*> members(allocator);
-            members.reserve(value.members().size());
-            for (const json::Member& member : value.members())
-                members.push_back(&member);
-            std::ranges::sort(
-                members, [](const json::Member* a, const json::Member* b) { return a->key < b->key; });
-            out.push_back('{');
-            for (std::size_t i = 0; i < members.size(); ++i)
-            {
-                if (i != 0)
-                {
-                    out.push_back(',');
-                    duplicate = duplicate || members[i - 1]->key == members[i]->key;
-                }
-                json::Writer::escape(out, members[i]->key);
-                out.push_back(':');
-                write_canonical(members[i]->value, out, allocator, duplicate);
-            }
-            out.push_back('}');
-            return;
-        }
-        case json::Kind::array:
-        {
-            out.push_back('[');
-            bool first = true;
-            for (const json::Value& item : value.items())
-            {
-                if (!first)
-                    out.push_back(',');
-                first = false;
-                write_canonical(item, out, allocator, duplicate);
-            }
-            out.push_back(']');
-            return;
-        }
-        case json::Kind::string:
-            json::Writer::escape(out, value.text());
-            return;
-        case json::Kind::number:
-            out.append(value.text());
-            return;
-        case json::Kind::boolean:
-            out.append(value.boolean() ? "true" : "false");
-            return;
-        case json::Kind::null:
-            out.append("null");
-            return;
-    }
 }
 
 template <class T>
@@ -213,20 +158,6 @@ void format_sync_time(std::int64_t milliseconds, String& out)
     put(20, rest % 1000, 3);
     text[23] = 'Z';
     out.append(text.data(), 24);
-}
-
-Result<String> canonical_json(std::string_view json, Allocator allocator, const json::Limits& limits)
-{
-    auto document = json::parse(json, limits, allocator.resource());
-    if (!document)
-        return std::unexpected(document.error());
-    String out(allocator);
-    out.reserve(json.size());
-    bool duplicate = false;
-    write_canonical(document->root(), out, allocator, duplicate);
-    if (duplicate)
-        return fail(Category::invalid_response, "an object with a key twice has no canonical form");
-    return out;
 }
 
 Result<SyncMerge> sync_merge(
