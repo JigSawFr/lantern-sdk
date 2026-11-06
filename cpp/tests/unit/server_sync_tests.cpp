@@ -537,7 +537,7 @@ TEST_CASE("sync: the event sync tells the account's devices, and only them")
     const auto step = [](EventStream& stream)
     {
         String out;
-        stream.step(0, out);
+        static_cast<void>(stream.step(0, out));
         return std::string(out);
     };
     const auto mine         = open(lea2);
