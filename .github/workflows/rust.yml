@@ -4,7 +4,7 @@
 # specification's examples and vectors, the oldest Rust the crate declares
 # (rust-version), the build for WebAssembly, and the dependencies' licences
 # and advisories (cargo-deny), and the readers fuzzed for a short while
-# (cargo-fuzz).
+# (cargo-fuzz) and under Miri.
 # Nothing is published here: release.yml builds, attests and publishes a
 # release (RELEASING.md).
 name: rust
@@ -148,3 +148,21 @@ jobs:
           for target in documents answers fields; do
             cargo "+$NIGHTLY" fuzz run "$target" -- -max_total_time=30
           done
+
+  miri:
+    name: Miri (undefined behaviour)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    env:
+      RUSTFLAGS: ""
+      # The tests read the specification's files
+      MIRIFLAGS: -Zmiri-disable-isolation
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Rust ${{ env.NIGHTLY }}
+        run: rustup toolchain install "$NIGHTLY" --profile minimal --component miri,rust-src --no-self-update
+      - name: Tests under Miri
+        run: cargo "+$NIGHTLY" miri test --locked --test vectors --test rules --test profiles
