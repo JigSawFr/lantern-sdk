@@ -189,6 +189,70 @@ def test_a_peer_a_mirror_and_the_server(demo: tuple[str, LanternApp], tmp_path: 
         mirror.server_close()
 
 
+def test_the_async_client_downloads_from_a_peer_a_mirror_and_the_server(
+    demo: tuple[str, LanternApp], tmp_path: Path
+) -> None:
+    pytest.importorskip("httpx")
+    from lantern.client import AsyncLanternClient
+
+    url, app = demo
+    lib = app.library
+    apps = [a for a in lib.apps() if a.platform == "switch" and a.size > 1000]
+    files = {}
+    for a in apps:
+        ref = lib.file(a.file.rsplit("/", 1)[1])
+        assert ref is not None
+        files[a.sha256] = ref
+    peer = Peer(("127.0.0.1", 0), files, {UID: ed25519.public_key(GRANT_SEED)}, name="Noor's console")
+    threading.Thread(target=peer.serve_forever, daemon=True).start()
+    seen: list[dict[str, str | None]] = []
+
+    class Mirror_(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args: object) -> None:
+            return None
+
+        def do_GET(self) -> None:  # a mirror that serves other bytes
+            seen.append({"path": self.path, "authorization": self.headers.get("Authorization")})
+            body = bytes(apps[0].size)
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    mirror = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Mirror_)
+    threading.Thread(target=mirror.serve_forever, daemon=True).start()
+
+    async def run() -> None:
+        found = FoundPeer("127.0.0.1", peer.port, "/lantern", False, peer.uid, "Noor's console", 2, (UID,))
+        progress: list[tuple[int, int]] = []
+        async with AsyncLanternClient(url, user_agent=AGENT, platform="switch", token=DEMO_TOKEN, key=DEMO_KEY) as c:
+            target = apps[0]
+            got = await c.download_from(
+                target, tmp_path / "a.nsp", mirrors=False, peers=[found], progress=lambda d, t: progress.append((d, t))
+            )
+            assert hashlib.sha256(got.read_bytes()).hexdigest() == target.sha256 and peer.served == 1
+            assert progress and progress[-1] == (target.size, target.size)
+            # A mirror of other bytes: refused, nothing kept of it, the server's file taken (L-19.1-1, L-19.1-3).
+            target.mirrors = [Mirror(url=f"http://127.0.0.1:{mirror.server_address[1]}/frost.nsp")]
+            got = await c.download_from(target, tmp_path / "b.nsp")
+            assert hashlib.sha256(got.read_bytes()).hexdigest() == target.sha256
+            assert seen and seen[0]["authorization"] is None  # no token to a mirror (L-19.1-2)
+            # A peer that holds nothing of it: the server's.
+            other = next(a for a in lib.apps() if a.platform == "switch" and a.sha256 not in files)
+            got = await c.download_from(other, tmp_path / "c.nsp", mirrors=False, peers=[found])
+            assert got.stat().st_size == other.size
+        assert c._own_side_transports == []  # closed with the client
+
+    try:
+        asyncio.run(run())
+        assert not list(tmp_path.glob("*.part"))  # what the mirror gave was not kept
+    finally:
+        peer.shutdown()
+        peer.server_close()
+        mirror.shutdown()
+        mirror.server_close()
+
+
 def test_peer_discovery_on_loopback() -> None:
     peer = Peer(("127.0.0.1", 0), {}, {UID: ed25519.public_key(GRANT_SEED)}, name="Noor's console")
     sock = peer.discovery(0, "127.0.0.1")

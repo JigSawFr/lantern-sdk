@@ -1,6 +1,5 @@
 """The asynchronous client, over httpx (the `httpx` extra): the same calls as
-LanternClient, awaited (but download_from(), the mirrors' and peers', which
-is LanternClient's alone)."""
+LanternClient, awaited."""
 
 from __future__ import annotations
 
@@ -68,10 +67,30 @@ from lantern.client.core import (
 )
 from lantern.client.download import Verifier
 from lantern.client.streams import AsyncEventStream
-from lantern.client.transport import AsyncResponse, AsyncTransport, BearerToken, Credentials, RequestSigner
+from lantern.client.transport import (
+    AsyncResponse,
+    AsyncTransport,
+    BearerToken,
+    Credentials,
+    Request,
+    RequestSigner,
+)
 from lantern.digest import Sha256, sha256_file
-from lantern.errors import Conflict, DocumentError, Gone, IntegrityError, SlowDown, UnexpectedResponse
+from lantern.discovery import FoundPeer
+from lantern.errors import (
+    Conflict,
+    DocumentError,
+    Gone,
+    InsecureTransport,
+    IntegrityError,
+    ProblemError,
+    SlowDown,
+    TransportError,
+    UnexpectedResponse,
+)
 from lantern.events import ServerEvent
+from lantern.grants import plain_http_to
+from lantern.http import Headers
 from lantern.limits import CHEAT_SET
 from lantern.pinning import ServerRecord, ServerStore
 from lantern.signatures import DeviceKey
@@ -101,6 +120,8 @@ class AsyncLanternClient:
         credentials: Credentials | None = None,
         signer: RequestSigner | None = None,
         transport: AsyncTransport | None = None,
+        mirror_transport: AsyncTransport | None = None,
+        peer_transport: AsyncTransport | None = None,
         verify: bool = True,
         pin: str | None = None,
         accept_language: str | None = None,
@@ -129,6 +150,10 @@ class AsyncLanternClient:
 
             transport = AsyncHttpxTransport(verify=verify, pin=pin)
         self.transport: AsyncTransport = transport
+        # For download_from(): made when first needed, and closed with the client when it made them
+        self._mirror_transport = mirror_transport
+        self._peer_transport = peer_transport
+        self._own_side_transports: list[AsyncTransport] = []
         self.timeout = timeout
         self.last_upload: str | None = None
         self.last_header: bytes | None = None
@@ -151,6 +176,25 @@ class AsyncLanternClient:
 
     async def close(self) -> None:
         await self.transport.close()
+        for side in self._own_side_transports:
+            await side.close()
+        self._own_side_transports.clear()
+
+    def _side_transport(self, peer: bool) -> AsyncTransport:
+        """The transport of mirrors (certificates checked) or of peers (a console's own key: nothing but a
+        grant goes there, SPEC.md § 19.4), the app's or one made on first use."""
+        given = self._peer_transport if peer else self._mirror_transport
+        if given is not None:
+            return given
+        from lantern.client.httpx_transport import AsyncHttpxTransport
+
+        made = AsyncHttpxTransport(verify=not peer)
+        self._own_side_transports.append(made)
+        if peer:
+            self._peer_transport = made
+        else:
+            self._mirror_transport = made
+        return made
 
     def set_token(self, token: str | None, key: DeviceKey | None = None) -> None:
         self.core.pipeline.credentials = BearerToken(token) if token is not None else None
@@ -913,6 +957,98 @@ class AsyncLanternClient:
             await asyncio.to_thread(part.replace, target)
             return target
         raise LanternError(f"{url}: the download could not be resumed")
+
+    async def download_from(
+        self,
+        file: App | Package,
+        dest: str | Path,
+        *,
+        mirrors: bool = True,
+        peers: Sequence[FoundPeer] = (),
+        platform: str | None = None,
+        progress: Progress | None = None,
+    ) -> Path:
+        """LanternClient.download_from(), awaited: an app's or a package's file from its mirrors and from
+        peers first, then from the server (SPEC.md § 19), checked by the size and SHA-256 of the server's
+        document before it is kept (L-19.1-1); a source that gives more, or bytes that fail the check, is
+        left for the next (L-19.1-3). No token, signature or cookie goes to a mirror or a peer; a peer gets
+        a grant, asked for once (L-19.1-2). Plain HTTP only to a private network's address (L-19.2-1,
+        L-19.4-6); at most 2 peers are tried (L-19.5-2)."""
+        sources: list[tuple[str, bool, dict[str, str]]] = []
+        if mirrors:
+            for m in (file.mirrors or [])[:8]:
+                if plain_http_to(m.url):
+                    sources.append((m.url, False, {}))
+        chosen = [p for p in peers if self.core.hello is None or self.core.hello.uid in p.servers][:2]
+        if chosen:
+            if self.core.hello is None:
+                await self.handshake()
+            try:
+                grant = await self.grant(file.sha256, file.size, platform=platform)
+            except (LanternError, ValueError):
+                grant = None
+            if grant is not None:
+                for peer in chosen:
+                    url = peer.blob_url(file.sha256)
+                    if plain_http_to(url):
+                        sources.append((url, True, {"Lantern-Grant": grant.grant}))
+        for url, from_peer, headers in sources:
+            try:
+                return await self._download_source(
+                    url,
+                    transport=self._side_transport(from_peer),
+                    headers=headers,
+                    sha256=file.sha256,
+                    size=file.size,
+                    dest=dest,
+                    progress=progress,
+                )
+            except (IntegrityError, TransportError, UnexpectedResponse, DocumentError, ProblemError):
+                continue
+        return await self.download(file.file, dest, sha256=file.sha256, size=file.size, resume=False, progress=progress)
+
+    async def _download_source(
+        self,
+        url: str,
+        *,
+        transport: AsyncTransport,
+        headers: dict[str, str],
+        sha256: str,
+        size: int,
+        dest: str | Path,
+        progress: Progress | None,
+    ) -> Path:
+        """One mirror's or peer's file: a bare request (no credential, no signature), checked as it arrives,
+        kept only once whole and right."""
+        if not plain_http_to(url):
+            raise InsecureTransport(f"{url}: plain HTTP only to a private network's address (SPEC.md § 19.2)")
+        verifier = Verifier(sha256, size, url)
+        h = Headers({"User-Agent": self.core.user_agent, "Accept": "*/*", "Accept-Encoding": "identity"})
+        for k, v in headers.items():
+            h[k] = v
+        target = Path(dest)
+        part = target.with_name(target.name + ".part")
+        hasher = Sha256()
+        async with await transport.send(Request("GET", url, h), timeout=self.timeout) as response:
+            if response.status != 200:
+                raise self.core.error(url, response.status, response.headers, await _error_body(response))
+            verifier.start(response.status, response.headers, 0)
+            f = await asyncio.to_thread(_open, part, "wb")
+            try:
+                async for chunk in response.iter_bytes():
+                    verifier.feed(hasher, chunk)
+                    await asyncio.to_thread(f.write, chunk)
+                    if progress is not None:
+                        progress(hasher.size, size)
+                await asyncio.to_thread(f.close)
+                verifier.finish(hasher)
+            except BaseException:
+                if not f.closed:
+                    await asyncio.to_thread(f.close)
+                await asyncio.to_thread(part.unlink, missing_ok=True)
+                raise
+        await asyncio.to_thread(part.replace, target)
+        return target
 
     async def download_app(
         self, app: App, dest: str | Path, *, resume: bool = True, progress: Progress | None = None

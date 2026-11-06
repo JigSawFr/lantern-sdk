@@ -190,8 +190,9 @@ peers = PeerFinder().peers(client.hello.uid)  # discovery with "peers": true, on
 client.download_from(app, "frostline.nsz", peers=peers)  # mirrors, then peers, then the server
 ```
 
-Whatever gave the bytes, they are checked by the size and SHA-256 of the
-server's document before they are kept; a source that gives more than the
+`AsyncLanternClient.download_from()` is the same, awaited. Whatever gave the
+bytes, they are checked by the size and SHA-256 of the server's document
+before they are kept; a source that gives more than the
 size or bytes that fail is left for the next, and the server's file comes
 last (§ 19.1). No token, signature or cookie goes to a mirror or a peer: a
 peer gets a grant, asked for once (`client.grant()`, checked against the
@@ -609,8 +610,6 @@ that a harness checks what its client sent. The TLS scenarios need the
   gives its own `RequestStore`). Its event streams, and its locks of saves
   and requests, live in one process: a server of several processes gives
   each its own, or shares stores and a hub of its own making.
-- In `AsyncLanternClient`: `download_from()`, the mirrors' and peers', which
-  `LanternClient` alone has.
 - Drawing the QR code of `verify_complete`: the client gives its text; an
   app draws it with its own toolkit (SPEC.md § 5.2 wants no image from the
   server).
