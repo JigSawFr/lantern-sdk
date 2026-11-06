@@ -224,7 +224,7 @@ static void what_is_missing_in_the_vectors(void)
         size_t got_count = 0;
         for (size_t k = 0; k < lantern_app_list_count(list) && got_count < MAX_WORDS; ++k)
             got[got_count++] = lantern_app_get_id(lantern_app_list_at(list, k)).data;
-        qsort(got, got_count, sizeof(got[0]), compare_words);
+        qsort((void*)got, got_count, sizeof(got[0]), compare_words);
         qsort((void*)expected.words, expected.count, sizeof(expected.words[0]), compare_words);
         for (size_t k = 0; k < got_count && k < expected.count; ++k)
             CHECK(strcmp(got[k], expected.words[k]) == 0);
