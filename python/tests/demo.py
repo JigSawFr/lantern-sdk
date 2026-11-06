@@ -540,18 +540,25 @@ def free_port() -> int:
 
 
 @contextmanager
-def serve(framework: str, lantern: LanternApp | None = None, port: int = 0) -> Iterator[str]:
-    """The demo served on loopback, by `framework` (flask or fastapi), in a thread; its URL."""
+def serve(
+    framework: str, lantern: LanternApp | None = None, port: int = 0, tls: tuple[Path, Path] | None = None
+) -> Iterator[str]:
+    """The demo served on loopback, by `framework` (flask or fastapi), in a thread; its URL.
+
+    With `tls` (a certificate file and its key file, PEM) it is served over HTTPS.
+    """
     lantern = lantern or make_lantern()
     port = port or free_port()
+    scheme = "https" if tls else "http"
     if framework == "flask":
         from werkzeug.serving import make_server
 
-        server = make_server("127.0.0.1", port, flask_app(lantern), threaded=True)
+        context = (str(tls[0]), str(tls[1])) if tls else None
+        server = make_server("127.0.0.1", port, flask_app(lantern), threaded=True, ssl_context=context)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
-            yield f"http://127.0.0.1:{port}/"
+            yield f"{scheme}://127.0.0.1:{port}/"
         finally:
             lantern.shutdown()  # the event streams get shutdown, and end
             server.shutdown()
@@ -559,7 +566,15 @@ def serve(framework: str, lantern: LanternApp | None = None, port: int = 0) -> I
     elif framework == "fastapi":
         import uvicorn
 
-        config = uvicorn.Config(fastapi_app(lantern), host="127.0.0.1", port=port, log_level="warning", lifespan="off")
+        config = uvicorn.Config(
+            fastapi_app(lantern),
+            host="127.0.0.1",
+            port=port,
+            log_level="warning",
+            lifespan="off",
+            ssl_certfile=str(tls[0]) if tls else None,
+            ssl_keyfile=str(tls[1]) if tls else None,
+        )
         userver = uvicorn.Server(config)
         thread = threading.Thread(target=userver.run, daemon=True)
         thread.start()
@@ -568,7 +583,7 @@ def serve(framework: str, lantern: LanternApp | None = None, port: int = 0) -> I
                 break
             time.sleep(0.025)
         try:
-            yield f"http://127.0.0.1:{port}/"
+            yield f"{scheme}://127.0.0.1:{port}/"
         finally:
             lantern.shutdown()
             userver.should_exit = True
