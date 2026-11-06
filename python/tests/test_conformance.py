@@ -31,6 +31,7 @@ from lantern.peer import Peer
 from lantern.server.discovery import DiscoveryResponder
 from lantern.server.files import FileRef
 from lantern.server.http import content_coding
+from lantern.spki import spki_sha256
 
 pytestmark = pytest.mark.conformance
 
@@ -354,3 +355,63 @@ def test_a_server_without_encrypted_saves(tmp_path: Path) -> None:
     assert re.search(r"^PASS\s+§ 9\.4\s+e2e\.not-offered\s", report, re.M), report
     levels = next(line for line in report.splitlines() if line.startswith("Levels reached"))
     assert "+saves" in levels and "+encrypted_saves" not in levels, levels
+
+
+def self_signed(folder: Path) -> tuple[Path, Path]:
+    """A certificate for 127.0.0.1 and its key (PEM), made for one run."""
+    import datetime
+    import ipaddress
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
+    now = datetime.datetime.now(datetime.UTC)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(minutes=5))
+        .not_valid_after(now + datetime.timedelta(days=1))
+        .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), critical=False)
+        .sign(key, hashes.SHA256())
+    )
+    cert_file, key_file = folder / "cert.pem", folder / "key.pem"
+    cert_file.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_file.write_bytes(
+        key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+    )
+    return cert_file, key_file
+
+
+# The suite's TLS-floor check offers TLS 1.0 and 1.1 on purpose, to see them refused; Python 3.15 warns of it.
+@pytest.mark.filterwarnings("ignore:ssl.TLSVersion.TLSv1:DeprecationWarning")
+@pytest.mark.filterwarnings("ignore:ssl.TLSVersion.TLSv1_1:DeprecationWarning")
+@pytest.mark.parametrize("framework", ["flask", "fastapi"])
+def test_the_suite_over_https(framework: str, tmp_path: Path) -> None:
+    """The suite over TLS, trusting the demo's certificate: § 2's transport checks have something to check."""
+    pytest.importorskip(framework)
+    if framework == "fastapi":
+        pytest.importorskip("uvicorn")
+    run = suite()
+    out = io.StringIO()
+    cert, key = self_signed(tmp_path)
+    # The approval page shows the short fingerprint of the key the server's certificate carries (§ 5.3)
+    app = make_lantern(accounts=demo_accounts(), spki=spki_sha256(cert.read_text(encoding="ascii")))
+    with serve(framework, app, tls=(cert, key)) as url:
+        assert url.startswith("https://")
+        code = run.main([url, "--cafile", str(cert)], out=out)
+    report = out.getvalue()
+    status = {m.group(2): m.group(1) for m in re.finditer(r"^(PASS|FAIL|WARN|SKIP)\s+§ \S+\s+(\S+)", report, re.M)}
+    failed = [line for line in report.splitlines() if line.startswith("FAIL")]
+    assert code == 0 and not failed, report
+    for check in ("transport.https", "transport.hsts"):
+        assert status.get(check) == "PASS", f"{check}: {status.get(check)}\n{report}"
+    # TLS 1.1 and older refused: uvicorn drops the connection without an alert, which the suite
+    # cannot tell from its own limits (a skip, not a failure)
+    assert status.get("transport.tls") in ("PASS", "SKIP"), report
