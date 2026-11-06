@@ -139,45 +139,6 @@ std::optional<String> percent_decoded(std::string_view text, const Allocator& al
     return out;
 }
 
-// Unix seconds as "2026-10-10T12:00:00Z".
-String utc_text(std::int64_t seconds, const Allocator& allocator)
-{
-    const std::int64_t days = seconds >= 0 ? seconds / 86400 : -((86399 - seconds) / 86400);
-    const std::int64_t rest = seconds - days * 86400;
-    // The civil date of a day count (proleptic Gregorian, from 1970-01-01)
-    const std::int64_t z   = days + 719468;
-    const std::int64_t era = (z >= 0 ? z : z - 146096) / 146097;
-    const std::int64_t doe = z - era * 146097;
-    const std::int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    const std::int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    const std::int64_t mp  = (5 * doy + 2) / 153;
-    const std::int64_t day = doy - (153 * mp + 2) / 5 + 1;
-    const std::int64_t mon = mp < 10 ? mp + 3 : mp - 9;
-    const std::int64_t yer = yoe + era * 400 + (mon <= 2 ? 1 : 0);
-    std::array<char, 24> text {};
-    const auto put = [&](std::size_t at, std::int64_t value, std::size_t width)
-    {
-        for (std::size_t i = width; i > 0; --i)
-        {
-            text[at + i - 1] = static_cast<char>('0' + value % 10);
-            value /= 10;
-        }
-    };
-    put(0, yer, 4);
-    text[4] = '-';
-    put(5, mon, 2);
-    text[7] = '-';
-    put(8, day, 2);
-    text[10] = 'T';
-    put(11, rest / 3600, 2);
-    text[13] = ':';
-    put(14, rest % 3600 / 60, 2);
-    text[16] = ':';
-    put(17, rest % 60, 2);
-    text[19] = 'Z';
-    return { text.data(), 20, allocator };
-}
-
 // "s_" or "u_" and a random token (letters, digits, `_` and `-`).
 std::expected<String, ProblemError> new_id(
     const ServerState& state, std::string_view prefix, std::size_t bytes)

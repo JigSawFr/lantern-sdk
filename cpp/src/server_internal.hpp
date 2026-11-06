@@ -94,6 +94,12 @@ struct ServerState
     bool encrypted_saves = false;
     mutable std::mutex saves_mutex;
     mutable Vector<String> writing;
+    // The requests for games (§ 11) and their store; this mutex makes the check (an open request for the
+    // title already?) and the change it leads to one step.
+    RequestStore* requests = nullptr;
+    mutable std::mutex requests_mutex;
+    // The administration API (§ 5.7) and the invitations (§ 5.5): the account store keeps what they need.
+    bool admin = false;
 
     explicit ServerState(const Allocator& memory)
         : allocator(memory)
@@ -272,24 +278,79 @@ struct PageWindow
 [[nodiscard]] Answer serve_library_file(
     const ServerState& state, const ServerRequest& request, const LibraryFile& file);
 
+// An answer with no body (§ 10, § 11: DELETE answers 204).
+[[nodiscard]] ServerResponse no_content(const ServerState& state, const ServerRequest& request);
+
+struct Caller;
+
+// Rating caps (§ 5.6): what a capped caller does not see. The age a rating is
+// read as, the age of a title for a cap, and whether it is above the cap.
+[[nodiscard]] std::optional<std::uint64_t> rating_age(
+    std::string_view system, std::string_view rating) noexcept;
+// Whether a caller of `cap` must not see what has `ratings`: above the cap's age, or unrated with `unrated`
+// `hide`. A cap the table cannot read hides everything rated, so that it never loosens.
+[[nodiscard]] bool above_cap(const RatingCap& cap, const Vector<Rating>& ratings) noexcept;
+// Why `cap` is not a rating cap of § 5.6; empty when it is.
+[[nodiscard]] std::string_view cap_problem(const RatingCap& cap) noexcept;
+// A rating cap as a document writes it.
+void write_rating_cap(json::Writer& w, const RatingCap& cap);
+
+// What one caller does not see: the titles above its cap, looked up in the library's titles. Without a cap
+// it hides nothing and asks the library nothing.
+class CapFilter
+{
+  public:
+    explicit CapFilter(const Allocator& allocator)
+        : titles_(allocator)
+        , none_(allocator)
+    {
+    }
+
+    // A caller's filter: the library's titles are read once when the caller has a cap.
+    [[nodiscard]] static std::expected<CapFilter, ProblemError> of(
+        const ServerState& state, const Caller& caller);
+
+    [[nodiscard]] bool active() const noexcept { return cap_.has_value(); }
+    // What has these ratings (a homebrew's, a title's).
+    [[nodiscard]] bool hides(const Vector<Rating>& ratings) const noexcept;
+    // A title, and so its apps and cheat sets; a title the library does not describe is unrated.
+    [[nodiscard]] bool hides_title(std::string_view platform, std::string_view title_id) const noexcept;
+
+  private:
+    std::optional<RatingCap> cap_;
+    Vector<Title> titles_;
+    Vector<Rating> none_;
+};
+
+// Whether the file <base>/v1/files/<name> belongs to an app or a homebrew the filter hides.
+[[nodiscard]] std::expected<bool, ProblemError> file_hidden(
+    const ServerState& state, const CapFilter& filter, std::string_view name);
+
 // Changes (§ 6.4), titles (§ 7) and sections (§ 6.5): each 404 when the
 // library does not offer the family.
-[[nodiscard]] Answer changes_route(const ServerState& state, const ServerRequest& request);
-[[nodiscard]] Answer titles_route(const ServerState& state, const ServerRequest& request);
+[[nodiscard]] Answer changes_route(
+    const ServerState& state, const ServerRequest& request, const Caller& caller);
+[[nodiscard]] Answer titles_route(
+    const ServerState& state, const ServerRequest& request, const Caller& caller);
 [[nodiscard]] Answer title_route(
-    const ServerState& state, const ServerRequest& request, std::string_view title_id);
-[[nodiscard]] Answer title_changes_route(const ServerState& state, const ServerRequest& request);
-[[nodiscard]] Answer sections_route(const ServerState& state, const ServerRequest& request);
+    const ServerState& state, const ServerRequest& request, const Caller& caller, std::string_view title_id);
+[[nodiscard]] Answer title_changes_route(
+    const ServerState& state, const ServerRequest& request, const Caller& caller);
+[[nodiscard]] Answer sections_route(
+    const ServerState& state, const ServerRequest& request, const Caller& caller);
 
 // Homebrew (§ 8) and cheats (§ 10): each 404 when the library does not offer
 // the family.
-[[nodiscard]] Answer homebrew_list_route(const ServerState& state, const ServerRequest& request);
+[[nodiscard]] Answer homebrew_list_route(
+    const ServerState& state, const ServerRequest& request, const Caller& caller);
 [[nodiscard]] Answer homebrew_route(
-    const ServerState& state, const ServerRequest& request, std::string_view id);
-[[nodiscard]] Answer homebrew_updates_route(const ServerState& state, const ServerRequest& request);
-[[nodiscard]] Answer cheats_route(const ServerState& state, const ServerRequest& request);
+    const ServerState& state, const ServerRequest& request, const Caller& caller, std::string_view id);
+[[nodiscard]] Answer homebrew_updates_route(
+    const ServerState& state, const ServerRequest& request, const Caller& caller);
+[[nodiscard]] Answer cheats_route(
+    const ServerState& state, const ServerRequest& request, const Caller& caller);
 [[nodiscard]] Answer cheat_text_route(
-    const ServerState& state, const ServerRequest& request, std::string_view id);
+    const ServerState& state, const ServerRequest& request, const Caller& caller, std::string_view id);
 [[nodiscard]] Answer cheat_post_route(const ServerState& state, const ServerRequest& request);
 [[nodiscard]] Answer cheat_write_route(
     const ServerState& state, const ServerRequest& request, std::string_view id);
@@ -303,7 +364,6 @@ inline constexpr std::size_t cheat_body  = std::size_t { 3 } << 20U;
 
 // Save backups (§ 9) and encrypted ones (§ 9.4), for a caller with the scope
 // `saves`: each 404 when the server keeps none.
-struct Caller;
 [[nodiscard]] Answer saves_route(
     const ServerState& state, const ServerRequest& request, const Caller& caller);
 [[nodiscard]] Answer save_post_route(
@@ -332,6 +392,7 @@ struct Caller
     String device; // what the user calls the paired device, when there is one
     Vector<String> scopes; // in the order of known_scopes
     std::optional<PublicKey> key; // the token is bound to it
+    std::optional<RatingCap> rating_cap; // what its device may see (§ 5.6)
 
     explicit Caller(const Allocator& allocator)
         : name(allocator)
@@ -359,6 +420,37 @@ struct Caller
 // `cheats` on a server that asks for no token, nothing else.
 [[nodiscard]] std::optional<ProblemError> check_scope(
     const ServerState& state, const Caller& caller, std::string_view scope);
+
+// Requests for games (§ 11), for a caller with the scope `requests`: each 404 when the server keeps none.
+[[nodiscard]] Answer requests_route(
+    const ServerState& state, const ServerRequest& request, const Caller& caller);
+[[nodiscard]] Answer request_route(
+    const ServerState& state, const ServerRequest& request, const Caller& caller, std::string_view id);
+
+// The admin's side of the requests (§ 11): every account's, and deciding an open one.
+[[nodiscard]] Answer admin_requests_route(const ServerState& state, const ServerRequest& request);
+[[nodiscard]] Answer admin_request_route(
+    const ServerState& state, const ServerRequest& request, std::string_view id);
+
+// The administration API (§ 5.7), for a caller with the scope `admin`: `resource` is users, devices,
+// pairings, invitations or requests, `id` the name or the id after it, if any.
+[[nodiscard]] Answer admin_route(const ServerState& state, const ServerRequest& request, const Caller& caller,
+    std::string_view resource, std::string_view id);
+// Whether the administration API has that route, and the methods it takes.
+[[nodiscard]] std::string_view admin_methods(std::string_view resource, bool has_id) noexcept;
+
+// Unix seconds as "2026-10-10T12:00:00Z".
+[[nodiscard]] String utc_text(std::int64_t seconds, const Allocator& allocator);
+// <verify> of a request: the approval page's address, absolute.
+[[nodiscard]] std::expected<String, ProblemError> pairing_verify_url(
+    const ServerState& state, const ServerRequest& request);
+// Approves `entry` for the account `account` (§ 5.2, § 5.5, § 5.7): the scopes it asked for that `only` holds
+// (all of them when `restrict` is false) and the account holds, the cap and the invitation it came by. The
+// token waits for the device's next poll. Nothing when the pairing was decided meanwhile.
+[[nodiscard]] Result<std::optional<Vector<String>>> approve_entry(const ServerState& state,
+    const PendingPairing& entry, const StoredAccount& account, bool restrict,
+    std::span<const std::string_view> only, const std::optional<RatingCap>& cap, std::string_view invitation,
+    const Allocator& allocator);
 
 // Pairing (§ 5.2): POST <base>/v1/pairing, GET <base>/v1/pairing/<poll>, and
 // the approval page at ServerState::verify.

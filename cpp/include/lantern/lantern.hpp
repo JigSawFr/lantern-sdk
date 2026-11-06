@@ -28,6 +28,7 @@
 #include <lantern/peers.hpp>
 #include <lantern/pinning.hpp>
 #include <lantern/profiles.hpp>
+#include <lantern/requests.hpp>
 #include <lantern/requires.hpp>
 #include <lantern/saves.hpp>
 #include <lantern/server.hpp>

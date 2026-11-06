@@ -25,10 +25,10 @@ inline DeviceKey device_key()
 // Adds mira, noor and the console's token to `store`.
 inline Result<void> fill_accounts(MemoryAccountStore& store, std::int64_t now)
 {
-    if (auto added = store.add_account("mira", known_scopes); !added)
+    if (auto added = store.add_account("mira", known_scopes, false, now); !added)
         return added;
     static constexpr std::array<std::string_view, 1> library { "library" };
-    if (auto added = store.add_account("noor", library); !added)
+    if (auto added = store.add_account("noor", library, false, now); !added)
         return added;
     const DeviceKey key = device_key();
     auto console = store.add_token(token, "mira", "Mira's console", known_scopes, key.public_key(), now);

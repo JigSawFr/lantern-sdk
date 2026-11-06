@@ -474,16 +474,6 @@ void write_cheat_members(json::Writer& w, const CheatSet& set)
     write_hex(w, set.sha256);
 }
 
-// An answer with no body (§ 10: PUT and DELETE answer 204).
-ServerResponse no_content(const ServerState& state, const ServerRequest& request)
-{
-    ServerResponse response(state.allocator);
-    response.status = 204;
-    caching_headers(response.headers, request);
-    response.headers.set("Content-Length", "0");
-    return response;
-}
-
 bool same_set(const CheatSet& set, const CheatWrite& other) noexcept
 {
     return set.platform == other.platform && set.title_id == other.title_id && set.build_id == other.build_id
@@ -685,11 +675,14 @@ std::string_view cheat_problem(const CheatWrite& set)
     return {};
 }
 
-Answer homebrew_list_route(const ServerState& state, const ServerRequest& request)
+Answer homebrew_list_route(const ServerState& state, const ServerRequest& request, const Caller& caller)
 {
     const auto platform = platform_param(state, request);
     if (!platform)
         return std::unexpected(platform.error());
+    const auto cap = CapFilter::of(state, caller);
+    if (!cap)
+        return std::unexpected(cap.error());
     const std::string_view text  = request.param("q").value_or(std::string_view {});
     const std::string_view kind  = request.param("kind").value_or(std::string_view {});
     const std::string_view genre = request.param("genre").value_or(std::string_view {});
@@ -709,7 +702,7 @@ Answer homebrew_list_route(const ServerState& state, const ServerRequest& reques
     Vector<const Homebrew*> kept(state.allocator);
     for (const Homebrew& entry : *all)
     {
-        if ((platform->has_value() && entry.platform != **platform)
+        if ((platform->has_value() && entry.platform != **platform) || cap->hides(entry.ratings)
             || (!kind.empty() && effective_kind(entry) != kind)
             || (!genre.empty() && !std::ranges::contains(entry.genres, genre))
             || (!needle.empty() && !fold(entry.name, state.allocator).contains(needle)))
@@ -721,11 +714,15 @@ Answer homebrew_list_route(const ServerState& state, const ServerRequest& reques
     return homebrew_page(state, request, kept, scope_of(parts, state.allocator));
 }
 
-Answer homebrew_route(const ServerState& state, const ServerRequest& request, std::string_view id)
+Answer homebrew_route(
+    const ServerState& state, const ServerRequest& request, const Caller& caller, std::string_view id)
 {
     const auto platform = platform_param(state, request);
     if (!platform)
         return std::unexpected(platform.error());
+    const auto cap = CapFilter::of(state, caller);
+    if (!cap)
+        return std::unexpected(cap.error());
     if (!is_homebrew_id(id))
         return std::unexpected(not_found(state, "No such homebrew."));
     auto all = state.library->homebrew(languages_of(request), state.allocator);
@@ -734,7 +731,8 @@ Answer homebrew_route(const ServerState& state, const ServerRequest& request, st
     const Homebrew* found = nullptr;
     for (const Homebrew& entry : *all)
     {
-        if (entry.id != id || (platform->has_value() && entry.platform != **platform))
+        if (entry.id != id || (platform->has_value() && entry.platform != **platform)
+            || cap->hides(entry.ratings))
             continue;
         if (found != nullptr)
             return std::unexpected(
@@ -753,7 +751,7 @@ Answer homebrew_route(const ServerState& state, const ServerRequest& request, st
     return json_response(state, request, std::move(out));
 }
 
-Answer homebrew_updates_route(const ServerState& state, const ServerRequest& request)
+Answer homebrew_updates_route(const ServerState& state, const ServerRequest& request, const Caller& caller)
 {
     const auto prepared = request_document(state, request);
     if (!prepared)
@@ -768,6 +766,9 @@ Answer homebrew_updates_route(const ServerState& state, const ServerRequest& req
     if (!platform->has_value())
         return std::unexpected(
             bad_request(state, "Name a platform: Lantern-Platform or ?platform= (SPEC.md § 4.3)."));
+    const auto cap = CapFilter::of(state, caller);
+    if (!cap)
+        return std::unexpected(cap.error());
     const HomebrewUpdatesRequest& document = **bound;
     if (std::ranges::any_of(
             document.installed, [](const InstalledHomebrew& item) { return !is_homebrew_id(item.id); }))
@@ -793,7 +794,7 @@ Answer homebrew_updates_route(const ServerState& state, const ServerRequest& req
     Vector<const Homebrew*> newer(state.allocator);
     for (const Homebrew& entry : *all)
     {
-        if (entry.platform != **platform)
+        if (entry.platform != **platform || cap->hides(entry.ratings))
             continue;
         const auto had = std::ranges::find_if(
             builds, [&](const InstalledHomebrew& item) { return item.id == entry.id; });
@@ -819,11 +820,14 @@ Answer homebrew_updates_route(const ServerState& state, const ServerRequest& req
     return homebrew_page(state, request, newer, scope_of(parts, state.allocator));
 }
 
-Answer cheats_route(const ServerState& state, const ServerRequest& request)
+Answer cheats_route(const ServerState& state, const ServerRequest& request, const Caller& caller)
 {
     const auto platform = platform_param(state, request);
     if (!platform)
         return std::unexpected(platform.error());
+    const auto cap = CapFilter::of(state, caller);
+    if (!cap)
+        return std::unexpected(cap.error());
     const std::string_view title_id = request.param("title_id").value_or(std::string_view {});
     const std::string_view build_id = request.param("build_id").value_or(std::string_view {});
     if (!title_id.empty() && !is_core_id(title_id))
@@ -840,7 +844,8 @@ Answer cheats_route(const ServerState& state, const ServerRequest& request)
     {
         if ((platform->has_value() && set.platform != **platform)
             || (!title_id.empty() && set.title_id != title_id)
-            || (!build_id.empty() && set.build_id != build_id))
+            || (!build_id.empty() && set.build_id != build_id)
+            || cap->hides_title(set.platform, set.title_id))
             continue;
         kept.push_back(&set);
     }
@@ -933,16 +938,21 @@ std::expected<CheatWrite, ProblemError> read_cheat(const ServerState& state, con
 
 } // namespace
 
-Answer cheat_text_route(const ServerState& state, const ServerRequest& request, std::string_view id)
+Answer cheat_text_route(
+    const ServerState& state, const ServerRequest& request, const Caller& caller, std::string_view id)
 {
     const auto platform = platform_param(state, request);
     if (!platform)
         return std::unexpected(platform.error());
+    const auto cap = CapFilter::of(state, caller);
+    if (!cap)
+        return std::unexpected(cap.error());
     const std::scoped_lock lock(state.cheats_mutex);
     auto all = state.library->cheats(state.allocator);
     if (!all)
         return std::unexpected(internal_error(state));
-    if (find_cheat(*all, id, *platform) == nullptr)
+    const CheatSet* set = find_cheat(*all, id, *platform);
+    if (set == nullptr || cap->hides_title(set->platform, set->title_id))
         return std::unexpected(not_found(state, "No such cheat set."));
     auto file = state.library->cheat_file(id, state.allocator);
     if (!file)

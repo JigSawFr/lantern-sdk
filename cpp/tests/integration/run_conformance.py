@@ -8,7 +8,9 @@ pairing and invitation checks leave their address rate limited for a while):
 
 - anonymously, against the public demo;
 - with the demo console's token and its device key (--token, --key), against
-  the public demo: the signed requests, the scopes, the pairing flow;
+  the public demo: the signed requests, the scopes, the pairing flow, the
+  requests, and the administration API (--admin-writes: the suite makes an
+  account of its own and deletes it);
 - with the same token against the private demo (`--private`), which asks for
   a token on the library;
 - with the same token against a demo that keeps no encrypted backup
@@ -18,10 +20,10 @@ Each run starts the demo (examples/demo_server.cpp, on a free loopback port,
 which the demo prints as its URL), runs `run.py URL --origin ORIGIN`, and stops
 the demo. It fails when a check fails, when a check of the families the demo
 serves (the library with its titles, changes and sections, homebrew, cheats, saves with the encrypted ones,
-pairing, signatures) is
+requests, administration with its invitations and rating caps, pairing, signatures) is
 not a pass, when an unexpected
-warning is raised, or, with the token, when Lantern Core, +titles, +homebrew and +cheats are not among the
-levels reached (without one the suite cannot check signed requests, nor
+warning is raised, or, with the token, when Lantern Core, +titles, +homebrew, +saves, +cheats, +requests and +admin are
+not among the levels reached (without one the suite cannot check signed requests, nor
 the saves, which need the scope `saves`, and says so).
 Warnings allowed: plain HTTP on loopback, JSON that is not compressed. Standard
 library only; the suite's schema checks need jsonschema and referencing
@@ -79,6 +81,15 @@ SAVES = [
     "saves.upload-digest", "saves.upload-too-large", "saves.single", "saves.cleanup", "schema.refused.saves",
 ]
 ENCRYPTED_SAVES = ["e2e.upload"]
+# Requests for games (§ 11), for a token with the scope requests.
+REQUESTS = ["features.requests", "requests.list", "requests.create", "requests.delete"]
+# The administration API (§ 5.5-5.7), for a token with the scope admin: accounts (the suite makes one of its own
+# and deletes it: --admin-writes), pairings approved with a rating cap that hides what is above it, refused, devices
+# revoked, an invitation redeemed, the requests of every account decided.
+ADMIN = [
+    "admin.users", "admin.users-write", "admin.pairings", "admin.rating-cap", "admin.refuse", "admin.devices",
+    "admin.invitations", "admin.requests", "admin.users-delete",
+]
 # Pairing (§ 5.2, § 5.4) is offered to every caller, anonymous included.
 PAIRING = [
     "handshake.auth", "pairing.offered", "pairing.code", "pairing.verify-complete", "pairing.waiting",
@@ -104,16 +115,17 @@ ANONYMOUS = ["cheats.write"]
 WARNINGS = ["transport.https", "compression.json"]
 
 BASE = LIBRARY + CATALOG + HOMEBREW + CHEATS + PAIRING
-CORE_LEVELS = ("Lantern Core", "+titles", "+homebrew", "+saves", "+cheats")
+CORE_LEVELS = ("Lantern Core", "+titles", "+homebrew", "+saves", "+cheats", "+requests", "+admin")
 
 # (name, the demo's flags, whether it has a token, the levels it must reach, the checks that must pass)
 RUNS = [
     ("anonymous", [], False, (), BASE + ANONYMOUS),
-    ("token", [], True, CORE_LEVELS + ("+encrypted_saves",), BASE + WITH_TOKEN + SAVES + ENCRYPTED_SAVES),
+    ("token", [], True, CORE_LEVELS + ("+encrypted_saves",),
+     BASE + WITH_TOKEN + SAVES + ENCRYPTED_SAVES + REQUESTS + ADMIN),
     ("private, with a token", ["--private"], True, CORE_LEVELS + ("+encrypted_saves",),
-     BASE + WITH_TOKEN + SAVES + ENCRYPTED_SAVES + PRIVATE),
+     BASE + WITH_TOKEN + SAVES + ENCRYPTED_SAVES + REQUESTS + ADMIN + PRIVATE),
     ("without encrypted saves", ["--no-encrypted-saves"], True, CORE_LEVELS,
-     BASE + WITH_TOKEN + SAVES + NO_ENCRYPTED),
+     BASE + WITH_TOKEN + SAVES + NO_ENCRYPTED + REQUESTS + ADMIN),
 ]
 
 
@@ -126,7 +138,7 @@ def run_once(args, key_file, name, flags, token, levels_needed, required):
             return False
         command = [sys.executable, args.suite, url, "--origin", args.origin]
         if token:
-            command += ["--token", TOKEN, "--key", key_file]
+            command += ["--token", TOKEN, "--key", key_file, "--admin-writes"]
         if any(importlib.util.find_spec(m) is None for m in ("jsonschema", "referencing")):
             command.append("--no-schemas")
         run = subprocess.run(command, capture_output=True, text=True, check=False)

@@ -19,8 +19,9 @@ draft 0.11, a TLS floor of 1.2 in both transports and `is_valid_server_uid()`
 server, a peer's side, and the first slices of a server core
 (Lantern Core, read-only, with its changes, sections, titles, homebrew and
 cheat sets, the
-tokens, pairing and signed requests that give a device its access, and the
-save backups, encrypted ones included: see
+tokens, pairing, invitations and signed requests that give a device its access,
+the save backups, encrypted ones included, the requests for games and the
+administration API with the rating caps: see
 [Server core](#server-core); the other families come in later steps); the C API is in [`../c/`](../c/README.md).
 
 ## What it does
@@ -153,17 +154,19 @@ save backups, encrypted ones included: see
 ## Server core
 
 `lantern/server.hpp`: what answers the protocol's routes, with no HTTP
-framework and no socket of its own, as `PeerGate` is for a peer. Four slices so
+framework and no socket of its own, as `PeerGate` is for a peer. Five slices so
 far: **Lantern Core, read-only**, **tokens, pairing and signatures**, the
-library's **changes, sections, titles, homebrew and cheat sets**, and the
-**save backups**.
+library's **changes, sections, titles, homebrew and cheat sets**, the
+**save backups**, and the **requests and the administration**.
 
 - the handshake at `/.well-known/lantern` and `<base>/v1` (§ 4.2), which lists
   only what the server serves: `features` says `library`, `titles`, `changes`,
   `sections`, `homebrew` and `cheats` when the library offers them (the last for
   a caller with the scope `cheats`, which anonymous callers hold on a public
   server), `saves` and `encrypted_saves` for a caller with the scope `saves`
-  when the server has a `SaveStore`, and `pairing` and `signatures`
+  when the server has a `SaveStore`, `requests` for a caller with that scope
+  when the server has a `RequestStore`, `admin` for a caller with that scope
+  when the account store administers, and `pairing` and `signatures`
   when the server has accounts, and nothing else; the account is
   the caller's (`anonymous`, `active` or `frozen`, its scopes, whether its
   token is bound), `limits.page_size` is the largest page, and, with saves,
@@ -376,12 +379,46 @@ by token hash, pairings); each must be atomic and safe from several threads.
 given to `Server::create()` must outlive the server: it draws the tokens, the
 codes and the poll addresses.
 
+**Requests for games** (§ 11, the scope `requests`; `options.requests`, which needs
+accounts). `GET <base>/v1/requests` lists the account's own, newest first, of the
+platform named; `POST` asks for a title (`201`, or `200` with the open request for
+the same title; the platform defaults to the client's), `DELETE <base>/v1/requests/{id}`
+withdraws one (`204`, `404` for another account's). `done` and `declined` are final
+(L-11-3): an admin decides an open request through `POST <base>/v1/admin/requests/{id}`
+(below), a declined one gives its `reason` to its requester. The server leaves its
+library to the app, which reads it when asked, so a request is marked `done` when
+the app calls `Server::settle_requests()` after its library changed (it marks those
+whose title has an app now). `RequestStore` (`lantern/requests.hpp`) keeps the
+documents; `MemoryRequestStore` is a complete one. At most 1000 requests are open
+per account (`429`).
+
+**Administration, invitations and rating caps** (§ 5.5-5.7, the scope `admin`). They
+are offered when the `AccountStore` administers (`administers()`; `MemoryAccountStore`
+does) and `options.admin` is not false. `GET`/`POST <base>/v1/admin/users`,
+`PATCH`/`DELETE <base>/v1/admin/users/{name}` (a frozen account loses its access at
+once; deleting asks `?confirm=<name>`, refuses the caller's own account, and erases
+the account's devices, invitations, pairings waiting, save backups and requests),
+`GET <base>/v1/admin/devices?user=` and `DELETE .../devices/{id}`, the pairings waiting
+and their approval or refusal (`POST .../pairings/{id}`: the scopes granted are at
+most those asked and the account's, with an optional `rating_cap`), the invitations
+(`GET`/`POST .../invitations`, `DELETE .../invitations/{id}`) and the requests of every
+account. No document of the family holds a token, the hash of one or a password. A
+device pairs with an invitation's code (typed with any case, spaces or dashes) and is
+approved at once for the invitation's account, the scopes it holds and its cap; each
+device is counted and the wrong codes per address are limited. A **rating cap** (§ 5.6)
+is carried by the device's token: the handshake's `account.rating_cap` shows it, and
+the titles above it (or unrated, with `unrated: hide`), their apps, the homebrew above
+it, the cheat sets of a hidden title and their files are left out of the listings, what
+is missing, the updates and the changes, and give `404` (a title, a homebrew, a file, a
+set) or `unknown` (many titles). The ages come from § 5.6's table; a title is read
+through the library's `titles()`.
+
 `adapters/posix/server_posix.hpp` is a blocking HTTP/1.1 listener for the demo
 and the conformance run: one connection at a time, `Connection: close`, a body
 of `Content-Length` bytes, plain HTTP on loopback by default. It is not for an
 app, and has no TLS. `lantern_demo_server [port] [--private] [--no-encrypted-saves]`
-(`examples/`) serves a small fictional library through it, keeps backups in
-memory (`MemorySaveStore`), with the accounts of
+(`examples/`) serves a small fictional library through it, keeps backups
+(`MemorySaveStore`) and requests (`MemoryRequestStore`) in memory, with the accounts of
 `examples/demo_accounts.hpp` (mira, noor and the token of mira's console,
 bound to a key made from a fixed phrase), and prints its URL; the conformance
 suite runs against it:
@@ -392,22 +429,22 @@ python3 ../spec/conformance/run.py http://127.0.0.1:8080/ --origin https://app.e
 ```
 
 `ctest -R conformance` plays the suite four times, each against a demo of its
-own: anonymously, with the console's token and its device key, with the
-token against `--private`, and with the token against
+own: anonymously, with the console's token and its device key (and
+`--admin-writes`: the suite makes an account of its own and deletes it), with
+the token against `--private`, and with the token against
 `--no-encrypted-saves`. No check fails; the two warnings are plain HTTP on
 loopback and JSON that is not compressed; with the token the run reaches
 **Lantern Core**, +titles, +homebrew, +saves, +cheats (a set written, replaced
-and deleted) and +encrypted_saves (except without it, where a backup with an
+and deleted), +requests, +admin (accounts, pairings approved with a rating cap
+that hides what is above it, devices revoked, an invitation redeemed, requests
+decided, an account deleted) and +encrypted_saves (except without it, where a backup with an
 encryption must be a 400); anonymously the suite leaves out the signed requests it has no key
 for and the writing of a set. `ctest -R server` plays the library read by this library's own
 client over the listener, `ctest -R unit` the server's cases in memory.
 
-Not in this slice, and so not offered by the handshake: invitations (§ 5.5; a
-code in a pairing request is unknown) and the administration API, so rating
-caps (§ 5.6) too (so no set or entry is hidden by a cap); an account's
-backups are not erased with it (`SaveStore::forget()` is there for the day the
-administration API deletes accounts); requests, events,
-peers, sync and discovery; chunks and differential updates for the homebrew
+Not in this slice, and so not offered by the handshake: events (so a request's
+status change sends no event, § 11, and no `wait` on changes), peers, sync (so
+deleting an account erases no sync data, § 20.5) and discovery; chunks and differential updates for the homebrew
 packages (§ 22); compression of the JSON (§ 2.1: the
 library can read gzip, not write it); a `release` sort that means anything (it
 needs titles: every app is without a release for now). Text search folds ASCII
@@ -842,10 +879,8 @@ if (done)
   for a later version.
 - **Annex B's retries** (backoff with jitter, `Retry-After` as a floor):
   the errors carry what they need, the app retries.
-- The rest of the server core (see [Server core](#server-core)): tokens,
-  pairing, signatures, accounts, saves,
-  requests, administration, events, peers, sync and discovery, and
-  compressed JSON. The C API is in [`../c/`](../c/README.md).
+- The rest of the server core (see [Server core](#server-core)): events,
+  peers, sync and discovery, and compressed JSON. The C API is in [`../c/`](../c/README.md).
 
 ## Layout
 

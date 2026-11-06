@@ -5,7 +5,7 @@
 // parsed it, and sends the ServerResponse it gets back.
 //
 // What it serves so far is Lantern Core, read-only, the families that give a
-// device its token, and the save backups:
+// device its token, the save backups, the requests and the administration:
 //
 // - the handshake, at /.well-known/lantern and at <base>/v1 (§ 4.2), which
 //   lists only the families the server serves (`library`, those the library
@@ -37,15 +37,28 @@
 //   device kept as sent, never read. A large body reaches the store piece
 //   by piece: an adapter that does not buffer it gives the request a
 //   `BodyReader` (see ServerRequest::stream).
+// - with a RequestStore (requests.hpp) and accounts: the requests for games of
+//   § 11, for the scope `requests`: the account's own, asking (the same open
+//   title gives the open request), withdrawing; the admin decides them
+//   (below). Server::settle_requests() marks done those whose title has an
+//   app now;
+// - with an AccountStore that administers (accounts.hpp): the invitations of
+//   § 5.5 (a device pairs with one and is approved at once, for the account
+//   and the scopes it holds, the number of devices counted, the attempts per
+//   address limited), the rating caps of § 5.6 (a capped token does not see
+//   the titles, apps, homebrew and cheat sets above its cap, nor their
+//   files), and the administration API of § 5.7, for the scope `admin`:
+//   accounts, devices, the pairings waiting, the invitations, deleting an
+//   account (its save backups and requests included) and deciding requests.
 // - the validators and caching headers of § 14, errors as problem+json
 //   (§ 12), the `schema` rule and the bounds of § 13 on the documents it
 //   reads (§ 3.2), and browsers (§ 2.5): CORS for the origins the app
 //   allows, preflights, Strict-Transport-Security over HTTPS (§ 2).
 //
-// Approving a pairing is the app's: its own page, once the user is signed in
-// there, calls Server::approve_pairing(). Invitations, administration,
-// requests, events (so no `wait` on changes), peers, sync and
-// discovery are not here yet: a request for one is a route the server does
+// Approving a pairing is the app's, or an admin's: the app's own page, once
+// the user is signed in there, calls Server::approve_pairing(); an admin app
+// uses the administration API. Events (so no `wait` on changes), peers, sync
+// and discovery are not here yet: a request for one is a route the server does
 // not have (404), and the handshake says so (`features`). JSON is sent as it
 // is written, never compressed (§ 2.1 asks a server to, as a SHOULD).
 //
@@ -77,6 +90,7 @@ namespace lantern
 {
 
 class SaveStore;
+class RequestStore;
 
 // A request, as the adapter hands it over. It only looks at what the
 // adapter owns: every view stays valid while handle() runs.
@@ -787,6 +801,14 @@ struct ServerOptions
     // Keep backups encrypted on the device (§ 9.4, `encrypted_saves`); false:
     // a backup sent with an `encryption` is a 400 (L-9.4-5).
     bool encrypted_saves = true;
+
+    // Requests for games (§ 11), for the accounts with the scope `requests`:
+    // where they are kept. Needs `accounts`; without it the server offers no
+    // `requests`. It must outlive the server.
+    RequestStore* requests = nullptr;
+    // The administration API (§ 5.7) and the invitations (§ 5.5), when the
+    // account store administers (AccountStore::administers()); false: neither.
+    bool admin = true;
 };
 
 namespace detail
@@ -827,6 +849,11 @@ class Server
         const Allocator& allocator = {}) const;
     // Refuses it: the device's next poll is a 410. False when no pairing waits under that code.
     [[nodiscard]] Result<bool> refuse_pairing(std::string_view code) const;
+
+    // Marks `done` (§ 11) the open requests for a title that has an app in
+    // the library now; the number marked. The library is read when asked, so
+    // the app calls this when its library changes. Needs `requests`.
+    [[nodiscard]] Result<std::size_t> settle_requests() const;
 
   private:
     explicit Server(std::shared_ptr<const detail::ServerState> state) noexcept
