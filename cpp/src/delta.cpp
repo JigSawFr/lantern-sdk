@@ -231,6 +231,137 @@ Result<void> Client::fetch_range(DeltaAssembler& assembler, const ByteRange& ran
     return assembler.end_range();
 }
 
+namespace
+{
+
+// Keeps the body of one range in a buffer, no more than the range asked.
+class BufferHandler final : public ResponseHandler
+{
+  public:
+    BufferHandler(const ByteRange& range, std::uint64_t file_size, std::span<std::byte> out,
+        std::size_t max_error, Allocator allocator)
+        : range_(range)
+        , file_size_(file_size)
+        , out_(out)
+        , max_error_(max_error)
+        , error_body_(allocator)
+        , retry_after_(allocator)
+    {
+    }
+
+    bool on_status(std::uint16_t status) override
+    {
+        status_ = status;
+        return true;
+    }
+
+    bool on_header(std::string_view name, std::string_view value) override
+    {
+        if (equal_ignoring_case(name, "Content-Range"))
+            content_range_ = parse_content_range(value);
+        else if (equal_ignoring_case(name, "Retry-After"))
+            retry_after_.assign(value);
+        return true;
+    }
+
+    bool on_body(std::span<const std::byte> chunk) override
+    {
+        if (!success())
+        {
+            if (chunk.size() > max_error_ - std::min(max_error_, error_body_.size()))
+                return false;
+            error_body_.append(reinterpret_cast<const char*>(chunk.data()), chunk.size());
+            return true;
+        }
+        if (!checked_ && !check_headers())
+            return false;
+        if (chunk.size() > range_.length() - filled_)
+            return stop(Error::make(Category::invalid_response, "more bytes than the range asked"));
+        std::copy(chunk.begin(), chunk.end(), out_.begin() + static_cast<std::ptrdiff_t>(filled_));
+        filled_ += chunk.size();
+        return true;
+    }
+
+    bool check_headers()
+    {
+        checked_ = true;
+        if (status_ == 206)
+        {
+            if (!content_range_ || content_range_->first != range_.first
+                || content_range_->last != range_.last || content_range_->total != file_size_)
+                return stop(
+                    Error::make(Category::invalid_response, "a Content-Range that is not the range asked"));
+        }
+        else if (range_.first != 0 || range_.last + 1 != file_size_)
+        {
+            return stop(Error::make(Category::invalid_response, "a source that does not honour Range"));
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool success() const noexcept { return status_ == 200 || status_ == 206; }
+    [[nodiscard]] std::uint16_t status() const noexcept { return status_; }
+    [[nodiscard]] bool checked() const noexcept { return checked_; }
+    [[nodiscard]] std::uint64_t filled() const noexcept { return filled_; }
+    [[nodiscard]] const std::optional<Error>& error() const noexcept { return error_; }
+    [[nodiscard]] std::string_view error_body() const noexcept { return error_body_; }
+    [[nodiscard]] std::string_view retry_after() const noexcept { return retry_after_; }
+
+  private:
+    bool stop(const Error& error)
+    {
+        error_ = error;
+        return false;
+    }
+
+    ByteRange range_;
+    std::uint64_t file_size_;
+    std::span<std::byte> out_;
+    std::size_t max_error_;
+    String error_body_;
+    String retry_after_;
+    std::uint16_t status_ = 0;
+    bool checked_         = false;
+    std::uint64_t filled_ = 0;
+    std::optional<detail::ContentRange> content_range_;
+    std::optional<Error> error_;
+};
+
+} // namespace
+
+Result<std::size_t> Client::read_range(
+    const DownloadTarget& target, const ByteRange& range, std::span<std::byte> out)
+{
+    if (range.first > range.last || range.last >= target.size)
+        return fail(Category::usage, "a range outside the file");
+    if (out.size() < range.length())
+        return fail(Category::usage, "a buffer shorter than the range");
+    const auto url = resolve_url(origin(), target.url, allocator_);
+    if (!url)
+        return std::unexpected(url.error());
+    const std::string text = "bytes=" + std::to_string(range.first) + '-' + std::to_string(range.last);
+    std::array<Header, 1> extra { Header { "Range", std::string_view(text) } };
+    BufferHandler handler(range, target.size, out, max_error_body_, allocator_);
+    Call call;
+    call.method     = Method::get;
+    call.url        = *url;
+    call.accept     = "*/*";
+    call.extra      = std::span(extra.data(), extra.size());
+    const auto sent = exchange(call, handler);
+    if (handler.error())
+        return std::unexpected(*handler.error());
+    if (handler.status() != 0 && !handler.success())
+        return std::unexpected(problem(handler.status(), handler.error_body(), handler.retry_after()));
+    if (!sent)
+        return std::unexpected(sent.error());
+    if (!handler.checked() && !handler.check_headers())
+        return std::unexpected(
+            handler.error().value_or(Error::make(Category::invalid_response, "a range refused")));
+    if (handler.filled() != range.length())
+        return fail(Category::invalid_response, "fewer bytes than the range asked");
+    return static_cast<std::size_t>(handler.filled());
+}
+
 Result<void> Client::read_range(DeltaAssembler& assembler, const ByteRange& range,
     const DownloadTarget& target, Vector<RangeSource>& sources, DeltaReport& report)
 {

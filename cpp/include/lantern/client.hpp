@@ -486,6 +486,15 @@ class Client
     [[nodiscard]] Result<void> download(
         const DownloadTarget& target, DownloadState& state, DownloadSink& sink);
 
+    // § 6.6: reads `range` of `target`'s file (a signed Range request) into
+    // `out`, which must hold range.length() bytes; the number of bytes
+    // written is the length asked or an error. Nothing is hashed: the file's
+    // SHA-256 is the caller's to check if it reads the file whole, or it
+    // checks what it reads by its own means (an installer that verifies each
+    // piece it parses). The range must lie inside the file: `target.size`.
+    [[nodiscard]] Result<std::size_t> read_range(
+        const DownloadTarget& target, const ByteRange& range, std::span<std::byte> out);
+
     // § 22.1: the chunk index `chunks` points to (an app's or a package's),
     // read within 8 MiB and checked as L-22.3-1 asks against `chunks` and
     // `target` (the file's size and SHA-256). Absent for an index of a newer
