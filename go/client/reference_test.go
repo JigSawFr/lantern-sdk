@@ -440,3 +440,92 @@ func TestReferenceHomebrew(t *testing.T) {
 		t.Error("an installed build 0 has no update")
 	}
 }
+
+func TestReferenceCheatsAndRequests(t *testing.T) {
+	ref := startReference(t)
+	ctx := context.Background()
+	key, err := lantern.SigningKeyFromBase64(ref.AdminSeed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := client.New(ref.URL, client.Options{Token: ref.AdminTok, Key: key, Platform: "switch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	title := "0100ABCD00010000"
+	t.Run("cheats", func(t *testing.T) {
+		w := client.CheatWrite{TitleID: title, BuildID: "4A1B2C3D4E5F6071", Source: "Test list", Note: "Endless lamp oil", Text: "[Lamp oil]\n04000000 00000000 00000063\n"}
+		set, err := c.AddCheat(ctx, w)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.AddCheat(ctx, w); !errors.Is(err, lantern.ErrConflict) {
+			t.Errorf("a set that exists: %v", err)
+		}
+		list, err := c.Cheats(ctx, client.CheatOptions{TitleID: title, BuildID: "4A1B2C3D4E5F6071"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, other := range list.Cheats {
+			found = found || other.ID == set.ID
+			if other.BuildID == nil || *other.BuildID != "4A1B2C3D4E5F6071" {
+				t.Errorf("the filter kept another build: %+v", other)
+			}
+		}
+		if !found {
+			t.Fatalf("the new set is not listed: %+v", list)
+		}
+		if other, _ := c.Cheats(ctx, client.CheatOptions{TitleID: title, BuildID: "FFFF"}); other == nil || len(other.Cheats) != 0 {
+			t.Errorf("the filter kept another build: %+v", other)
+		}
+		if text, err := c.CheatText(ctx, set); err != nil || text != w.Text {
+			t.Errorf("text %q %v", text, err)
+		}
+		w.Text = "[Lamp oil]\n04000000 00000000 00000064\n"
+		if err := c.ReplaceCheat(ctx, set.ID, w); err != nil {
+			t.Fatal(err)
+		}
+		list, _ = c.Cheats(ctx, client.CheatOptions{TitleID: title})
+		var mine lantern.CheatSet
+		for _, other := range list.Cheats {
+			if other.ID == set.ID {
+				mine = other
+			}
+		}
+		if text, err := c.CheatText(ctx, &mine); err != nil || text != w.Text {
+			t.Errorf("replaced: %q %v", text, err)
+		}
+		bad := mine
+		bad.SHA256 = strings.Repeat("0", 64)
+		if _, err := c.CheatText(ctx, &bad); err == nil {
+			t.Error("a text that is not the set's was accepted")
+		}
+		if err := c.DeleteCheat(ctx, set.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.DeleteCheat(ctx, set.ID); !errors.Is(err, lantern.ErrNotFound) {
+			t.Errorf("deleted twice: %v", err)
+		}
+	})
+	t.Run("requests", func(t *testing.T) {
+		first, created, err := c.RequestTitle(ctx, "0100FEED00020000", "")
+		if err != nil || !created || first.Status != "open" {
+			t.Fatalf("%+v %v %v", first, created, err)
+		}
+		again, created, err := c.RequestTitle(ctx, "0100FEED00020000", "")
+		if err != nil || created || again.ID != first.ID {
+			t.Errorf("asked twice: %+v %v %v", again, created, err)
+		}
+		list, err := c.Requests(ctx, "")
+		if err != nil || len(list.Requests) != 1 {
+			t.Fatalf("%+v %v", list, err)
+		}
+		if err := c.WithdrawRequest(ctx, first.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.WithdrawRequest(ctx, first.ID); !errors.Is(err, lantern.ErrNotFound) {
+			t.Errorf("withdrawn twice: %v", err)
+		}
+	})
+}
