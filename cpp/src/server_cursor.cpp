@@ -31,9 +31,12 @@ std::span<const std::uint8_t> bytes_of(std::string_view text) noexcept
     return { reinterpret_cast<const std::uint8_t*>(text.data()), text.size() };
 }
 
-std::array<std::uint8_t, mac_bytes> mac_of(const ServerState& state, std::string_view raw)
+// The MAC of a token of that kind ('c' a cursor, 's' and 't' a since token):
+// a token of one kind is never taken for another's.
+std::array<std::uint8_t, mac_bytes> mac_of(const ServerState& state, char kind, std::string_view raw)
 {
-    String message("c.", state.allocator);
+    String message(1, kind, state.allocator);
+    message.push_back('.');
     message.append(raw);
     const Digest full = HmacSha256::of(state.secret, bytes_of(message));
     std::array<std::uint8_t, mac_bytes> out {};
@@ -122,7 +125,7 @@ String seal_cursor(const ServerState& state, std::string_view scope, const SortK
     w.number(when);
     w.end_object();
 
-    const auto mac = mac_of(state, raw);
+    const auto mac = mac_of(state, 'c', raw);
     String token(prefix, state.allocator);
     base64url_encode(bytes_of(raw), token);
     token.push_back('.');
@@ -147,7 +150,7 @@ std::expected<CursorPosition, ProblemError> open_cursor(
         || given.size() != mac_bytes)
         return std::unexpected(never_given());
     const std::string_view text(reinterpret_cast<const char*>(raw.data()), raw.size());
-    const auto expected   = mac_of(state, text);
+    const auto expected   = mac_of(state, 'c', text);
     std::uint32_t differs = 0;
     for (std::size_t i = 0; i < mac_bytes; ++i)
         differs |= static_cast<std::uint32_t>(expected[i]) ^ static_cast<std::uint32_t>(given[i]);
@@ -184,6 +187,65 @@ std::expected<CursorPosition, ProblemError> open_cursor(
         position.key.minor.assign(n->text());
     position.by_id = n == nullptr;
     return position;
+}
+
+String seal_since(const ServerState& state, char kind, std::string_view epoch, std::uint64_t position)
+{
+    String raw(state.allocator);
+    json::Writer w(raw);
+    w.begin_object();
+    w.key("e");
+    w.string(epoch);
+    w.key("n");
+    w.number(position);
+    w.end_object();
+
+    const auto mac = mac_of(state, kind, raw);
+    String token(1, kind, state.allocator);
+    token.push_back('_');
+    base64url_encode(bytes_of(raw), token);
+    token.push_back('.');
+    base64url_encode(mac, token);
+    return token;
+}
+
+std::expected<std::uint64_t, ProblemError> open_since(
+    const ServerState& state, char kind, std::string_view token, const JournalPosition& journal)
+{
+    const auto never_given
+        = [&] { return bad_request(state, "Unknown since token: one this server never gave."); };
+    if (token.size() > 1024 || token.size() < 3 || token[0] != kind || token[1] != '_')
+        return std::unexpected(never_given());
+    token.remove_prefix(2);
+    const std::size_t dot = token.find('.');
+    if (dot == std::string_view::npos)
+        return std::unexpected(never_given());
+    Vector<std::uint8_t> raw(state.allocator);
+    Vector<std::uint8_t> given(state.allocator);
+    if (!decode_url(token.substr(0, dot), raw) || !decode_url(token.substr(dot + 1), given)
+        || given.size() != mac_bytes)
+        return std::unexpected(never_given());
+    const std::string_view text(reinterpret_cast<const char*>(raw.data()), raw.size());
+    const auto expected   = mac_of(state, kind, text);
+    std::uint32_t differs = 0;
+    for (std::size_t i = 0; i < mac_bytes; ++i)
+        differs |= static_cast<std::uint32_t>(expected[i]) ^ static_cast<std::uint32_t>(given[i]);
+    if (differs != 0)
+        return std::unexpected(never_given());
+
+    json::Limits limits;
+    limits.max_document = 4096;
+    const auto document = json::parse(text, limits, state.allocator.resource());
+    if (!document || !document->root().is_object())
+        return std::unexpected(never_given());
+    const json::Value* e = document->root().find("e");
+    const json::Value* n = document->root().find("n");
+    const auto position  = n != nullptr && n->is_number() ? n->to_u64() : std::nullopt;
+    if (e == nullptr || !e->is_string() || !position)
+        return std::unexpected(never_given());
+    if (e->text() != journal.epoch || *position < journal.oldest || *position > journal.position)
+        return std::unexpected(gone(state, "Token too old for this server: read them all again."));
+    return *position;
 }
 
 } // namespace lantern::detail

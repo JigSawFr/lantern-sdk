@@ -8,11 +8,15 @@
 // give a device its token:
 //
 // - the handshake, at /.well-known/lantern and at <base>/v1 (§ 4.2), which
-//   lists only the families the server serves (`library`, and `pairing` and
-//   `signatures` when it has accounts) and says who calls;
+//   lists only the families the server serves (`library`, those the library
+//   offers, and `pairing` and `signatures` when it has accounts) and says who
+//   calls;
 // - the platforms (§ 4.3), the apps' listing with its filters, sorts, pages
 //   and cursors (§ 6.2) and what a device is missing (§ 6.3);
 // - the files, with `Range` and `Repr-Digest` (§ 6.6);
+// - the families a Library offers beside the apps: changes (§ 6.4) with
+//   `since` tokens sealed like cursors, sections (§ 6.5), and the titles
+//   (§ 7): one, many at once, their changes and their images (`media`);
 // - with an AccountStore (accounts.hpp): Bearer tokens kept as hashes and
 //   checked with their scopes (§ 5.1), pairing (§ 5.2: the code, the poll
 //   address, the limits per address), the approval page that shows the
@@ -26,8 +30,8 @@
 //
 // Approving a pairing is the app's: its own page, once the user is signed in
 // there, calls Server::approve_pairing(). Invitations, administration,
-// titles, homebrew, cheat sets, saves, requests, events, peers, sync and
-// discovery are not here yet: a request for one is a route the server does
+// homebrew, cheat sets, saves, requests, events (so no `wait` on changes),
+// peers, sync and discovery are not here yet: a request for one is a route the server does
 // not have (404), and the handshake says so (`features`). JSON is sent as it
 // is written, never compressed (§ 2.1 asks a server to, as a SHOULD).
 //
@@ -201,8 +205,97 @@ struct AppsFilter
     std::string_view q; // a part of the name, ignoring case
 };
 
+// Where a journal stands (§ 6.4): the epoch changes when the journal starts
+// over (a token of another epoch is too old), positions grow with each
+// change, and `oldest` is the oldest position it still answers from.
+struct JournalPosition
+{
+    using allocator_type = Allocator;
+
+    String epoch;
+    std::uint64_t position = 0;
+    std::uint64_t oldest   = 0;
+
+    JournalPosition()
+        : JournalPosition(allocator_type {})
+    {
+    }
+    explicit JournalPosition(const allocator_type& allocator)
+        : epoch(allocator)
+    {
+    }
+};
+
+// What changed in the apps since a position (§ 6.4): the apps added and
+// still there, and the ids of those removed.
+struct AppChanges
+{
+    using allocator_type = Allocator;
+
+    Vector<App> added;
+    Vector<String> removed;
+
+    AppChanges()
+        : AppChanges(allocator_type {})
+    {
+    }
+    explicit AppChanges(const allocator_type& allocator)
+        : added(allocator)
+        , removed(allocator)
+    {
+    }
+};
+
+// What changed in the titles since a position (§ 7.3): the titles added or
+// changed, those removed, and whether the journal gives only a part of them
+// (`more`: the client asks again with the new token).
+struct TitleDelta
+{
+    using allocator_type = Allocator;
+
+    Vector<Title> titles;
+    Vector<RemovedTitle> removed;
+    bool more = false;
+
+    TitleDelta()
+        : TitleDelta(allocator_type {})
+    {
+    }
+    explicit TitleDelta(const allocator_type& allocator)
+        : titles(allocator)
+        , removed(allocator)
+    {
+    }
+};
+
+// A library's change journal, for <base>/v1/changes and
+// <base>/v1/titles/changes (§ 6.4, § 7.3). The server seals its positions
+// into the `since` tokens it gives.
+class Journal
+{
+  public:
+    Journal()                          = default;
+    Journal(const Journal&)            = default;
+    Journal(Journal&&)                 = default;
+    Journal& operator=(const Journal&) = default;
+    Journal& operator=(Journal&&)      = default;
+    virtual ~Journal()                 = default;
+
+    [[nodiscard]] virtual Result<JournalPosition> position(const Allocator& allocator) = 0;
+    // `platform` empty: every platform.
+    [[nodiscard]] virtual Result<AppChanges> app_changes(
+        std::uint64_t after, std::string_view platform, const Allocator& allocator)
+        = 0;
+    // `languages`: the request's Accept-Language, as written (empty: none).
+    [[nodiscard]] virtual Result<TitleDelta> title_changes(std::uint64_t after, std::string_view platform,
+        std::string_view languages, const Allocator& allocator)
+        = 0;
+};
+
 // What a server serves. Every method is called per request: answer with
-// what is there now (a database query, a folder scanned and kept...).
+// what is there now (a database query, a folder scanned and kept...). The
+// families beyond the apps (titles, sections, changes) are offered when the
+// library says so: by default it offers none.
 class Library
 {
   public:
@@ -224,6 +317,40 @@ class Library
     [[nodiscard]] virtual Result<std::optional<LibraryFile>> file(
         std::string_view name, const Allocator& allocator)
         = 0;
+
+    // Titles (§ 7), the family `titles`: offered when this is true.
+    [[nodiscard]] virtual bool offers_titles() { return false; }
+    // Every title, its texts in the best of `languages` it has (the request's
+    // Accept-Language as written, or empty). The server narrows them by
+    // platform and id itself.
+    [[nodiscard]] virtual Result<Vector<Title>> titles(
+        std::string_view /*languages*/, const Allocator& allocator)
+    {
+        return Vector<Title>(allocator);
+    }
+    // The image of <base>/v1/media/<name> that a title shows: nothing for a
+    // name it does not have.
+    [[nodiscard]] virtual Result<std::optional<LibraryFile>> media(
+        std::string_view /*name*/, const Allocator& /*allocator*/)
+    {
+        return std::optional<LibraryFile> {};
+    }
+
+    // Sections (§ 6.5), the family `sections`: offered when this is true.
+    [[nodiscard]] virtual bool offers_sections() { return false; }
+    // Every shelf the library curates, its title in the best of `languages`.
+    // The server leaves out the apps a caller does not see (another platform)
+    // and the shelves left empty.
+    [[nodiscard]] virtual Result<Vector<Section>> sections(
+        std::string_view /*languages*/, const Allocator& allocator)
+    {
+        return Vector<Section>(allocator);
+    }
+
+    // The change journal (§ 6.4): the family `changes` is offered when there
+    // is one, and /v1/titles/changes answers 410 to any token when there is
+    // none. It must outlive the server.
+    [[nodiscard]] virtual Journal* journal() { return nullptr; }
 };
 
 // An app a MemoryLibrary is given: its identity (§ 6.1). The library fills
@@ -246,8 +373,12 @@ struct AppDraft
 
 // A Library held in memory: a reference to read, the base of tests and
 // demos. It refuses an app that breaks § 6.1 or its platform's profile
-// (Annex A). Not thread-safe while apps are being added.
-class MemoryLibrary final : public Library
+// (Annex A), a title that breaks § 7.1. It serves the apps; the titles, the
+// sections and the journal only once it is told to (offer_titles(),
+// add_title(), add_section(), keep_journal(): call the last before the first
+// change, which is all a journal knows). Not thread-safe while anything is
+// being added.
+class MemoryLibrary final : public Library, public Journal
 {
   public:
     // `base`: the server's, "/api/lantern": the `file` of each app is
@@ -258,12 +389,52 @@ class MemoryLibrary final : public Library
     // identifies it (platform, app_id, version_code, format, requires), so
     // that the same call gives the same app.
     [[nodiscard]] Result<App> add_app(const AppDraft& draft, std::span<const std::byte> content);
+    // Stops serving the app of that id; false when there is none.
+    bool remove_app(std::string_view id);
     [[nodiscard]] std::size_t size() const noexcept { return apps_.size(); }
+
+    // Keeps a change journal of the last `keep` changes (1 to 1,000,000):
+    // the family `changes`.
+    [[nodiscard]] Result<void> keep_journal(std::size_t keep = 10000);
+
+    // The family `titles`, with no title yet (add_title() offers it too).
+    void offer_titles() noexcept { titles_offered_ = true; }
+    // Serves the title; one of that platform and id is replaced. It refuses
+    // what § 7.1 or Annex A do not allow.
+    [[nodiscard]] Result<Title> add_title(const Title& title);
+    // False when there is none of that platform and id.
+    bool remove_title(std::string_view platform, std::string_view title_id);
+    // Serves an image on this server's origin, by its content: `extension` is
+    // png, jpg, webp or gif. The Image it gives (url, sha256) goes into a
+    // title; the caller adds its width and height.
+    [[nodiscard]] Result<Image> add_media(std::span<const std::byte> content, std::string_view extension);
+
+    // A shelf (§ 6.5): its id, its title and its apps' ids in order; one of
+    // that id is replaced. Offers the family `sections`.
+    [[nodiscard]] Result<Section> add_section(
+        std::string_view id, std::string_view title, std::span<const std::string_view> apps);
+    // False when there is none of that id.
+    bool remove_section(std::string_view id);
 
     [[nodiscard]] Result<Vector<String>> platforms(const Allocator& allocator) override;
     [[nodiscard]] Result<Vector<App>> apps(const AppsFilter& filter, const Allocator& allocator) override;
     [[nodiscard]] Result<std::optional<LibraryFile>> file(
         std::string_view name, const Allocator& allocator) override;
+    [[nodiscard]] bool offers_titles() override { return titles_offered_; }
+    [[nodiscard]] Result<Vector<Title>> titles(
+        std::string_view languages, const Allocator& allocator) override;
+    [[nodiscard]] Result<std::optional<LibraryFile>> media(
+        std::string_view name, const Allocator& allocator) override;
+    [[nodiscard]] bool offers_sections() override { return sections_offered_; }
+    [[nodiscard]] Result<Vector<Section>> sections(
+        std::string_view languages, const Allocator& allocator) override;
+    [[nodiscard]] Journal* journal() override { return keep_ > 0 ? this : nullptr; }
+
+    [[nodiscard]] Result<JournalPosition> position(const Allocator& allocator) override;
+    [[nodiscard]] Result<AppChanges> app_changes(
+        std::uint64_t after, std::string_view platform, const Allocator& allocator) override;
+    [[nodiscard]] Result<TitleDelta> title_changes(std::uint64_t after, std::string_view platform,
+        std::string_view languages, const Allocator& allocator) override;
 
   private:
     struct Stored
@@ -271,12 +442,71 @@ class MemoryLibrary final : public Library
         String name;
         Digest sha256 {};
         std::shared_ptr<MemoryFileReader> reader;
+        String content_type;
     };
+
+    // One change: an app added or removed, or a title put or removed.
+    struct Entry
+    {
+        using allocator_type = Allocator;
+
+        enum class Kind : std::uint8_t
+        {
+            app_added,
+            app_removed,
+            title,
+        };
+        std::uint64_t position = 0;
+        Kind kind              = Kind::title;
+        String platform;
+        String key; // the app's id, the title's title_id
+
+        explicit Entry(const allocator_type& allocator)
+            : platform(allocator)
+            , key(allocator)
+        {
+        }
+        Entry(const Entry& other, const allocator_type& allocator)
+            : position(other.position)
+            , kind(other.kind)
+            , platform(other.platform, allocator)
+            , key(other.key, allocator)
+        {
+        }
+        Entry(Entry&& other, const allocator_type& allocator)
+            : position(other.position)
+            , kind(other.kind)
+            , platform(std::move(other.platform), allocator)
+            , key(std::move(other.key), allocator)
+        {
+        }
+        Entry(const Entry&)            = default;
+        Entry(Entry&&)                 = default;
+        Entry& operator=(const Entry&) = default;
+        Entry& operator=(Entry&&)      = default;
+        ~Entry()                       = default;
+    };
+
+    void record(Entry::Kind kind, std::string_view platform, std::string_view key);
+    [[nodiscard]] bool has_app(std::string_view id) const noexcept;
+    [[nodiscard]] const Title* find_title(
+        std::string_view platform, std::string_view title_id) const noexcept;
 
     Allocator allocator_;
     String base_;
     Vector<App> apps_;
     Vector<Stored> files_;
+    Vector<Stored> media_;
+    Vector<Title> titles_;
+    Vector<Section> sections_;
+    bool titles_offered_   = false;
+    bool sections_offered_ = false;
+    // The journal, kept when `keep_` is above 0
+    std::size_t keep_ = 0;
+    String epoch_;
+    Vector<Entry> entries_;
+    std::uint64_t sequence_ = 0;
+    std::uint64_t floor_    = 0;
 };
 
 struct ServerFile

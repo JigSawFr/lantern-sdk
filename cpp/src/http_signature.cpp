@@ -20,6 +20,7 @@ namespace
 
 constexpr std::string_view label_prefix = "lantern=";
 constexpr std::size_t nonce_bytes       = 16;
+constexpr std::size_t max_signed_base   = std::size_t { 64 } * 1024;
 constexpr std::size_t keyid_size        = 43;
 
 char lower(char c) noexcept
@@ -368,11 +369,13 @@ SignatureVerdict check_signature(const SignatureCheck& check) noexcept
     components.target_uri     = check.target_uri;
     components.authorization  = check.authorization;
     components.content_digest = check.has_body ? trim(check.content_digest) : std::string_view {};
-    // The base holds the components and the params; a request whose base
-    // does not fit (an absurd URL) is refused rather than allocated for
+    // The base holds the components and the params. A long target is fine (a
+    // request may name 100 titles, § 7.2): it goes past the buffer to the
+    // default resource. One beyond the largest head a server reads (64 KiB)
+    // is refused rather than allocated for.
     const std::size_t needed = components.method.size() + components.target_uri.size()
         + components.authorization.size() + components.content_digest.size() + params.size() + 128;
-    if (needed > buffer.size() / 2)
+    if (needed > max_signed_base)
         return verdict;
     base.reserve(needed);
     signature_base(components, params, base);

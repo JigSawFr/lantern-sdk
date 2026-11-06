@@ -87,6 +87,7 @@ add_library(lantern
     src/variants.cpp
     src/server.cpp
     src/server_auth.cpp
+    src/server_catalog.cpp
     src/server_cursor.cpp
     src/server_http.cpp
     src/server_library.cpp

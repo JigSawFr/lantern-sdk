@@ -44,6 +44,7 @@ if (LANTERN_BUILD_TESTS)
         unit/profiles_tests.cpp
         unit/requires_tests.cpp
         unit/server_auth_tests.cpp
+        unit/server_catalog_tests.cpp
         unit/server_tests.cpp
         unit/signing_tests.cpp
         unit/v04_client_tests.cpp
