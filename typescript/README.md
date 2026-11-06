@@ -32,6 +32,10 @@ before the first release (`"private": true` until then).
   pinning included); a browser sets this floor itself. `listen(app, { tls })` serves TLS with the same floor.
 - `Strict-Transport-Security: max-age=31536000` is sent when the app is told it is served over HTTPS
   (`hsts: true` or `scheme: "https"`), and by `listen()`/`nodeHandler()` on a TLS socket; never over plain HTTP.
+- Images of the server's own origin (§ 7.1): `library.addMedia(FileRef, "png")` returns the name
+  `<sha256>.png` of `<base>/v1/media/<name>`, which a title's `icon`, `banner` or `screenshots` gives as its
+  `url` (with `sha256`); a library of the server's own gives `media(name)`. Served for a year, immutable, to
+  whoever may see a title that shows it.
 - Chunk indexes (`/v1/chunks/sha256/{hex}`) carry `Cache-Control: public, max-age=31536000, immutable`
   (`private` for an authenticated caller). A static library's host should do the same for `files/sha256/*`
   and `chunks/sha256/*`.

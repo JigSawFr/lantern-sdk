@@ -72,6 +72,7 @@ import {
   HSTS,
   HttpProblem,
   htmlResponse,
+  IMMUTABLE,
   jsonResponse,
   methodNotAllowed,
   notFound,
@@ -195,6 +196,7 @@ const ROUTES: Route[] = [
   { pattern: ["chunks", "sha256", "{}"], methods: ["GET", "HEAD"], family: "deltas", handler: "hChunks" },
   { pattern: ["sync"], methods: ["GET", "HEAD", "DELETE"], family: "sync", handler: "hSync" },
   { pattern: ["sync", "{}"], methods: ["GET", "HEAD", "PATCH", "DELETE"], family: "sync", handler: "hSyncCollection" },
+  { pattern: ["media", "{}"], methods: ["GET", "HEAD"], family: "titles", handler: "hMedia" },
   { pattern: ["titles"], methods: ["GET", "HEAD"], family: "titles", handler: "hTitles" },
   { pattern: ["titles", "changes"], methods: ["GET", "HEAD"], family: "titles", handler: "hTitleChanges" },
   { pattern: ["titles", "{}"], methods: ["GET", "HEAD"], family: "titles", handler: "hTitle" },
@@ -1567,6 +1569,24 @@ export class LanternApp {
   }
 
   // Titles (SPEC.md § 7).
+
+  /** An image of a title, on this origin, content-addressed (SPEC.md § 7.1, L-7.1-2): hidden like the titles that show it. */
+  async hMedia(request: ServerRequest, account: Account, args: string[]): Promise<ServerResponse> {
+    const name = args[0] ?? "";
+    const suffix = `/v1/media/${name}`;
+    const hide = await this.hides(account);
+    const shown = (await this.library.titles([])).some(
+      (t) =>
+        !hide(t.platform, t.title_id) &&
+        [t.icon, t.banner, ...(t.screenshots ?? [])].some((i) => i?.url.endsWith(suffix)),
+    );
+    const file = shown && this.library.media !== undefined ? await this.library.media(name) : undefined;
+    if (file === undefined) throw notFound("No such image.");
+    const response = fileResponse(request, file);
+    if (response.status === 200 || response.status === 206 || response.status === 304)
+      response.headers.set("Cache-Control", `${request.header("Authorization") ? "private" : "public"}, ${IMMUTABLE}`);
+    return response;
+  }
 
   async hTitles(request: ServerRequest, account: Account): Promise<ServerResponse> {
     const platform = platformOf(request);

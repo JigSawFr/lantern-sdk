@@ -520,6 +520,10 @@ app = LanternApp(library, uid=SERVER_UID, name="Living room shelf", cors_origins
   `"deltas"` in its `families`, `chunks` on its apps (`lantern.chunks.ref()`)
   and gives the bytes by `chunk_index(sha256)` (a `ChunkSource`). The
   static generator writes them at `v1/chunks/sha256/<hex>.json`.
+- Images of the server's own origin (§ 7.1): `MemoryLibrary.add_media(FileRef, "png")` returns the name
+  `<sha256>.png` of `<base>/v1/media/<name>`, which a title's `icon`, `banner` or `screenshots` gives as
+  its `url` (with `sha256`). The toolkit serves it for a year, immutable, to whoever may see a title that
+  shows it (a library of the server's own gives `media(name)`, a `MediaSource`).
 - `cors_origins` (§ 2.5): the origins whose pages may read the server, or
   `"*"`; none by default. An allowed origin gets `Access-Control-Allow-Origin`
   (with `Vary: Origin`) and the headers a page reads on every answer, errors
