@@ -423,15 +423,15 @@ ServerResponse problem_response(
     return response;
 }
 
-ServerResponse json_response(
-    const ServerState& state, const ServerRequest& request, String&& body, std::uint16_t status)
+ServerResponse json_response(const ServerState& state, const ServerRequest& request, String&& body,
+    std::uint16_t status, bool validators)
 {
     ServerResponse response(state.allocator);
     response.status = status;
     caching_headers(response.headers, request);
     response.headers.set("Vary", "Authorization, Lantern-Platform, Accept-Language, Accept-Encoding");
     response.headers.set("Content-Type", "application/json");
-    if (status == 200 && (request.method == "GET" || request.method == "HEAD"))
+    if (status == 200 && validators && (request.method == "GET" || request.method == "HEAD"))
     {
         const auto tag = short_hex(Sha256::of(std::string_view(body)));
         String etag(state.allocator);

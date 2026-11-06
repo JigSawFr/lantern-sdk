@@ -84,6 +84,22 @@ bool ed25519_verify(const SignatureBytes& signature, const PublicKey& public_key
     return crypto_ed25519_check(signature.data(), public_key.data(), message.data(), message.size()) == 0;
 }
 
+bool ed25519_is_device_key(const PublicKey& key) noexcept
+{
+    if (!acceptable_point(key.data()))
+        return false;
+    // Monocypher's equation check refuses a key that is not on the curve
+    // (and answers 0 only when R = [S]B - [h]A). With h = 0, R the base point
+    // and S = 1 it holds for every key that decodes.
+    constexpr Encoding base_point
+        = encoding("5866666666666666666666666666666666666666666666666666666666666666");
+    std::array<std::uint8_t, 64> signature {};
+    std::ranges::copy(base_point, signature.begin());
+    signature[32] = 1;
+    const std::array<std::uint8_t, 32> zero {};
+    return crypto_eddsa_check_equation(signature.data(), key.data(), zero.data()) == 0;
+}
+
 Result<PackageSignature> verify_package_signature(const Homebrew& entry, const Package& package)
 {
     const bool main_package                   = &package == &entry.package;

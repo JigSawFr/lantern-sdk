@@ -51,6 +51,7 @@ set_target_properties(lantern_monocypher PROPERTIES
     POSITION_INDEPENDENT_CODE ON)
 
 add_library(lantern
+    src/accounts.cpp
     src/admin.cpp
     src/byte_range.cpp
     src/canonical.cpp
@@ -85,6 +86,7 @@ add_library(lantern
     src/requires.cpp
     src/variants.cpp
     src/server.cpp
+    src/server_auth.cpp
     src/server_cursor.cpp
     src/server_http.cpp
     src/server_library.cpp

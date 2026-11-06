@@ -20,6 +20,11 @@ using SignatureBytes = std::array<std::uint8_t, 64>;
 [[nodiscard]] bool ed25519_verify(const SignatureBytes& signature, const PublicKey& public_key,
     std::span<const std::uint8_t> message) noexcept;
 
+// Whether a server takes `key` as a device's at pairing (SPEC.md § 5.4,
+// L-5.4-12): it decodes canonically to a point of the curve and is not one
+// of the 8 points of small order.
+[[nodiscard]] bool ed25519_is_device_key(const PublicKey& key) noexcept;
+
 // A package's signature: its key, when it has one.
 struct PackageSignature
 {

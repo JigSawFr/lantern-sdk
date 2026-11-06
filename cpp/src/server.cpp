@@ -1,5 +1,5 @@
-// The server core's routes (SPEC.md § 4.2, § 6): the handshake, the apps,
-// what a device is missing, the files.
+// The server core's routes (SPEC.md § 4.2, § 5.2, § 6): the handshake, the
+// apps, what a device is missing, the files, pairing.
 #include <lantern/server.hpp>
 
 #include <algorithm>
@@ -33,8 +33,6 @@ constexpr std::size_t max_words  = 16;
 // I-JSON's largest integer (§ 2.3): 2^53 - 1.
 constexpr std::uint64_t max_safe_integer = 9007199254740991ULL;
 
-constexpr std::string_view bearer_challenge = R"(Bearer realm="lantern")";
-
 bool is_word(std::string_view text) noexcept
 {
     return !text.empty() && text.size() <= 32 && text.front() >= 'a' && text.front() <= 'z'
@@ -53,13 +51,6 @@ bool is_requires_word(std::string_view text) noexcept
     return !text.empty() && text.size() <= 32 && text.front() != '-'
         && std::ranges::all_of(
             text, [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'; });
-}
-
-String number_text(std::uint64_t value, const Allocator& allocator)
-{
-    std::array<char, 24> text {};
-    const auto result = std::to_chars(text.data(), text.data() + text.size(), value);
-    return { text.data(), static_cast<std::size_t>(result.ptr - text.data()), allocator };
 }
 
 // The platforms a caller names (§ 4.3): ?platform=, else the
@@ -105,33 +96,8 @@ std::expected<std::string_view, ProblemError> sort_of(const ServerState& state, 
     return sort;
 }
 
-// Who calls (§ 5.1): this server has no tokens yet, so a request carries
-// none, or is refused.
-std::optional<ProblemError> check_caller(const ServerState& state, const ServerRequest& request)
-{
-    const auto header = request.header("Authorization");
-    if (!header)
-        return std::nullopt;
-    const std::string_view text   = detail::trim(*header);
-    const std::size_t space       = text.find(' ');
-    const std::string_view scheme = text.substr(0, space);
-    const std::string_view value
-        = space == std::string_view::npos ? std::string_view {} : detail::trim(text.substr(space + 1));
-    if (!detail::equal_fold(scheme, "bearer") || value.empty())
-    {
-        ProblemError error = detail::make_problem(
-            state, 401, Code::unauthorized, "Send a token: Authorization: Bearer <token>.");
-        error.headers.set("WWW-Authenticate", bearer_challenge);
-        return error;
-    }
-    ProblemError error
-        = detail::make_problem(state, 401, Code::unauthorized, "Unknown, revoked or expired token.");
-    error.headers.set("WWW-Authenticate", R"(Bearer realm="lantern", error="invalid_token")");
-    return error;
-}
-
-// The handshake (§ 4.2) of an anonymous caller.
-Answer handshake(const ServerState& state, const ServerRequest& request)
+// The handshake (§ 4.2) for `caller`.
+Answer handshake(const ServerState& state, const ServerRequest& request, const detail::Caller& caller)
 {
     auto platforms = state.library->platforms(state.allocator);
     if (!platforms)
@@ -181,16 +147,49 @@ Answer handshake(const ServerState& state, const ServerRequest& request)
         w.key("language");
         w.string("en");
     }
+    const bool reads_library = !detail::check_library(state, caller).has_value();
     w.key("account");
     w.begin_object();
+    if (!caller.name.empty())
+    {
+        w.key("name");
+        w.string(caller.name);
+    }
     w.key("state");
-    w.string("anonymous");
+    switch (caller.state)
+    {
+        case detail::Caller::State::anonymous:
+            w.string("anonymous");
+            break;
+        case detail::Caller::State::active:
+            w.string("active");
+            break;
+        case detail::Caller::State::frozen:
+            w.string("frozen");
+            break;
+    }
     w.key("scopes");
     w.begin_array();
-    w.string("library");
+    if (caller.state == detail::Caller::State::anonymous)
+    {
+        if (!state.require_auth)
+            w.string("library");
+    }
+    else
+    {
+        for (const String& scope : caller.scopes)
+            w.string(scope);
+    }
     w.end_array();
+    if (caller.state != detail::Caller::State::anonymous)
+    {
+        w.key("bound");
+        w.boolean(caller.key.has_value());
+    }
     w.end_object();
-    // Per family, the schema it is written in, or 0: only `library` is here
+    // Per family, the schema it is written in, or 0: `library` for a caller
+    // who may read it, and `pairing` and `signatures` for every caller (§ 4.2,
+    // L-4.2-5) when the server has accounts; nothing else is here yet
     w.key("features");
     w.begin_object();
     constexpr std::array families { std::string_view { "library" }, std::string_view { "titles" },
@@ -201,10 +200,22 @@ Answer handshake(const ServerState& state, const ServerRequest& request)
         std::string_view { "encrypted_saves" }, std::string_view { "deltas" } };
     for (const std::string_view family : families)
     {
+        const bool offered = (family == "library" && reads_library)
+            || ((family == "pairing" || family == "signatures") && state.accounts != nullptr);
         w.key(family);
-        w.number(family == "library" ? known_schema : std::uint64_t { 0 });
+        w.number(offered ? known_schema : std::uint64_t { 0 });
     }
     w.end_object();
+    if (state.accounts != nullptr)
+    {
+        w.key("auth");
+        w.begin_object();
+        w.key("bearer_only");
+        w.boolean(!state.bound_only);
+        w.key("skew");
+        w.number(static_cast<std::uint64_t>(state.skew));
+        w.end_object();
+    }
     w.key("limits");
     w.begin_object();
     w.key("page_size");
@@ -506,41 +517,16 @@ bool is_json_media_type(std::string_view header) noexcept
     return detail::equal_fold(type, "application/json");
 }
 
-// A client's JSON document (§ 3.2, § 12) bound to a MissingRequest: 413 above
-// the limit, 400 when it is not JSON, not I-JSON, beyond § 13 or has no integer
-// `schema`, 422 `unsupported_schema` for a schema this server cannot read.
+// A client's JSON document bound to a MissingRequest (§ 6.3), after the
+// checks of detail::request_document().
 std::expected<MissingRequest, ProblemError> read_missing_request(
     const ServerState& state, const ServerRequest& request)
 {
-    if (request.body.size() > body_limit)
-        return std::unexpected(
-            detail::make_problem(state, 413, Code::too_large, "At most 1048576 bytes here."));
-    if (!is_json_media_type(request.header("Content-Type").value_or(std::string_view {})))
-        return std::unexpected(detail::bad_request(state, "The body is application/json."));
-    const std::string_view text(reinterpret_cast<const char*>(request.body.data()), request.body.size());
-    json::Limits limits;
-    limits.max_document = body_limit;
-    const auto document = json::parse(text, limits, state.allocator.resource());
-    if (!document || !is_i_json(document->root()))
-        return std::unexpected(
-            detail::bad_request(state, "The body is not a document this server can read."));
-    const json::Value* schema = document->root().is_object() ? document->root().find("schema") : nullptr;
-    const auto number         = schema != nullptr && schema->is_number() ? schema->to_u64() : std::nullopt;
-    if (!number || *number < 1)
-        return std::unexpected(detail::bad_request(state, "The body is an object with an integer schema."));
-    if (*number > known_schema)
-    {
-        String why("This server reads schema 1 here, not ", state.allocator);
-        why.append(number_text(*number, state.allocator));
-        why.push_back('.');
-        return std::unexpected(
-            detail::make_problem(state, 422, Code::unsupported_schema, why, "Unsupported schema"));
-    }
-    DecodeOptions options;
-    options.limits = limits;
-    options.memory = state.allocator.resource();
-    auto bound     = read_document<MissingRequest>(
-        text, known_schema, options, [](BindContext& c, MissingRequest& value) { return bind(c, value); });
+    const auto prepared = detail::request_document(state, request);
+    if (!prepared)
+        return std::unexpected(prepared.error());
+    auto bound = read_document<MissingRequest>(prepared->text, known_schema, prepared->options,
+        [](BindContext& c, MissingRequest& value) { return bind(c, value); });
     if (!bound || !*bound)
         return std::unexpected(detail::bad_request(
             state, "installed is a list of {app_id, version_code}, want a list of base, update or dlc."));
@@ -604,7 +590,7 @@ Answer missing_route(const ServerState& state, const ServerRequest& request)
     {
         String entry(item.app_id, state.allocator);
         entry.push_back(':');
-        entry.append(number_text(item.version_code, state.allocator));
+        entry.append(detail::number_text(item.version_code, state.allocator));
         installed.push_back(std::move(entry));
     }
     std::ranges::sort(installed);
@@ -686,12 +672,12 @@ Answer file_route(const ServerState& state, const ServerRequest& request, std::s
         if (range.verdict == RangeVerdict::unsatisfiable)
         {
             String why("The file is ", state.allocator);
-            why.append(number_text(file.size, state.allocator));
+            why.append(detail::number_text(file.size, state.allocator));
             why.append(" bytes.");
             ProblemError error
                 = detail::make_problem(state, 416, Code::bad_request, why, "Range not satisfiable");
             String content_range("bytes */", state.allocator);
-            content_range.append(number_text(file.size, state.allocator));
+            content_range.append(detail::number_text(file.size, state.allocator));
             error.headers.set("Content-Range", content_range);
             return std::unexpected(std::move(error));
         }
@@ -701,16 +687,16 @@ Answer file_route(const ServerState& state, const ServerRequest& request, std::s
             last            = range.last;
             response.status = 206;
             String content_range("bytes ", state.allocator);
-            content_range.append(number_text(first, state.allocator));
+            content_range.append(detail::number_text(first, state.allocator));
             content_range.push_back('-');
-            content_range.append(number_text(last, state.allocator));
+            content_range.append(detail::number_text(last, state.allocator));
             content_range.push_back('/');
-            content_range.append(number_text(file.size, state.allocator));
+            content_range.append(detail::number_text(file.size, state.allocator));
             response.headers.set("Content-Range", content_range);
         }
     }
     const std::uint64_t length = file.size == 0 ? 0 : last - first + 1;
-    response.headers.set("Content-Length", number_text(length, state.allocator));
+    response.headers.set("Content-Length", detail::number_text(length, state.allocator));
     if (request.method != "HEAD" && length != 0)
         response.file = ServerFile { file.reader, first, length };
     return response;
@@ -724,10 +710,12 @@ struct Route
         apps,
         missing,
         file,
+        pairing_start,
+        pairing_poll,
     };
     Kind kind = Kind::none;
     std::string_view allowed; // the methods it takes
-    std::string_view name; // the file's
+    std::string_view name; // the file's, the pairing's poll address
 };
 
 // <base>/v1/<rest>: the route it names, if this server has one.
@@ -751,6 +739,10 @@ Route route_of(std::string_view rest) noexcept
         return { Route::Kind::missing, "POST", {} };
     if (count == 2 && segments[0] == "files" && !segments[1].empty())
         return { Route::Kind::file, "GET, HEAD", segments[1] };
+    if (count == 1 && segments[0] == "pairing")
+        return { Route::Kind::pairing_start, "POST", {} };
+    if (count == 2 && segments[0] == "pairing" && !segments[1].empty())
+        return { Route::Kind::pairing_poll, "GET", segments[1] };
     return {};
 }
 
@@ -779,16 +771,21 @@ Answer route(const ServerState& state, const ServerRequest& request)
     }
     const std::string_view path = request.path;
     const std::string_view base = state.base;
-    const bool shake            = path == "/.well-known/lantern"
+    if (detail::is_approval_path(state, path))
+        return detail::approval_page(state, request);
+    const bool shake = path == "/.well-known/lantern"
         || (path.starts_with(base)
             && (path.substr(base.size()) == "/v1" || path.substr(base.size()) == "/v1/"));
     if (shake)
     {
-        if (auto refused = check_caller(state, request))
+        const auto caller = detail::identify(state, request);
+        if (!caller)
+            return std::unexpected(caller.error());
+        if (auto refused = detail::check_request_signature(state, request, *caller))
             return std::unexpected(std::move(*refused));
         if (request.method != "GET" && request.method != "HEAD")
             return std::unexpected(detail::method_not_allowed(state, "GET, HEAD"));
-        return handshake(state, request);
+        return handshake(state, request, *caller);
     }
     String prefix(base, state.allocator);
     prefix.append("/v1/");
@@ -797,10 +794,23 @@ Answer route(const ServerState& state, const ServerRequest& request)
     const Route chosen = route_of(path.substr(prefix.size()));
     if (chosen.kind == Route::Kind::none)
         return std::unexpected(detail::not_found(state, "No such route on this server."));
-    if (auto refused = check_caller(state, request))
+    const bool pairing
+        = chosen.kind == Route::Kind::pairing_start || chosen.kind == Route::Kind::pairing_poll;
+    if (pairing && state.accounts == nullptr)
+        return std::unexpected(detail::not_found(state, "This server does not offer it."));
+    const auto caller = detail::identify(state, request);
+    if (!caller)
+        return std::unexpected(caller.error());
+    if (auto refused = detail::check_request_signature(state, request, *caller))
         return std::unexpected(std::move(*refused));
     if (!takes(chosen.allowed, request.method))
         return std::unexpected(detail::method_not_allowed(state, chosen.allowed));
+    if (!pairing)
+    {
+        // Whoever reaches the server may ask to pair; the library asks for its scope (§ 5.1)
+        if (auto refused = detail::check_library(state, *caller))
+            return std::unexpected(std::move(*refused));
+    }
     switch (chosen.kind)
     {
         case Route::Kind::apps:
@@ -809,6 +819,10 @@ Answer route(const ServerState& state, const ServerRequest& request)
             return missing_route(state, request);
         case Route::Kind::file:
             return file_route(state, request, chosen.name);
+        case Route::Kind::pairing_start:
+            return detail::pairing_start(state, request);
+        case Route::Kind::pairing_poll:
+            return detail::pairing_poll(state, request, chosen.name);
         case Route::Kind::none:
             break;
     }
@@ -816,6 +830,46 @@ Answer route(const ServerState& state, const ServerRequest& request)
 }
 
 } // namespace
+
+namespace detail
+{
+
+String number_text(std::uint64_t value, const Allocator& allocator)
+{
+    std::array<char, 24> text {};
+    const auto result = std::to_chars(text.data(), text.data() + text.size(), value);
+    return { text.data(), static_cast<std::size_t>(result.ptr - text.data()), allocator };
+}
+
+std::expected<RequestDocument, ProblemError> request_document(
+    const ServerState& state, const ServerRequest& request)
+{
+    if (request.body.size() > body_limit)
+        return std::unexpected(make_problem(state, 413, Code::too_large, "At most 1048576 bytes here."));
+    if (!is_json_media_type(request.header("Content-Type").value_or(std::string_view {})))
+        return std::unexpected(bad_request(state, "The body is application/json."));
+    RequestDocument out;
+    out.text = std::string_view(reinterpret_cast<const char*>(request.body.data()), request.body.size());
+    out.options.limits.max_document = body_limit;
+    out.options.memory              = state.allocator.resource();
+    const auto document             = json::parse(out.text, out.options.limits, state.allocator.resource());
+    if (!document || !is_i_json(document->root()))
+        return std::unexpected(bad_request(state, "The body is not a document this server can read."));
+    const json::Value* schema = document->root().is_object() ? document->root().find("schema") : nullptr;
+    const auto number         = schema != nullptr && schema->is_number() ? schema->to_u64() : std::nullopt;
+    if (!number || *number < 1)
+        return std::unexpected(bad_request(state, "The body is an object with an integer schema."));
+    if (*number > known_schema)
+    {
+        String why("This server reads schema 1 here, not ", state.allocator);
+        why.append(number_text(*number, state.allocator));
+        why.push_back('.');
+        return std::unexpected(make_problem(state, 422, Code::unsupported_schema, why, "Unsupported schema"));
+    }
+    return out;
+}
+
+} // namespace detail
 
 Result<Server> Server::create(Library& library, const ServerOptions& options, RandomSource& random,
     Clock& clock, const Allocator& allocator)
@@ -840,11 +894,36 @@ Result<Server> Server::create(Library& library, const ServerOptions& options, Ra
         if (origin != "*" && !detail::is_cors_origin(origin))
             return fail(Category::usage, "cors_origins: an origin (https://app.example.org) or *");
     }
+    if (options.accounts == nullptr)
+    {
+        if (options.require_auth || options.bound_only)
+            return fail(Category::usage, "require_auth and bound_only need accounts");
+    }
+    else
+    {
+        if (options.skew < 60 || options.skew > 900)
+            return fail(Category::usage, "skew is 60 to 900 seconds (SPEC.md 5.4)");
+        if (options.pairing_interval < 1 || options.pairing_interval > 60)
+            return fail(Category::usage, "pairing_interval is 1 to 60 seconds (SPEC.md 5.2)");
+        if (options.pairing_expires < 1 || options.pairing_expires > 600)
+            return fail(
+                Category::usage, "pairing_expires is 1 to 600 seconds: a code lives 10 minutes at most");
+        if (options.pairing_requests < 1 || options.pairing_window < 1 || options.invitation_attempts < 1
+            || options.invitation_window < 1 || options.nonce_limit < 1)
+            return fail(Category::usage, "the pairing limits and the nonce limit are at least 1");
+        if (!options.verify.starts_with('/')
+            && !(options.verify.starts_with("https://") || options.verify.starts_with("http://")))
+            return fail(Category::usage, "verify is a path of this server or an absolute URL");
+        if (options.verify.find_first_of(" \t\r\n\"<>") != std::string_view::npos)
+            return fail(Category::usage, "verify holds a character a URL does not");
+    }
 
     auto state = std::allocate_shared<ServerState>(
         std::pmr::polymorphic_allocator<ServerState>(allocator), allocator);
-    state->library = &library;
-    state->clock   = &clock;
+    state->library  = &library;
+    state->clock    = &clock;
+    state->random   = &random;
+    state->accounts = options.accounts;
     state->uid.assign(options.uid);
     state->name.assign(options.name);
     state->base.assign(options.base);
@@ -864,6 +943,19 @@ Result<Server> Server::create(Library& library, const ServerOptions& options, Ra
     state->page_limit        = options.page_limit;
     state->default_page_size = options.default_page_size;
     state->cursor_lifetime   = options.cursor_lifetime;
+    state->require_auth      = options.require_auth;
+    state->bound_only        = options.bound_only;
+    state->skew              = options.skew;
+    state->nonce_limit       = options.nonce_limit;
+    state->verify.assign(options.verify);
+    state->spki                = options.spki;
+    state->token_lifetime      = options.token_lifetime;
+    state->pairing_interval    = options.pairing_interval;
+    state->pairing_expires     = options.pairing_expires;
+    state->pairing_requests    = options.pairing_requests;
+    state->pairing_window      = options.pairing_window;
+    state->invitation_attempts = options.invitation_attempts;
+    state->invitation_window   = options.invitation_window;
     if (auto filled = random.fill(state->secret); !filled)
         return std::unexpected(filled.error());
     return Server(std::move(state));
