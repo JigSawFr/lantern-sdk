@@ -9,4 +9,6 @@ import { demoAccounts, EVERY_SCOPE, makeLantern } from "../test/demo.ts";
 
 const app = await makeLantern({ accounts: await demoAccounts() });
 const offered = app.features({ scopes: new Set(EVERY_SCOPE), state: "active" });
-console.log(JSON.stringify({ families: [...FAMILIES], server: FAMILIES.filter((f) => (offered[f] ?? 0) > 0) }));
+process.stdout.write(
+  `${JSON.stringify({ families: [...FAMILIES], server: FAMILIES.filter((f) => (offered[f] ?? 0) > 0) })}\n`,
+);
