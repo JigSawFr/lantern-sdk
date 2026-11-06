@@ -9,7 +9,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
-from collections.abc import Callable, Generator, Iterator, Mapping
+from collections.abc import Callable, Generator, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Protocol
 from urllib.parse import quote, urlencode
@@ -89,14 +89,20 @@ class ServerRequest:
 
 @dataclass
 class FileBody:
-    """A response's body read from a file: `length` bytes from `start`."""
+    """A response's body read from a file: `length` bytes from `start`. `source`, when given, supplies the
+    bytes instead of the file at `path` (a relay: the file lives elsewhere): it is called with (start, length)
+    and gives the pieces, as many bytes as it can up to `length`."""
 
     path: str
     start: int
     length: int
     chunk: int = 1 << 20
+    source: Callable[[int, int], Iterable[bytes]] | None = None
 
     def __iter__(self) -> Iterator[bytes]:
+        if self.source is not None:
+            yield from self._relayed()
+            return
         left = self.length
         with open(self.path, "rb") as f:
             f.seek(self.start)
@@ -106,6 +112,23 @@ class FileBody:
                     return
                 left -= len(data)
                 yield data
+
+    def _relayed(self) -> Iterator[bytes]:
+        assert self.source is not None
+        left = self.length
+        pieces = iter(self.source(self.start, self.length))
+        try:
+            for piece in pieces:
+                if left <= 0:
+                    break
+                data = piece[:left]
+                left -= len(data)
+                if data:
+                    yield data
+        finally:
+            close = getattr(pieces, "close", None)
+            if close is not None:
+                close()
 
 
 class StreamBody(Protocol):

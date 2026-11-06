@@ -27,7 +27,9 @@ from lantern.server import (
     missing,
     parse_range,
 )
+from lantern.server.http import FileBody
 from lantern.server.paging import Cursors, Sealer, page_size
+from lantern.uid import new_uid
 
 BASE = "/api/lantern/v1"
 
@@ -257,6 +259,38 @@ def test_files_and_ranges(app: LanternApp) -> None:
     problem(call(app, "GET", BASE + "/files/f_unknown"), 404, "not_found")
     empty = next(x for x in apps if x["size"] == 0)
     assert call(app, "GET", empty["file"]).headers["Content-Length"] == "0"
+
+
+def test_a_relayed_file_is_served_with_its_ranges() -> None:
+    """A file with no place on this disk: `read` gives the bytes of the range, the answer is the same."""
+    data = bytes(range(256)) * 40
+    asked: list[tuple[int, int]] = []
+
+    def read(first: int, length: int) -> list[bytes]:
+        asked.append((first, length))
+        chunk = data[first : first + length]
+        return [chunk[:100], chunk[100:]]  # in pieces, and one more than asked for is cut off
+
+    ref = FileRef("", len(data), hashlib.sha256(data).hexdigest(), read=read)
+    library = MemoryLibrary()
+    url = library.add_file(ref)
+    lantern = LanternApp(library, uid=new_uid(), name="Relay", public=True)
+    whole = call(lantern, "GET", url)
+    assert whole.status == 200 and b"".join(whole.iter_body()) == data
+    assert whole.headers["Content-Length"] == str(len(data))
+    part = call(lantern, "GET", url, Range="bytes=300-699")
+    assert part.status == 206 and b"".join(part.iter_body()) == data[300:700]
+    assert part.headers["Content-Length"] == "400" and part.headers["Repr-Digest"] == whole.headers["Repr-Digest"]
+    assert asked == [(0, len(data)), (300, 400)]
+    head = call(lantern, "HEAD", url)
+    assert head.body == b"" and head.headers["Content-Length"] == str(len(data))
+    assert asked == [(0, len(data)), (300, 400)]  # a HEAD reads nothing
+
+
+def test_a_relay_that_gives_more_than_asked_is_cut() -> None:
+    ref = FileRef("", 10, hashlib.sha256(b"0123456789").hexdigest(), read=lambda first, length: [b"0123456789" * 3])
+    body = FileBody("", 2, 4, source=ref.read)
+    assert b"".join(body) == b"0123"
 
 
 @pytest.mark.parametrize(
