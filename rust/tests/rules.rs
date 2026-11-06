@@ -40,9 +40,13 @@ fn a_document_without_schema_is_refused() {
 #[test]
 fn bytes_are_read_within_the_limits() {
     assert!(
-        parse::<Titles>(br#"{"schema":1,"titles":[],"unknown":[]}"#, SCHEMA, "titles")
-            .unwrap()
-            .is_some()
+        parse::<Titles>(
+            br#"{"schema":1,"titles":[],"unknown":[]}"#,
+            SCHEMA,
+            "titles"
+        )
+        .unwrap()
+        .is_some()
     );
     assert!(parse::<Titles>(b"\xef\xbb\xbf{\"schema\":1}", SCHEMA, "titles").is_err());
     assert!(parse::<Titles>(b"\xff", SCHEMA, "titles").is_err());

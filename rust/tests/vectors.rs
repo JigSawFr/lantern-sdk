@@ -88,3 +88,111 @@ fn bytes_forms() {
     assert!(from_hex("abc").is_none());
     assert!(from_hex("zz").is_none());
 }
+
+fn code(platform: &str, version: &Value) -> Result<u64, lantern_protocol::Error> {
+    use lantern_protocol::profiles::{app_ver_code, n3ds_version_name, switch_version_code};
+    let as_text = || {
+        version
+            .as_str()
+            .map_or_else(|| version.to_string(), str::to_owned)
+    };
+    match platform {
+        "switch" => switch_version_code(&as_text()).map(u64::from),
+        "vita" | "ps4" => app_ver_code(&as_text()).map(u64::from),
+        "3ds" => {
+            let n = u32::try_from(version.as_u64().unwrap_or(u64::MAX)).unwrap_or(u32::MAX);
+            n3ds_version_name(n).map(|_| u64::from(n))
+        }
+        _ => version
+            .as_u64()
+            .ok_or_else(|| lantern_protocol::Error::document("not a version")),
+    }
+}
+
+#[test]
+fn version_code_vectors() {
+    let file = vectors("version-codes");
+    for case in file["cases"].as_array().unwrap() {
+        let platform = text(case, "platform");
+        let expected = case["version_code"].as_u64().unwrap();
+        assert_eq!(
+            code(platform, &case["version"]).unwrap(),
+            expected,
+            "{platform} {}",
+            case["version"]
+        );
+        if platform == "3ds" {
+            let name =
+                lantern_protocol::profiles::n3ds_version_name(u32::try_from(expected).unwrap())
+                    .unwrap();
+            assert_eq!(Some(name.as_str()), case["version_name"].as_str());
+        }
+    }
+    for case in file["refused"].as_array().unwrap() {
+        assert!(
+            code(text(case, "platform"), &case["version"]).is_err(),
+            "{}",
+            text(case, "why")
+        );
+    }
+}
+
+#[test]
+fn app_install_vectors() {
+    // The vectors give an app's decisive fields only: the others are filled in.
+    fn app_of(mut value: Value) -> lantern_protocol::generated::models::App {
+        value["sha256"] = Value::from("0".repeat(64));
+        value["file"] = Value::from("file");
+        serde_json::from_value(value).unwrap()
+    }
+    use lantern_protocol::generated::models::App;
+    use lantern_protocol::variants::{InstallDecision, install_decision, prefer_variant};
+    let file = vectors("app-requires");
+    let strings = |v: &Value| -> Vec<String> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s.as_str().unwrap().to_owned())
+            .collect()
+    };
+    for case in file["install"].as_array().unwrap() {
+        let app = app_of(case["app"].clone());
+        let installed: Vec<App> = case["installed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .cloned()
+            .map(app_of)
+            .collect();
+        let (formats, satisfies) = (strings(&case["formats"]), strings(&case["satisfies"]));
+        let formats: Vec<&str> = formats.iter().map(String::as_str).collect();
+        let satisfies: Vec<&str> = satisfies.iter().map(String::as_str).collect();
+        let name = text(case, "name");
+        match install_decision(&app, &formats, &satisfies, &installed) {
+            InstallDecision::Install => {
+                assert_eq!(text(case, "decision"), "install", "{name}");
+                assert_eq!(case["reasons"].as_u64(), Some(0), "{name}");
+            }
+            InstallDecision::Unavailable(reasons) => {
+                assert_eq!(text(case, "decision"), "unavailable", "{name}");
+                assert_eq!(
+                    case["reasons"].as_u64(),
+                    Some(reasons.len() as u64),
+                    "{name}"
+                );
+            }
+        }
+    }
+    let variants: Vec<App> = file["variants"]["apps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .cloned()
+        .map(app_of)
+        .collect();
+    assert_eq!(
+        prefer_variant(&variants).unwrap().id,
+        text(&file["variants"], "preferred")
+    );
+    assert!(prefer_variant(&[]).is_none());
+}

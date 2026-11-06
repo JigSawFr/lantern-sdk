@@ -14,7 +14,11 @@ pub mod error;
 pub mod generated;
 pub mod limits;
 pub mod problem;
+pub mod profiles;
 pub mod spki;
+pub mod uid;
+pub mod variants;
+pub mod vocabulary;
 
 pub use error::{Error, Result};
 

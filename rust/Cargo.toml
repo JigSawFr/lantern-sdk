@@ -16,6 +16,7 @@ include = ["src/**", "README.md", "LICENSE", "Cargo.toml"]
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 sha2 = "0.10"
+regex = "1"
 
 [lints.rust]
 unsafe_code = "forbid"
