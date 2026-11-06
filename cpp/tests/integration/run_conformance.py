@@ -20,10 +20,10 @@ Each run starts the demo (examples/demo_server.cpp, on a free loopback port,
 which the demo prints as its URL), runs `run.py URL --origin ORIGIN`, and stops
 the demo. It fails when a check fails, when a check of the families the demo
 serves (the library with its titles, changes and sections, homebrew, cheats, saves with the encrypted ones,
-requests, administration with its invitations and rating caps, pairing, signatures) is
-not a pass, when an unexpected
-warning is raised, or, with the token, when Lantern Core, +titles, +homebrew, +saves, +cheats, +requests and +admin are
-not among the levels reached (without one the suite cannot check signed requests, nor
+requests, administration with its invitations and rating caps, events with their long poll, pairing,
+signatures) is not a pass, when an unexpected
+warning is raised, or, with the token, when Lantern Core, +titles, +homebrew, +saves, +cheats, +requests, +admin and
++events are not among the levels reached (without one the suite cannot check signed requests, nor
 the saves, which need the scope `saves`, and says so).
 Warnings allowed: plain HTTP on loopback, JSON that is not compressed. Standard
 library only; the suite's schema checks need jsonschema and referencing
@@ -90,6 +90,13 @@ ADMIN = [
     "admin.users", "admin.users-write", "admin.pairings", "admin.rating-cap", "admin.refuse", "admin.devices",
     "admin.invitations", "admin.requests", "admin.users-delete",
 ]
+# Events (§ 18), for a token with the scope requests (it makes events of its own): the stream, resuming with
+# Last-Event-ID, a bad id, the heartbeat, the streams a token may hold, a revoked device's stream ended, and
+# the long poll of changes (§ 18.3).
+EVENTS = [
+    "features.events", "events.stream", "events.resume", "events.bad-token", "events.heartbeat", "events.limit",
+    "events.revoked", "events.long-poll",
+]
 # Pairing (§ 5.2, § 5.4) is offered to every caller, anonymous included.
 PAIRING = [
     "handshake.auth", "pairing.offered", "pairing.code", "pairing.verify-complete", "pairing.waiting",
@@ -115,17 +122,17 @@ ANONYMOUS = ["cheats.write"]
 WARNINGS = ["transport.https", "compression.json"]
 
 BASE = LIBRARY + CATALOG + HOMEBREW + CHEATS + PAIRING
-CORE_LEVELS = ("Lantern Core", "+titles", "+homebrew", "+saves", "+cheats", "+requests", "+admin")
+CORE_LEVELS = ("Lantern Core", "+titles", "+homebrew", "+saves", "+cheats", "+requests", "+admin", "+events")
 
 # (name, the demo's flags, whether it has a token, the levels it must reach, the checks that must pass)
 RUNS = [
     ("anonymous", [], False, (), BASE + ANONYMOUS),
     ("token", [], True, CORE_LEVELS + ("+encrypted_saves",),
-     BASE + WITH_TOKEN + SAVES + ENCRYPTED_SAVES + REQUESTS + ADMIN),
+     BASE + WITH_TOKEN + SAVES + ENCRYPTED_SAVES + REQUESTS + ADMIN + EVENTS),
     ("private, with a token", ["--private"], True, CORE_LEVELS + ("+encrypted_saves",),
-     BASE + WITH_TOKEN + SAVES + ENCRYPTED_SAVES + REQUESTS + ADMIN + PRIVATE),
+     BASE + WITH_TOKEN + SAVES + ENCRYPTED_SAVES + REQUESTS + ADMIN + EVENTS + PRIVATE),
     ("without encrypted saves", ["--no-encrypted-saves"], True, CORE_LEVELS,
-     BASE + WITH_TOKEN + SAVES + NO_ENCRYPTED + REQUESTS + ADMIN),
+     BASE + WITH_TOKEN + SAVES + NO_ENCRYPTED + REQUESTS + ADMIN + EVENTS),
 ]
 
 

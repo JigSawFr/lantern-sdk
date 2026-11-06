@@ -534,6 +534,8 @@ Answer pairing_start(const ServerState& state, const ServerRequest& request)
                 slow_down(state, state.pairing_interval, "Too many pairings are waiting; try again later."));
         if (*added == PairingAdded::added)
         {
+            if (!invitation)
+                record_pairing_event(state, entry); // § 18.2: an admin app learns of a pairing waiting
             if (invitation && account)
             {
                 // Approved at once, for the invitation's account, the scopes it holds and its cap (§ 5.5)

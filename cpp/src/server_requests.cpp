@@ -239,6 +239,7 @@ Answer requests_route(const ServerState& state, const ServerRequest& request, co
         return std::unexpected(limit_reached(state));
     if (auto added = state.requests->add(made); !added)
         return std::unexpected(internal_error(state));
+    record_request_event(state, made, false);
     String out(state.allocator);
     json::Writer w(out);
     w.begin_object();
@@ -253,12 +254,18 @@ Answer request_route(
     const ServerState& state, const ServerRequest& request, const Caller& caller, std::string_view id)
 {
     const std::scoped_lock lock(state.requests_mutex);
+    // What it was, for the event that tells it withdrawn
+    auto before = state.requests->request(id, state.allocator);
+    if (!before)
+        return std::unexpected(internal_error(state));
     auto gone = state.requests->remove(caller.name, id, state.allocator);
     if (!gone)
         return std::unexpected(internal_error(state));
     // Whatever its status (L-11-2); another account's request is not found
     if (!*gone)
         return std::unexpected(not_found(state, "No such request of this account."));
+    if (*before)
+        record_request_event(state, **before, true);
     return no_content(state, request);
 }
 
@@ -353,6 +360,7 @@ Answer admin_request_route(const ServerState& state, const ServerRequest& reques
         return std::unexpected(internal_error(state));
     if (!*changed)
         return std::unexpected(not_found(state, "No such request."));
+    record_request_event(state, decided, false);
     String out(state.allocator);
     json::Writer w(out);
     w.begin_object();
@@ -392,7 +400,13 @@ Result<std::size_t> Server::settle_requests() const
         if (!changed)
             return std::unexpected(changed.error());
         if (*changed)
+        {
             ++settled;
+            StoredRequest done(item, state.allocator);
+            done.status  = "done";
+            done.updated = now;
+            detail::record_request_event(state, done, false);
+        }
     }
     return settled;
 }

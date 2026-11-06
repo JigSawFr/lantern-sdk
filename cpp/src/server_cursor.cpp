@@ -270,8 +270,26 @@ String seal_since(const ServerState& state, char kind, std::string_view epoch, s
     return token;
 }
 
-std::expected<std::uint64_t, ProblemError> open_since(
-    const ServerState& state, char kind, std::string_view token, const JournalPosition& journal)
+namespace
+{
+
+// What a `since` token holds once its seal is checked: the journal's epoch and position, and, in a token
+// that counts events, the hub's epoch and the last event it covers.
+struct SinceParts
+{
+    String epoch;
+    std::uint64_t position = 0;
+    std::optional<String> events_epoch;
+    std::uint64_t events_seq = 0;
+
+    explicit SinceParts(const Allocator& allocator)
+        : epoch(allocator)
+    {
+    }
+};
+
+std::expected<SinceParts, ProblemError> read_since(
+    const ServerState& state, char kind, std::string_view token)
 {
     const auto never_given
         = [&] { return bad_request(state, "Unknown since token: one this server never gave."); };
@@ -301,12 +319,74 @@ std::expected<std::uint64_t, ProblemError> open_since(
         return std::unexpected(never_given());
     const json::Value* e = document->root().find("e");
     const json::Value* n = document->root().find("n");
+    const json::Value* v = document->root().find("v");
+    const json::Value* q = document->root().find("q");
     const auto position  = n != nullptr && n->is_number() ? n->to_u64() : std::nullopt;
-    if (e == nullptr || !e->is_string() || !position)
+    if (e == nullptr || !e->is_string() || !position || (v == nullptr) != (q == nullptr))
         return std::unexpected(never_given());
-    if (e->text() != journal.epoch || *position < journal.oldest || *position > journal.position)
+    SinceParts parts(state.allocator);
+    parts.epoch.assign(e->text());
+    parts.position = *position;
+    if (v != nullptr)
+    {
+        const auto seq = q->is_number() ? q->to_u64() : std::nullopt;
+        if (!v->is_string() || !seq)
+            return std::unexpected(never_given());
+        parts.events_epoch.emplace(v->text(), state.allocator);
+        parts.events_seq = *seq;
+    }
+    return parts;
+}
+
+} // namespace
+
+std::expected<std::uint64_t, ProblemError> open_since(
+    const ServerState& state, char kind, std::string_view token, const JournalPosition& journal)
+{
+    const auto parts = read_since(state, kind, token);
+    if (!parts)
+        return std::unexpected(parts.error());
+    if (parts->epoch != journal.epoch || parts->position < journal.oldest
+        || parts->position > journal.position)
         return std::unexpected(gone(state, "Token too old for this server: read them all again."));
-    return *position;
+    return parts->position;
+}
+
+String seal_event_since(const ServerState& state, std::string_view journal_epoch,
+    std::uint64_t journal_position, std::uint64_t event_seq)
+{
+    String raw(state.allocator);
+    json::Writer w(raw);
+    w.begin_object();
+    w.key("e");
+    w.string(journal_epoch);
+    w.key("n");
+    w.number(journal_position);
+    w.key("v");
+    w.string(state.hub.epoch);
+    w.key("q");
+    w.number(event_seq);
+    w.end_object();
+
+    const auto mac = mac_of(state, 's', raw);
+    String token("s_", state.allocator);
+    base64url_encode(bytes_of(raw), token);
+    token.push_back('.');
+    base64url_encode(mac, token);
+    return token;
+}
+
+std::expected<EventPlace, ProblemError> open_event_since(const ServerState& state, std::string_view token)
+{
+    const auto parts = read_since(state, 's', token);
+    if (!parts)
+        return std::unexpected(parts.error());
+    EventPlace place(state.allocator);
+    // A token that counts no events came from a server that offered none, or before: too old for these
+    if (parts->events_epoch)
+        place.epoch = *parts->events_epoch;
+    place.seq = parts->events_seq;
+    return place;
 }
 
 } // namespace lantern::detail
