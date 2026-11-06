@@ -17,6 +17,11 @@
 // - the families a Library offers beside the apps: changes (§ 6.4) with
 //   `since` tokens sealed like cursors, sections (§ 6.5), and the titles
 //   (§ 7): one, many at once, their changes and their images (`media`);
+// - the homebrew (§ 8): the listing with its filters, an entry with its
+//   manifests, and the updates of what a device has installed; the packages
+//   are files like an app's (§ 6.6);
+// - the cheat sets (§ 10): the listing, a set's text, and, for a token with
+//   the scope `cheats.write`, writing them when the library takes writes;
 // - with an AccountStore (accounts.hpp): Bearer tokens kept as hashes and
 //   checked with their scopes (§ 5.1), pairing (§ 5.2: the code, the poll
 //   address, the limits per address), the approval page that shows the
@@ -30,8 +35,8 @@
 //
 // Approving a pairing is the app's: its own page, once the user is signed in
 // there, calls Server::approve_pairing(). Invitations, administration,
-// homebrew, cheat sets, saves, requests, events (so no `wait` on changes),
-// peers, sync and discovery are not here yet: a request for one is a route the server does
+// saves, requests, events (so no `wait` on changes), peers, sync and
+// discovery are not here yet: a request for one is a route the server does
 // not have (404), and the handshake says so (`features`). JSON is sent as it
 // is written, never compressed (§ 2.1 asks a server to, as a SHOULD).
 //
@@ -294,8 +299,8 @@ class Journal
 
 // What a server serves. Every method is called per request: answer with
 // what is there now (a database query, a folder scanned and kept...). The
-// families beyond the apps (titles, sections, changes) are offered when the
-// library says so: by default it offers none.
+// families beyond the apps (titles, sections, changes, homebrew, cheats) are
+// offered when the library says so: by default it offers none.
 class Library
 {
   public:
@@ -347,6 +352,50 @@ class Library
         return Vector<Section>(allocator);
     }
 
+    // Homebrew (§ 8), the family `homebrew`: offered when this is true. The
+    // packages are files, served by file() like an app's.
+    [[nodiscard]] virtual bool offers_homebrew() { return false; }
+    // Every entry with the manifests of its packages (the server leaves them
+    // out of listings), its texts in the best of `languages`. The server
+    // narrows them by platform, kind, genre and name itself, and reads a
+    // kind it does not know as `app` (§ 8.1).
+    [[nodiscard]] virtual Result<Vector<Homebrew>> homebrew(
+        std::string_view /*languages*/, const Allocator& allocator)
+    {
+        return Vector<Homebrew>(allocator);
+    }
+
+    // Cheat sets (§ 10), the family `cheats`: offered when this is true.
+    [[nodiscard]] virtual bool offers_cheats() { return false; }
+    // Every set, whatever its platform and title.
+    [[nodiscard]] virtual Result<Vector<CheatSet>> cheats(const Allocator& allocator)
+    {
+        return Vector<CheatSet>(allocator);
+    }
+    // The text of <base>/v1/cheats/<id>: nothing for an id it does not have.
+    [[nodiscard]] virtual Result<std::optional<LibraryFile>> cheat_file(
+        std::string_view /*id*/, const Allocator& /*allocator*/)
+    {
+        return std::optional<LibraryFile> {};
+    }
+    // Whether clients may write sets (POST, PUT and DELETE, with the scope
+    // `cheats.write`); a server that does not answers 405 (§ 10).
+    [[nodiscard]] virtual bool writes_cheats() { return false; }
+    // Keeps `set` (the server has checked it, § 10 and Annex A; `source` is
+    // never empty) under a new id, or, when `replacing` is not empty, as the
+    // text and note of that set. The set it answers has the id, `size`,
+    // `sha256` and `updated` of what is kept.
+    [[nodiscard]] virtual Result<CheatSet> write_cheat(
+        const CheatWrite& /*set*/, std::string_view /*replacing*/, const Allocator& /*allocator*/)
+    {
+        return fail(Category::unsupported, "this library takes no cheat set");
+    }
+    // Forgets the set of that id; false when there is none.
+    [[nodiscard]] virtual Result<bool> delete_cheat(std::string_view /*id*/)
+    {
+        return fail(Category::unsupported, "this library takes no cheat set");
+    }
+
     // The change journal (§ 6.4): the family `changes` is offered when there
     // is one, and /v1/titles/changes answers 410 to any token when there is
     // none. It must outlive the server.
@@ -373,11 +422,13 @@ struct AppDraft
 
 // A Library held in memory: a reference to read, the base of tests and
 // demos. It refuses an app that breaks § 6.1 or its platform's profile
-// (Annex A), a title that breaks § 7.1. It serves the apps; the titles, the
-// sections and the journal only once it is told to (offer_titles(),
-// add_title(), add_section(), keep_journal(): call the last before the first
-// change, which is all a journal knows). Not thread-safe while anything is
-// being added.
+// (Annex A), a title that breaks § 7.1, a homebrew that breaks § 8 and a
+// cheat set that breaks § 10. It serves the apps; the titles, the sections,
+// the homebrew, the cheat sets and the journal only once it is told to
+// (offer_titles(), add_title(), add_section(), add_homebrew(), add_cheat(),
+// keep_journal(): call the last before the first change, which is all a
+// journal knows). Not thread-safe while anything is being added; the server
+// calls its cheat methods one at a time.
 class MemoryLibrary final : public Library, public Journal
 {
   public:
@@ -416,6 +467,31 @@ class MemoryLibrary final : public Library, public Journal
     // False when there is none of that id.
     bool remove_section(std::string_view id);
 
+    // The family `homebrew`, with no entry yet (add_homebrew() offers it too).
+    void offer_homebrew() noexcept { homebrew_offered_ = true; }
+    // Serves the entry; one of that platform and id is replaced. `contents`
+    // holds the bytes of `entry.package`, then of each of `entry.packages`.
+    // Each package has the `size` and `sha256` of its bytes (they are
+    // signed, § 8.4) and the `manifest_sha256` of its manifest; the library
+    // gives it the `file` it serves it at. It refuses what § 8 or Annex A do
+    // not allow: paths, roots, architectures, a signature that does not
+    // verify (or by several keys), a port's data, requirements.
+    [[nodiscard]] Result<Homebrew> add_homebrew(
+        const Homebrew& entry, std::span<const std::span<const std::byte>> contents);
+    // False when there is none of that platform and id.
+    bool remove_homebrew(std::string_view platform, std::string_view id);
+
+    // The family `cheats`, with no set yet (add_cheat() offers it too).
+    void offer_cheats() noexcept { cheats_offered_ = true; }
+    // Takes writes from clients with the scope `cheats.write` (§ 10).
+    void accept_cheat_writes(bool accept = true) noexcept { cheat_writes_ = accept; }
+    // Serves a set from its text; `set.source` empty is "Lantern". One of the
+    // same platform, title, build and source is replaced. It refuses what
+    // § 10 and the platform's profile (Annex A) do not allow.
+    [[nodiscard]] Result<CheatSet> add_cheat(const CheatWrite& set);
+    // False when there is none of that id.
+    bool remove_cheat(std::string_view id);
+
     [[nodiscard]] Result<Vector<String>> platforms(const Allocator& allocator) override;
     [[nodiscard]] Result<Vector<App>> apps(const AppsFilter& filter, const Allocator& allocator) override;
     [[nodiscard]] Result<std::optional<LibraryFile>> file(
@@ -428,6 +504,17 @@ class MemoryLibrary final : public Library, public Journal
     [[nodiscard]] bool offers_sections() override { return sections_offered_; }
     [[nodiscard]] Result<Vector<Section>> sections(
         std::string_view languages, const Allocator& allocator) override;
+    [[nodiscard]] bool offers_homebrew() override { return homebrew_offered_; }
+    [[nodiscard]] Result<Vector<Homebrew>> homebrew(
+        std::string_view languages, const Allocator& allocator) override;
+    [[nodiscard]] bool offers_cheats() override { return cheats_offered_; }
+    [[nodiscard]] Result<Vector<CheatSet>> cheats(const Allocator& allocator) override;
+    [[nodiscard]] Result<std::optional<LibraryFile>> cheat_file(
+        std::string_view id, const Allocator& allocator) override;
+    [[nodiscard]] bool writes_cheats() override { return cheat_writes_; }
+    [[nodiscard]] Result<CheatSet> write_cheat(
+        const CheatWrite& set, std::string_view replacing, const Allocator& allocator) override;
+    [[nodiscard]] Result<bool> delete_cheat(std::string_view id) override;
     [[nodiscard]] Journal* journal() override { return keep_ > 0 ? this : nullptr; }
 
     [[nodiscard]] Result<JournalPosition> position(const Allocator& allocator) override;
@@ -488,6 +575,13 @@ class MemoryLibrary final : public Library, public Journal
     };
 
     void record(Entry::Kind kind, std::string_view platform, std::string_view key);
+    // Serves `content` as a file of this library, once; the address it is served at.
+    String keep_file(std::span<const std::byte> content, const Digest& sha256);
+    // Whether an app or a package of a homebrew is served from that file.
+    [[nodiscard]] bool uses_file(std::string_view name) const noexcept;
+    // Stops serving the files only `gone` used.
+    void drop_unused_files(const Homebrew& gone);
+    [[nodiscard]] Result<CheatSet> put_cheat(const CheatWrite& given, std::string_view replacing);
     [[nodiscard]] bool has_app(std::string_view id) const noexcept;
     [[nodiscard]] const Title* find_title(
         std::string_view platform, std::string_view title_id) const noexcept;
@@ -499,8 +593,14 @@ class MemoryLibrary final : public Library, public Journal
     Vector<Stored> media_;
     Vector<Title> titles_;
     Vector<Section> sections_;
+    Vector<Homebrew> homebrew_;
+    Vector<CheatSet> cheats_;
+    Vector<Stored> cheat_files_;
     bool titles_offered_   = false;
     bool sections_offered_ = false;
+    bool homebrew_offered_ = false;
+    bool cheats_offered_   = false;
+    bool cheat_writes_     = false;
     // The journal, kept when `keep_` is above 0
     std::size_t keep_ = 0;
     String epoch_;

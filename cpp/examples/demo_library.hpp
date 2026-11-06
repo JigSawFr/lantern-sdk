@@ -1,9 +1,10 @@
 // The demo server's library: games that do not exist, for the demo, the
 // tests and the conformance run. The same apps, titles and sections as
-// python/tests/demo.py and typescript/test/demo.ts (anonymous, without their
-// homebrew and cheat sets, which this server does not serve yet), so that
-// the same checks find the same things; with a journal for the changes, and
-// a few images on the server's origin. The packages' bytes are made from
+// python/tests/demo.py and typescript/test/demo.ts, so that the same checks
+// find the same things; with a journal for the changes, a few images on the
+// server's origin, homebrew (signed archives, single files, a port whose data
+// the user brings, a package per architecture) and cheat sets, which clients
+// with the scope cheats.write may add to. The packages' bytes are made from
 // their names, the same each run, and are no real game's.
 #pragma once
 
@@ -14,6 +15,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <lantern/lantern.hpp>
@@ -40,6 +42,191 @@ inline std::vector<std::byte> blob(std::string_view label, std::size_t size)
     }
     out.resize(size);
     return out;
+}
+
+// CRC-32 (IEEE), the checksum of a file in a zip archive.
+inline std::uint32_t crc32(std::span<const std::byte> data)
+{
+    std::uint32_t crc = 0xFFFFFFFFU;
+    for (const std::byte byte : data)
+    {
+        crc ^= static_cast<std::uint32_t>(byte);
+        for (int bit = 0; bit < 8; ++bit)
+            crc = (crc >> 1U) ^ (0xEDB88320U & (0U - (crc & 1U)));
+    }
+    return ~crc;
+}
+
+struct ZipFile
+{
+    std::string name; // without the leading "/"
+    std::vector<std::byte> data;
+};
+
+// A zip archive that stores its files as they are, which a client reads like any other.
+inline std::vector<std::byte> zipped(const std::vector<ZipFile>& files)
+{
+    std::vector<std::byte> out;
+    const auto put = [&](std::uint64_t value, int width)
+    {
+        for (int i = 0; i < width; ++i)
+            out.push_back(static_cast<std::byte>((value >> (8 * i)) & 0xFFU));
+    };
+    constexpr std::uint64_t time = 12U << 11U; // 12:00:00
+    constexpr std::uint64_t date = ((2026U - 1980U) << 9U) | (10U << 5U) | 30U; // 2026-10-30
+    std::vector<std::size_t> offsets;
+    for (const ZipFile& file : files)
+    {
+        offsets.push_back(out.size());
+        put(0x04034B50, 4);
+        put(20, 2);
+        put(0, 2);
+        put(0, 2); // stored
+        put(time, 2);
+        put(date, 2);
+        put(crc32(file.data), 4);
+        put(file.data.size(), 4);
+        put(file.data.size(), 4);
+        put(file.name.size(), 2);
+        put(0, 2);
+        for (const char c : file.name)
+            out.push_back(static_cast<std::byte>(c));
+        out.insert(out.end(), file.data.begin(), file.data.end());
+    }
+    const std::size_t directory = out.size();
+    for (std::size_t i = 0; i < files.size(); ++i)
+    {
+        const ZipFile& file = files[i];
+        put(0x02014B50, 4);
+        put(0x0314, 2);
+        put(20, 2);
+        put(0, 2);
+        put(0, 2);
+        put(time, 2);
+        put(date, 2);
+        put(crc32(file.data), 4);
+        put(file.data.size(), 4);
+        put(file.data.size(), 4);
+        put(file.name.size(), 2);
+        put(0, 2);
+        put(0, 2);
+        put(0, 2);
+        put(0, 2);
+        put(std::uint64_t { 0100644U } << 16U, 4);
+        put(offsets[i], 4);
+        for (const char c : file.name)
+            out.push_back(static_cast<std::byte>(c));
+    }
+    const std::size_t size = out.size() - directory;
+    put(0x06054B50, 4);
+    put(0, 2);
+    put(0, 2);
+    put(files.size(), 2);
+    put(files.size(), 2);
+    put(size, 4);
+    put(directory, 4);
+    put(0, 2);
+    return out;
+}
+
+inline std::vector<std::byte> text_bytes(std::string_view text)
+{
+    const auto view = std::as_bytes(std::span(text.data(), text.size()));
+    return { view.begin(), view.end() };
+}
+
+// A package and its bytes, before the library serves them.
+struct Built
+{
+    Package package;
+    std::vector<std::byte> bytes;
+};
+
+// An archive: each file lands at "/" + its name (§ 8.2).
+inline Built archive_package(const std::vector<ZipFile>& files, std::span<const std::string_view> arch = {})
+{
+    Built built;
+    built.bytes             = zipped(files);
+    built.package.format    = "zip";
+    built.package.size      = built.bytes.size();
+    built.package.sha256    = Sha256::of(built.bytes);
+    std::uint64_t installed = 0;
+    for (const ZipFile& file : files)
+    {
+        built.package.manifest.emplace_back();
+        ManifestEntry& entry = built.package.manifest.back();
+        entry.path           = "/" + file.name;
+        entry.size           = file.data.size();
+        entry.sha256         = Sha256::of(file.data);
+        installed += file.data.size();
+    }
+    built.package.installed_size  = installed;
+    built.package.manifest_sha256 = manifest_digest(built.package.manifest);
+    for (const std::string_view name : arch)
+        built.package.arch.emplace_back(name);
+    return built;
+}
+
+// One file that goes to `path` on the device, or that the system installs (no path).
+inline Built single_package(std::string_view format, std::string_view path, std::vector<std::byte> bytes)
+{
+    Built built;
+    built.bytes                  = std::move(bytes);
+    built.package.format         = format;
+    built.package.size           = built.bytes.size();
+    built.package.sha256         = Sha256::of(built.bytes);
+    built.package.path           = path;
+    built.package.installed_size = built.bytes.size();
+    ManifestEntry single;
+    single.path                   = path;
+    single.size                   = built.bytes.size();
+    single.sha256                 = built.package.sha256;
+    built.package.manifest_sha256 = manifest_digest(std::span(&single, 1));
+    return built;
+}
+
+// Signs the entry's packages (§ 8.4) with the demo's author key: the SHA-256 of a phrase, for the demo only.
+inline void sign_homebrew(Homebrew& entry)
+{
+    static constexpr std::string_view phrase = "Mira's fictional signing key";
+    const DeviceKey key                      = DeviceKey::from_seed(Sha256::of(phrase));
+    String public_key;
+    base64_encode(key.public_key(), public_key);
+    const auto signature_of = [&](const Package& package)
+    {
+        String message;
+        signed_message(
+            entry.id, entry.platform, entry.build, package.sha256, package.manifest_sha256, message);
+        const SignatureBytes bytes
+            = key.sign(std::span(reinterpret_cast<const std::uint8_t*>(message.data()), message.size()));
+        Signature signature;
+        signature.alg        = "ed25519";
+        signature.public_key = public_key;
+        base64_encode(bytes, signature.value);
+        return signature;
+    };
+    entry.signature = signature_of(entry.package);
+    for (Package& package : entry.packages)
+        package.signature = signature_of(package);
+}
+
+// Serves the entry with the bytes of its packages (the first is `built`'s, then the others').
+inline Result<void> put_homebrew(
+    MemoryLibrary& library, Homebrew& entry, std::vector<Built>& built, bool signed_ = false)
+{
+    entry.package = std::move(built.front().package);
+    std::vector<std::span<const std::byte>> contents { built.front().bytes };
+    for (std::size_t i = 1; i < built.size(); ++i)
+    {
+        entry.packages.push_back(std::move(built[i].package));
+        contents.emplace_back(built[i].bytes);
+    }
+    if (signed_)
+        sign_homebrew(entry);
+    auto added = library.add_homebrew(entry, contents);
+    if (!added)
+        return std::unexpected(added.error());
+    return {};
 }
 
 struct DemoApp
@@ -148,7 +335,192 @@ inline Result<void> fill_titles(MemoryLibrary& library)
     return put(android);
 }
 
-// Adds the demo's apps, titles and sections to `library`, and a journal of
+// The demo's homebrew (§ 8): a signed archive, single files (one under a root that asks for
+// consent, with a loader it needs), a port whose data the user brings, and a signed port for Linux
+// with a package per architecture.
+inline Result<void> fill_homebrew(MemoryLibrary& library)
+{
+    const auto base_entry
+        = [](std::string_view id, std::string_view platform, std::string_view kind, std::string_view name,
+              std::string_view author, std::string_view version, std::uint64_t build)
+    {
+        Homebrew entry;
+        entry.id       = id;
+        entry.platform = platform;
+        entry.kind     = kind;
+        entry.name     = name;
+        entry.author   = author;
+        entry.version  = version;
+        entry.build    = build;
+        return entry;
+    };
+
+    // A signed archive, with a manifest under the Switch's free roots
+    {
+        Homebrew entry
+            = base_entry("org.example.starjar", "switch", "tool", "Star Jar", "Mira", "1.2.0", 10200);
+        entry.license  = "MIT";
+        entry.language = "en";
+        entry.summary  = "Keep the stars you saw tonight.";
+        entry.genres   = { "education" };
+        entry.tags     = { "notes" };
+        entry.updated  = "2026-10-29T08:00:00Z";
+        entry.requires_.emplace();
+        entry.requires_->text = "Atmosphere 1.7 or later";
+        entry.requires_->min.emplace();
+        entry.requires_->min->members.emplace_back("atmosphere", "\"1.7.0\"");
+        std::vector<Built> built;
+        built.push_back(
+            archive_package({ { "switch/org.example.starjar/starjar.nro", blob("starjar.nro", 700) },
+                { "config/org.example.starjar/settings.ini", text_bytes("[jar]\nstars=12\n") } }));
+        if (auto put = put_homebrew(library, entry, built, true); !put)
+            return put;
+    }
+    // A single .nro, a game
+    {
+        Homebrew entry
+            = base_entry("org.example.mothclock", "switch", "game", "Moth Clock", "Oren", "0.4.0", 400);
+        entry.genres = { "puzzle" };
+        std::vector<Built> built;
+        built.push_back(single_package(
+            "nro", "/switch/org.example.mothclock/org.example.mothclock.nro", blob("mothclock.nro", 400)));
+        if (auto put = put_homebrew(library, entry, built); !put)
+            return put;
+    }
+    // An overlay: a root that needs the user's consent, and a loader it needs
+    {
+        Homebrew entry
+            = base_entry("org.example.glowmeter", "switch", "overlay", "Glow Meter", "Oren", "1.0.0", 100);
+        entry.requires_.emplace();
+        entry.requires_->text = "An overlay loader";
+        entry.requires_->homebrew.emplace_back();
+        entry.requires_->homebrew.back().id        = "org.example.overlay-loader";
+        entry.requires_->homebrew.back().min_build = 1;
+        std::vector<Built> built;
+        built.push_back(single_package("ovl", "/switch/.overlays/glowmeter.ovl", blob("glow.ovl", 256)));
+        if (auto put = put_homebrew(library, entry, built); !put)
+            return put;
+    }
+    // A port: the user brings the original game's data
+    {
+        Homebrew entry = base_entry(
+            "org.example.tidewalk-port", "switch", "port", "Tidewalk Port", "Oren", "0.3.0", 300);
+        entry.license = "GPL-2.0-or-later";
+        entry.genres  = { "adventure" };
+        entry.port.emplace();
+        Port& port              = *entry.port;
+        port.original.name      = "Tidewalk";
+        port.original.year      = 1999;
+        port.original.developer = "Northwind Toys";
+        port.engine.name        = "Shoreline";
+        port.engine.version     = "0.3.0";
+        port.data_root          = "/switch/tidewalk/";
+        port.assets             = "user_owned";
+        const auto pak          = blob("tide.pak 1.0", 512);
+        port.requires_data.emplace_back();
+        RequiredData& tide = port.requires_data.back();
+        tide.path          = "data/tide.pak";
+        tide.size          = pak.size();
+        tide.accept.emplace_back();
+        tide.accept.back().sha256 = Sha256::of(pak);
+        tide.accept.back().label  = "1.0";
+        tide.hint                 = "tide.pak, in the folder where Tidewalk is installed.";
+        port.requires_data.emplace_back();
+        RequiredData& music = port.requires_data.back();
+        music.optional      = true;
+        using Alternative   = std::pair<std::string_view, std::string_view>;
+        const std::array<Alternative, 2> alternatives { { { "music/full.pak", "From the soundtrack." },
+            { "music/demo.pak", "From the free demo." } } };
+        for (const auto& [path, hint] : alternatives)
+        {
+            music.one_of.emplace_back();
+            music.one_of.back().emplace_back();
+            music.one_of.back().back().path = path;
+            music.one_of.back().back().hint = hint;
+        }
+        std::vector<Built> built;
+        built.push_back(
+            archive_package({ { "switch/org.example.tidewalk-port/tidewalk.nro", blob("tidewalk.nro", 500) },
+                { "switch/org.example.tidewalk-port/readme.txt",
+                    text_bytes("Bring tide.pak from your own copy.\n") } }));
+        if (auto put = put_homebrew(library, entry, built); !put)
+            return put;
+    }
+    // A Linux port, a signed package per architecture
+    {
+        Homebrew entry
+            = base_entry("org.example.harborglow", "linux", "port", "Harbor Glow", "Mira", "2.0.0", 20000);
+        entry.genres   = { "simulation" };
+        entry.language = "en";
+        entry.summary  = "A lighthouse keeper's evening, ported.";
+        entry.requires_.emplace();
+        entry.requires_->text = "glibc 2.30, OpenGL ES 2, 512 MiB";
+        entry.requires_->min.emplace();
+        entry.requires_->min->members.emplace_back("glibc", "\"2.30\"");
+        entry.requires_->min->members.emplace_back("ram_mb", "512");
+        entry.requires_->gpu = { "gles2" };
+        entry.port.emplace();
+        entry.port->original.name = "Harbor Glow";
+        entry.port->engine.name   = "Beacon";
+        entry.port->data_root     = "/org.example.harborglow/data/";
+        entry.port->assets        = "user_owned";
+        entry.port->requires_data.emplace_back();
+        entry.port->requires_data.back().path = "HARBOR.PAK";
+        entry.port->requires_data.back().hint = "From your own copy.";
+        static constexpr std::array<std::string_view, 2> arm { "aarch64", "armhf" };
+        static constexpr std::array<std::string_view, 1> x86 { "x86_64" };
+        const auto launcher = text_bytes("#!/bin/sh\nexec ./org.example.harborglow/harbor\n");
+        std::vector<Built> built;
+        built.push_back(
+            archive_package({ { "Harbor Glow.sh", launcher },
+                                { "org.example.harborglow/harbor.aarch64", blob("harbor.aarch64", 300) } },
+                arm));
+        built.push_back(
+            archive_package({ { "Harbor Glow.sh", launcher },
+                                { "org.example.harborglow/harbor.x86_64", blob("harbor.x86_64", 300) } },
+                x86));
+        if (auto put = put_homebrew(library, entry, built, true); !put)
+            return put;
+    }
+    return {};
+}
+
+// The demo's cheat sets (§ 10): two sources for one build of a game, one for another.
+inline Result<void> fill_cheats(MemoryLibrary& library)
+{
+    struct DemoCheat
+    {
+        std::string_view title_id;
+        std::string_view build_id;
+        std::string_view source;
+        std::string_view note;
+        std::string_view text;
+    };
+    const std::array<DemoCheat, 3> sets { {
+        { "0100AB1200010000", "AB12CD34EF560789", "Community list", "Endless lamp oil",
+            "[Endless lamp oil]\n04000000 0011A0B0 00000063\n" },
+        { "0100AB1200010000", "AB12CD34EF560789", "Mira", "", "[Slow comets]\n04000000 0011A0C8 00000001\n" },
+        { "0100CD3400020000", "0123456789ABCDEF", "Community list", "",
+            "[Moon jump]\n04000000 00ABC010 0000FFFF\n" },
+    } };
+    // Clients with the scope cheats.write may add and replace sets
+    library.accept_cheat_writes();
+    for (const DemoCheat& demo : sets)
+    {
+        CheatWrite set;
+        set.platform = "switch";
+        set.title_id = demo.title_id;
+        set.build_id = demo.build_id;
+        set.source   = demo.source;
+        set.note     = demo.note;
+        set.text     = demo.text;
+        if (auto added = library.add_cheat(set); !added)
+            return std::unexpected(added.error());
+    }
+    return {};
+}
+
+// Adds the demo's apps, titles, sections, homebrew and cheat sets to `library`, and a journal of
 // its changes; false, and the reason, if one is refused.
 inline Result<void> fill(MemoryLibrary& library)
 {
@@ -215,6 +587,10 @@ inline Result<void> fill(MemoryLibrary& library)
     }
     if (auto titled = fill_titles(library); !titled)
         return std::unexpected(titled.error());
+    if (auto brewed = fill_homebrew(library); !brewed)
+        return brewed;
+    if (auto cheated = fill_cheats(library); !cheated)
+        return cheated;
 
     // The shelves: the four newest apps, and the games to play together
     std::ranges::sort(listed, [](const App& a, const App& b) { return a.added > b.added; });

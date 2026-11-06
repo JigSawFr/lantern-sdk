@@ -17,7 +17,8 @@ draft 0.9, variants of one game and packages a device cannot use (`requires`,
 draft 0.11, a TLS floor of 1.2 in both transports and `is_valid_server_uid()`
 (a `uid` is a lower case UUID, version 4 or 7). Of a
 server, a peer's side, and the first slices of a server core
-(Lantern Core, read-only, with its changes, sections and titles, and the
+(Lantern Core, read-only, with its changes, sections, titles, homebrew and
+cheat sets, and the
 tokens, pairing and signed requests that give a device its access: see
 [Server core](#server-core); the other families come in later steps); the C API is in [`../c/`](../c/README.md).
 
@@ -153,11 +154,13 @@ tokens, pairing and signed requests that give a device its access: see
 `lantern/server.hpp`: what answers the protocol's routes, with no HTTP
 framework and no socket of its own, as `PeerGate` is for a peer. Three slices so
 far: **Lantern Core, read-only**, **tokens, pairing and signatures**, and the
-library's **changes, sections and titles**.
+library's **changes, sections, titles, homebrew and cheat sets**.
 
 - the handshake at `/.well-known/lantern` and `<base>/v1` (§ 4.2), which lists
-  only what the server serves: `features` says `library`, `titles`, `changes`
-  and `sections` when the library offers them, and `pairing` and `signatures`
+  only what the server serves: `features` says `library`, `titles`, `changes`,
+  `sections`, `homebrew` and `cheats` when the library offers them (the last for
+  a caller with the scope `cheats`, which anonymous callers hold on a public
+  server), and `pairing` and `signatures`
   when the server has accounts, and nothing else; the account is
   the caller's (`anonymous`, `active` or `frozen`, its scopes, whether its
   token is bound), `limits.page_size` is the largest page;
@@ -201,7 +204,7 @@ several threads when the library's and the account store's methods can be.
 `parse_target()` splits and decodes a request target for an adapter;
 `problem_response()` answers what an adapter cannot read.
 
-### Changes, sections and titles
+### Changes, sections, titles, homebrew and cheat sets
 
 A `Library` offers these families by overriding methods that, by default,
 offer none, so that a library written for the first slice keeps working:
@@ -229,12 +232,37 @@ offer none, so that a library written for the first slice keeps working:
 - **Sections** (§ 6.5): `offers_sections()` and `sections(languages)`; the
   server leaves out the apps of another platform and the ids the library does
   not have, and a shelf left empty.
+- **Homebrew** (§ 8): `offers_homebrew()` and `homebrew(languages)`, every entry
+  with the manifests of its packages. `GET <base>/v1/homebrew` is a page sorted
+  by name with `platform`, `q`, `kind` (a kind the library does not know is
+  read as `app`, § 8.1) and `genre`, and no manifest; `GET .../homebrew/{id}`
+  gives the entry with them (404 for an unknown id, 400 when several platforms
+  have it and the client named none); `POST .../homebrew/updates` (a platform
+  required) pages the entries newer than the builds installed. The packages
+  are files, served by `file(name)` like an app's. The signature (§ 8.4) is the
+  author's: the library holds it, the server serves it as it is, and
+  `MemoryLibrary::add_homebrew()` refuses one that does not verify.
+- **Cheat sets** (§ 10): `offers_cheats()`, `cheats()` and `cheat_file(id)`;
+  `GET <base>/v1/cheats` (filters `platform`, `title_id`, `build_id`) and
+  `GET .../cheats/{id}`, the set's text as a file, need the scope `cheats`.
+  A library that returns true from `writes_cheats()` also takes `POST`, `PUT`
+  and `DELETE` from tokens with `cheats.write`: the server checks the set
+  (§ 10, § 13, Annex A: the platform's build_id and text format, 1 MiB at most,
+  409 for a set that exists) and calls `write_cheat()` and `delete_cheat()`
+  one request at a time. A library that does not answers 405. A body above
+  1 MiB needs an adapter that takes it: `ListenOptions::max_body`, 3 MiB for
+  the largest set once escaped.
 
 `MemoryLibrary` serves them once told to: `add_title()` (refuses what § 7.1
 and Annex A do not allow), `add_media()` (an image on the server's origin,
-named by its SHA-256), `add_section()`, `keep_journal(n)` for the last `n`
-changes (call it before the first one), and `remove_app()`, `remove_title()`
-and `remove_section()`, which the journal records.
+named by its SHA-256), `add_section()`, `add_homebrew()` (the entry and the
+bytes of its packages, whose `size`, `sha256` and `manifest_sha256` must be
+right; it refuses what § 8 and the profile do not allow: paths, roots,
+architectures, signatures, a port's data, requirements), `add_cheat()` and
+`accept_cheat_writes()`, `keep_journal(n)` for the last `n` changes (call it
+before the first one), and `remove_app()`, `remove_title()`, `remove_section()`,
+`remove_homebrew()` and `remove_cheat()`; the journal records the apps and the
+titles.
 
 ```cpp
 library.keep_journal();
@@ -322,14 +350,16 @@ python3 ../spec/conformance/run.py http://127.0.0.1:8080/ --origin https://app.e
 own: anonymously, with the console's token and its device key, and with the
 token against `--private`. No check fails; the two warnings are plain HTTP on
 loopback and JSON that is not compressed; with the token the run reaches
-**Lantern Core**, anonymously the suite leaves out the signed requests it has
-no key for. `ctest -R server` plays the library read by this library's own
+**Lantern Core**, +titles, +homebrew and +cheats (a set written, replaced and
+deleted); anonymously the suite leaves out the signed requests it has no key
+for and the writing of a set. `ctest -R server` plays the library read by this library's own
 client over the listener, `ctest -R unit` the server's cases in memory.
 
 Not in this slice, and so not offered by the handshake: invitations (§ 5.5; a
 code in a pairing request is unknown) and the administration API, so rating
-caps (§ 5.6) too; titles, homebrew, cheat sets, saves, requests, events,
-peers, sync and discovery; `changes`; compression of the JSON (§ 2.1: the
+caps (§ 5.6) too (so no set or entry is hidden by a cap); saves, requests, events,
+peers, sync and discovery; chunks and differential updates for the homebrew
+packages (§ 22); compression of the JSON (§ 2.1: the
 library can read gzip, not write it); a `release` sort that means anything (it
 needs titles: every app is without a release for now). Text search folds ASCII
 case only, not Unicode's.
@@ -764,7 +794,7 @@ if (done)
 - **Annex B's retries** (backoff with jitter, `Retry-After` as a floor):
   the errors carry what they need, the app retries.
 - The rest of the server core (see [Server core](#server-core)): tokens,
-  pairing, signatures, accounts, titles, homebrew, cheat sets, saves,
+  pairing, signatures, accounts, saves,
   requests, administration, events, peers, sync and discovery, and
   compressed JSON. The C API is in [`../c/`](../c/README.md).
 

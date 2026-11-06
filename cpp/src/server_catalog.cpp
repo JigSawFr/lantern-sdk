@@ -20,35 +20,6 @@ std::string_view languages_of(const ServerRequest& request) noexcept
     return request.header("Accept-Language").value_or(std::string_view {});
 }
 
-void write_image_object(json::Writer& w, const Image& image)
-{
-    w.begin_object();
-    w.key("url");
-    w.string(image.url);
-    if (image.width)
-    {
-        w.key("width");
-        w.number(*image.width);
-    }
-    if (image.height)
-    {
-        w.key("height");
-        w.number(*image.height);
-    }
-    if (image.sha256)
-    {
-        w.key("sha256");
-        const auto hex = to_hex(*image.sha256);
-        w.string(std::string_view(hex.data(), hex.size()));
-    }
-    if (image.external)
-    {
-        w.key("external");
-        w.boolean(*image.external);
-    }
-    w.end_object();
-}
-
 void write_text_member(json::Writer& w, std::string_view name, std::string_view text)
 {
     if (text.empty())
@@ -117,17 +88,7 @@ void write_title_members(json::Writer& w, const Title& title)
     if (!title.ratings.empty())
     {
         w.key("ratings");
-        w.begin_array();
-        for (const Rating& rating : title.ratings)
-        {
-            w.begin_object();
-            w.key("system");
-            w.string(rating.system);
-            w.key("rating");
-            w.string(rating.rating);
-            w.end_object();
-        }
-        w.end_array();
+        write_ratings(w, title.ratings);
     }
     write_words_member(w, "languages", title.languages);
     write_text_member(w, "summary", title.summary);
@@ -175,6 +136,50 @@ bool title_before(const Title* a, const Title* b) noexcept
 }
 
 } // namespace
+
+void write_image_object(json::Writer& w, const Image& image)
+{
+    w.begin_object();
+    w.key("url");
+    w.string(image.url);
+    if (image.width)
+    {
+        w.key("width");
+        w.number(*image.width);
+    }
+    if (image.height)
+    {
+        w.key("height");
+        w.number(*image.height);
+    }
+    if (image.sha256)
+    {
+        w.key("sha256");
+        const auto hex = to_hex(*image.sha256);
+        w.string(std::string_view(hex.data(), hex.size()));
+    }
+    if (image.external)
+    {
+        w.key("external");
+        w.boolean(*image.external);
+    }
+    w.end_object();
+}
+
+void write_ratings(json::Writer& w, const Vector<Rating>& ratings)
+{
+    w.begin_array();
+    for (const Rating& rating : ratings)
+    {
+        w.begin_object();
+        w.key("system");
+        w.string(rating.system);
+        w.key("rating");
+        w.string(rating.rating);
+        w.end_object();
+    }
+    w.end_array();
+}
 
 Answer changes_route(const ServerState& state, const ServerRequest& request)
 {

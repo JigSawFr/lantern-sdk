@@ -89,6 +89,7 @@ add_library(lantern
     src/server_auth.cpp
     src/server_catalog.cpp
     src/server_cursor.cpp
+    src/server_homebrew.cpp
     src/server_http.cpp
     src/server_library.cpp
     src/sha256.cpp

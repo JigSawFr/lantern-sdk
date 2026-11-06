@@ -82,6 +82,9 @@ struct ServerState
     // Seals the cursors (HMAC-SHA-256); wiped with the server.
     std::array<std::uint8_t, 32> secret {};
     mutable AuthRuntime runtime;
+    // The cheat sets are read and written one request at a time (§ 10: a set
+    // that exists answers 409, which two writes at once would miss).
+    mutable std::mutex cheats_mutex;
 
     explicit ServerState(const Allocator& memory)
         : allocator(memory)
@@ -161,8 +164,10 @@ struct RequestDocument
     DecodeOptions options;
 };
 
+// `limit` is the body's largest size: above the usual one only for a cheat
+// set (§ 10), whose text is one string as long as the body allows.
 [[nodiscard]] std::expected<RequestDocument, ProblemError> request_document(
-    const ServerState& state, const ServerRequest& request);
+    const ServerState& state, const ServerRequest& request, std::size_t limit = 0);
 [[nodiscard]] String number_text(std::uint64_t value, const Allocator& allocator);
 
 // Text helpers.
@@ -228,6 +233,34 @@ struct CursorPosition
     const ServerState& state, const ServerRequest& request);
 // An app as a document lists it (§ 6.1).
 void write_app_json(json::Writer& w, const App& app);
+// An image (§ 7.1) and the ratings (§ 7.1) as documents write them.
+void write_image_object(json::Writer& w, const Image& image);
+void write_ratings(json::Writer& w, const Vector<Rating>& ratings);
+
+// A page of a listing sorted by `keys` (one per item; `id` of each is the
+// item's own, unique): where it starts and ends in the sorted order and the
+// cursor of the next page, from the request's page_size and cursor (§ 6.2).
+// `scope` is the listing's identity (scope_of()).
+struct PageWindow
+{
+    Vector<std::size_t> order; // the items' indexes, sorted by their keys
+    std::size_t from  = 0; // the first item of the page, in `order`
+    std::size_t count = 0;
+    String next; // the cursor of the next page; empty after the last
+
+    explicit PageWindow(const Allocator& allocator)
+        : order(allocator)
+        , next(allocator)
+    {
+    }
+};
+
+[[nodiscard]] std::expected<PageWindow, ProblemError> page_window(const ServerState& state,
+    const ServerRequest& request, std::span<const SortKey> keys, std::string_view scope);
+
+// A file of the library served whole or by range (§ 6.6), as <base>/v1/files.
+[[nodiscard]] Answer serve_library_file(
+    const ServerState& state, const ServerRequest& request, const LibraryFile& file);
 
 // Changes (§ 6.4), titles (§ 7) and sections (§ 6.5): each 404 when the
 // library does not offer the family.
@@ -237,6 +270,26 @@ void write_app_json(json::Writer& w, const App& app);
     const ServerState& state, const ServerRequest& request, std::string_view title_id);
 [[nodiscard]] Answer title_changes_route(const ServerState& state, const ServerRequest& request);
 [[nodiscard]] Answer sections_route(const ServerState& state, const ServerRequest& request);
+
+// Homebrew (§ 8) and cheats (§ 10): each 404 when the library does not offer
+// the family.
+[[nodiscard]] Answer homebrew_list_route(const ServerState& state, const ServerRequest& request);
+[[nodiscard]] Answer homebrew_route(
+    const ServerState& state, const ServerRequest& request, std::string_view id);
+[[nodiscard]] Answer homebrew_updates_route(const ServerState& state, const ServerRequest& request);
+[[nodiscard]] Answer cheats_route(const ServerState& state, const ServerRequest& request);
+[[nodiscard]] Answer cheat_text_route(
+    const ServerState& state, const ServerRequest& request, std::string_view id);
+[[nodiscard]] Answer cheat_post_route(const ServerState& state, const ServerRequest& request);
+[[nodiscard]] Answer cheat_write_route(
+    const ServerState& state, const ServerRequest& request, std::string_view id);
+
+// What § 10 and Annex A say a set to write must be, as a text for a 400; empty
+// when the set is fine. The set's `source` is already filled in.
+[[nodiscard]] std::string_view cheat_problem(const CheatWrite& set);
+// The largest cheat set (§ 13), and what a body holding one may weigh.
+inline constexpr std::size_t cheat_limit = std::size_t { 1 } << 20U;
+inline constexpr std::size_t cheat_body  = std::size_t { 3 } << 20U;
 
 // Who calls (§ 4.2, § 5.1): no token (anonymous), a token of an account, or
 // of an account that is frozen. A token is checked against the store; its
@@ -276,6 +329,10 @@ struct Caller
     const ServerState& state, const ServerRequest& request, const Caller& caller);
 // Whether the caller may read the library (§ 5.1): nothing, or the problem.
 [[nodiscard]] std::optional<ProblemError> check_library(const ServerState& state, const Caller& caller);
+// The same for another scope of § 4.2: anonymous callers hold `library` and
+// `cheats` on a server that asks for no token, nothing else.
+[[nodiscard]] std::optional<ProblemError> check_scope(
+    const ServerState& state, const Caller& caller, std::string_view scope);
 
 // Pairing (§ 5.2): POST <base>/v1/pairing, GET <base>/v1/pairing/<poll>, and
 // the approval page at ServerState::verify.
