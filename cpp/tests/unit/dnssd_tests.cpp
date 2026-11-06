@@ -337,7 +337,9 @@ TEST_CASE("dnssd: an instance without its port or its TXT is asked for them, onc
         if (question.size() > 20 && question[12] == 17)
             self.heard.emplace_back("192.168.1.99", advertisement(Raw { 10, 1, 2, 3 }));
     };
-    const Found found = browse(socket);
+    // The follow-up goes out a third of the way in and its answer is read before the end: a window
+    // of 60 ms was too short for a loaded runner (macOS), 400 ms leaves room on each side
+    const Found found = browse(socket, false, 400);
     REQUIRE(found.servers.size() == 1);
     CHECK(found.servers[0].address == "10.1.2.3");
     REQUIRE(socket.asked.size() == 2);
