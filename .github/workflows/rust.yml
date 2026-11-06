@@ -3,7 +3,8 @@
 # the documentation, the tests on Linux, macOS and Windows against the
 # specification's examples and vectors, the oldest Rust the crate declares
 # (rust-version), the build for WebAssembly, and the dependencies' licences
-# and advisories (cargo-deny).
+# and advisories (cargo-deny), and the readers fuzzed for a short while
+# (cargo-fuzz) and under Miri.
 # Nothing is published here: release.yml builds, attests and publishes a
 # release (RELEASING.md).
 name: rust
@@ -26,6 +27,9 @@ env:
   RUST_VERSION: "1.97.0"
   # rust-version of rust/Cargo.toml
   MSRV: "1.90"
+  # The nightly cargo-fuzz needs, dated so that a run can be reproduced
+  NIGHTLY: "nightly-2026-11-05"
+  CARGO_FUZZ_VERSION: "0.13.2"
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
   RUSTFLAGS: "-D warnings"
@@ -121,3 +125,44 @@ jobs:
         run: cargo install cargo-deny --locked --version "$CARGO_DENY_VERSION"
       - name: cargo deny check
         run: cargo deny check
+
+  fuzz:
+    name: fuzz (30 s a target)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    # The flags of the other jobs would reach cargo-fuzz's own
+    env:
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Rust ${{ env.NIGHTLY }}
+        run: rustup toolchain install "$NIGHTLY" --profile minimal --no-self-update
+      - name: cargo-fuzz ${{ env.CARGO_FUZZ_VERSION }}
+        run: cargo install cargo-fuzz --locked --version "$CARGO_FUZZ_VERSION"
+      - name: Fuzz
+        working-directory: rust/fuzz
+        run: |
+          for target in documents answers fields; do
+            cargo "+$NIGHTLY" fuzz run "$target" -- -max_total_time=30
+          done
+
+  miri:
+    name: Miri (undefined behaviour)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    env:
+      RUSTFLAGS: ""
+      # The tests read the specification's files
+      MIRIFLAGS: -Zmiri-disable-isolation
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Rust ${{ env.NIGHTLY }}
+        run: rustup toolchain install "$NIGHTLY" --profile minimal --component miri,rust-src --no-self-update
+      - name: Tests under Miri
+        run: cargo "+$NIGHTLY" miri test --locked --test vectors --test rules --test profiles
