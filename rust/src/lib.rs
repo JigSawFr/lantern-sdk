@@ -10,11 +10,14 @@ pub mod bytes;
 pub mod canonical;
 pub mod client;
 pub mod digest;
+pub mod discovery;
 pub mod documents;
 pub mod download;
 pub mod error;
 pub mod generated;
 pub mod http;
+#[cfg(feature = "http")]
+pub mod http_transport;
 pub mod limits;
 pub mod pairing;
 pub mod problem;

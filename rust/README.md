@@ -40,9 +40,28 @@ README says what is there.
   (`tests/client.rs`, against a scripted server). The `os-entropy` feature
   gives `OsEntropy`.
 
-What follows, a slice at a time, the same as the other languages: the HTTP
-adapters and discovery, the rest of the client (titles, homebrew, saves,
-deltas), then the server toolkit. The table of families in the repository's README says where each
+- **An HTTP transport** (feature `http`: `reqwest` blocking, `rustls` with
+  `ring`): the server's key pinned as the TLS handshake ends, so that a key
+  other than the pinned one fails with `PinMismatch` before a byte of the
+  request is written (SPEC.md § 5.3); a server no CA vouches for gives the key
+  it showed, to pin at pairing; no redirect is followed; plain HTTP only to
+  loopback. Tested against local TLS servers (`tests/http.rs`). The timeout
+  bounds connecting (and a TCP keep-alive); `reqwest`'s blocking client has no
+  timeout between two reads of a body.
+
+- **LAN discovery** (SPEC.md § 4.1): the datagram on UDP 47115, the replies
+  read as hints (`read_reply`, fuzzed), the directed broadcast address, and
+  `discover()` over a `Datagram` socket the caller can supply (`UdpDatagram`
+  is the standard library's).
+
+- **A server that means harm** (`tests/hostile.rs`): a body that never ends,
+  a document nested without end, something that is not JSON, a listing that
+  never stops (a client follows at most 10 000 pages), a download that never
+  ends. Each ends in an error, none hangs or exhausts memory.
+
+What follows, a slice at a time, the same as the other languages: DNS-SD and
+the peers' replies, the rest of the client (titles, homebrew, saves, deltas),
+then the server toolkit. The table of families in the repository's README says where each
 stands.
 
 ## Checks
