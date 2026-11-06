@@ -1,0 +1,43 @@
+# The README's table of families by language (tools/check_matrix.py): its rows
+# are the specification's families, and its Python and TypeScript servers are
+# those the libraries' demo servers offer.
+name: matrix
+
+# Called by ci.yml on every run: the table is the README's, and the check reads
+# the Python and TypeScript libraries
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  # The version of uv, as setup-uv's step installs it
+  UV_VERSION: 0.13.6
+  NODE_VERSION: "26"
+
+jobs:
+  families:
+    name: the table of families
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.15"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: typescript/package-lock.json
+      - name: Install
+        run: |
+          (cd python && uv sync)
+          (cd typescript && npm ci)
+      - name: The table agrees with the servers
+        run: python3 tools/check_matrix.py
