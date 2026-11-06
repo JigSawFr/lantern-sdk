@@ -2035,6 +2035,11 @@ export class LanternClient {
    * written nor more than each range asked for read. On any failure (no index, an index or a chunk that does not
    * check, a source that cannot give ranges) or when no chunk is found in the seeds, the file is read whole by
    * downloadFile(), as without the family (L-22.3-4). `onDelta` is told what a delta download saved.
+   *
+   * What the sink holds of a download cut before (a `FileSink`'s `.part`, or the `.seed` of a resume cut in turn)
+   * counts as one more seed: the chunks already there are taken from it, not read again, each still checked by
+   * its SHA-256, so a stale or foreign part is harmless; it lets a retry with no `seeds` resume (the report's
+   * `resumed` says how much).
    */
   async downloadWithSeeds(
     file: {
@@ -2049,7 +2054,7 @@ export class LanternClient {
     options: DeltaOptions = {},
   ): Promise<void> {
     const { onDelta, ...rest } = options;
-    if (file.chunks !== undefined && seeds.length > 0) {
+    if (file.chunks !== undefined) {
       let reader: RangeReader | undefined;
       let report: DeltaReport | undefined;
       try {
@@ -2076,7 +2081,9 @@ export class LanternClient {
         onDelta?.(report);
         return;
       }
-      await sink.reset();
+      // With seeds of the caller's the file is read from the start, as before; without, what a cut download left
+      // in the sink (untouched by the delta) is resumed by downloadFile() as it would be without this family.
+      if (seeds.length > 0) await sink.reset();
     }
     await this.downloadFile(file, sink, rest);
   }

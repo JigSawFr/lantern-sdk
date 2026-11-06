@@ -437,6 +437,11 @@ auto report = client.download_with_seeds({ app.file, app.size, app.sha256 }, *ap
 // report->from_seeds, report->from_ranges, report->whole_file (read whole after a failure)
 ```
 
+Resuming an interrupted run is the app's: keep the bytes already written (a
+verified prefix) and pass them as one more seed. The chunks found there are
+not read again, and are still checked (SPEC.md Annex B.4); a stale or foreign
+prefix shares nothing and is harmless.
+
 ## Static libraries
 
 ```cpp

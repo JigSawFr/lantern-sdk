@@ -831,6 +831,68 @@ TEST_CASE("client: a file put together from a seed and two ranges")
     CHECK(s.transport.requests.size() == 1);
 }
 
+TEST_CASE("client: a verified prefix kept by the app is one more seed (Annex B.4)")
+{
+    Sources s;
+    const std::array<Seed, 1> old_only { Seed(s.update.old_file) };
+    Collect fresh;
+    const auto first
+        = s.client->download_with_seeds(s.update.target, s.update.chunks, old_only, fresh, s.options());
+    REQUIRE(first);
+    REQUIRE_FALSE(first->whole_file);
+
+    SUBCASE("the bytes of an interrupted run")
+    {
+        // What an app keeps: the file's first bytes, as the sink received them
+        const Bytes prefix(s.update.new_file.begin(),
+            s.update.new_file.begin() + static_cast<std::ptrdiff_t>(s.update.new_file.size() / 2));
+        const std::array<Seed, 2> seeds { Seed(s.update.old_file), Seed(prefix) };
+        Collect resumed;
+        const auto report
+            = s.client->download_with_seeds(s.update.target, s.update.chunks, seeds, resumed, s.options());
+        REQUIRE(report);
+        CHECK_FALSE(report->whole_file);
+        CHECK(resumed.bytes == s.update.new_file);
+        CHECK(report->from_ranges < first->from_ranges);
+        CHECK(report->from_seeds + report->from_ranges == s.update.new_file.size());
+        CHECK(resumed.restarts == 0);
+    }
+    SUBCASE("a prefix alone, with no other seed")
+    {
+        const Bytes prefix(s.update.new_file.begin(),
+            s.update.new_file.begin() + static_cast<std::ptrdiff_t>(s.update.new_file.size() / 2));
+        const std::array<Seed, 1> seeds { Seed(prefix) };
+        Collect resumed;
+        const auto report
+            = s.client->download_with_seeds(s.update.target, s.update.chunks, seeds, resumed, s.options());
+        REQUIRE(report);
+        CHECK_FALSE(report->whole_file);
+        CHECK(resumed.bytes == s.update.new_file);
+        CHECK(report->from_seeds > 0);
+    }
+    SUBCASE("garbage in place of the prefix shares nothing")
+    {
+        const Bytes garbage(sz(s.update.new_file.size() / 2), std::byte { 0x5A });
+        const std::array<Seed, 2> seeds { Seed(s.update.old_file), Seed(garbage) };
+        Collect resumed;
+        const auto report
+            = s.client->download_with_seeds(s.update.target, s.update.chunks, seeds, resumed, s.options());
+        REQUIRE(report);
+        CHECK_FALSE(report->whole_file);
+        CHECK(resumed.bytes == s.update.new_file);
+        CHECK(report->from_ranges == first->from_ranges);
+
+        // Garbage alone: nothing to gain from ranges, the file whole, still exact
+        const std::array<Seed, 1> only { Seed(garbage) };
+        Collect whole;
+        const auto all
+            = s.client->download_with_seeds(s.update.target, s.update.chunks, only, whole, s.options());
+        REQUIRE(all);
+        CHECK(all->whole_file);
+        CHECK(whole.bytes == s.update.new_file);
+    }
+}
+
 TEST_CASE("client: any failure reads the whole file (L-22.3-4)")
 {
     Sources s;

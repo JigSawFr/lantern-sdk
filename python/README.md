@@ -208,7 +208,7 @@ with the `dnssd` extra.
 ```python
 old = "downloads/frostline-1.1.0.nsz"  # what the device holds: the older version's bytes, or its path
 client.download_delta(app, "downloads/frostline-1.2.0.nsz", seeds=[old], peers=peers)
-print(client.last_delta)  # DeltaReport(used=True, reused=…, read=…, ranges=2) or why the whole file was read
+print(client.last_delta)  # DeltaReport(used=True, reused=…, read=…, ranges=2, resumed=0) or why the whole file was read
 index = client.chunk_index(app)  # the index `app.chunks` points at, checked; chunk_index_of(sha256, size) by hash
 ```
 
@@ -225,8 +225,12 @@ more is written than the file's size, and never more is read of a source than
 the range asked. Whatever fails (no index, a seed that changed, a source
 that answers 200 to a range or sends too many or too few bytes, a chunk that
 is not the one named), the whole file is read as `download_from()` does
-(L-22.3-4), and `last_delta.reason` says why. `AsyncLanternClient` has the
-same, awaited. The pieces are in `lantern.chunks` (the chunker, `size_for()`,
+(L-22.3-4), and `last_delta.reason` says why. A call that is killed or cut
+hard (an exception the function does not catch) leaves `<dest>.part`, a
+verified prefix: the next call keeps it as `<dest>.seed`, one more seed even
+when you pass none, so what is there is not read again (`last_delta.resumed`
+bytes); a stale or foreign part shares nothing and is harmless.
+`AsyncLanternClient` has the same, awaited. The pieces are in `lantern.chunks` (the chunker, `size_for()`,
 `build_index()`, `plan()`, `assemble()`; standard library only): cut at a few
 megabytes a second, which is why a server cuts a file once.
 

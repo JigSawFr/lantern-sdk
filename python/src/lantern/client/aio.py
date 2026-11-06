@@ -70,7 +70,15 @@ from lantern.client.core import (
     retry_signature,
     token_record,
 )
-from lantern.client.delta import Assembly, DeltaReport, NothingShared, check_range, range_headers
+from lantern.client.delta import (
+    Assembly,
+    DeltaReport,
+    NothingShared,
+    check_range,
+    claim_leftover,
+    has_leftover,
+    range_headers,
+)
 from lantern.client.download import Verifier
 from lantern.client.streams import AsyncEventStream
 from lantern.client.transport import (
@@ -1098,10 +1106,12 @@ class AsyncLanternClient:
         """LanternClient.download_delta(), awaited: an app's or a package's file put together from `seeds`
         (bytes, or the paths of files) and the ranges of the file they lack (SPEC.md § 22.3), each chunk and
         then the whole file checked before `dest` exists; the whole file is read, as download_from() does,
-        when anything fails (L-22.3-4). The seeds are cut, and written pieces are read, in a worker thread."""
+        when anything fails (L-22.3-4). What an interrupted call left (`<dest>.part`) is one more seed, as in
+        LanternClient.download_delta(). The seeds are cut, and written pieces are read, in a worker thread."""
         report = self.last_delta = DeltaReport()
         part = Path(dest).with_name(Path(dest).name + ".part")
-        if file.chunks is None or not seeds:
+        seeded = bool(seeds) or await asyncio.to_thread(has_leftover, dest)
+        if file.chunks is None or not seeded:
             report.reason = "the file has no chunk index" if file.chunks is None else "no seed"
         else:
             try:
@@ -1135,30 +1145,37 @@ class AsyncLanternClient:
         report: DeltaReport,
     ) -> Path:
         index = await self.chunk_index(file)
-        assembly = await asyncio.to_thread(Assembly, file, index, seeds)
-        assembly.report = report
-        if not assembly.shares:
-            raise NothingShared("no chunk of the seeds is in the file")
-        sources: list[tuple[str, bool | None, dict[str, str]]] = [
-            *await self._sources(file, mirrors, peers, platform),
-            (file.file, None, {}),
-        ]
-        f = await asyncio.to_thread(_open, part, "wb")
+        left = await asyncio.to_thread(claim_leftover, dest)
         try:
-            for read, group in assembly.groups:
-                if read:
-                    await self._read_group(
-                        file=file, assembly=assembly, group=group, sources=sources, out=f, progress=progress
-                    )
-                    continue
-                for piece in group:
-                    body = await asyncio.to_thread(assembly.seed, piece)
-                    await asyncio.to_thread(f.write, assembly.take(piece, body))
-                    if progress is not None:
-                        progress(assembly.hasher.size, file.size)
+            assembly = await asyncio.to_thread(
+                Assembly, file, index, [*seeds, left] if left else seeds, resumed=len(seeds) if left else None
+            )
+            assembly.report = report
+            if not assembly.shares:
+                raise NothingShared("no chunk of the seeds is in the file")
+            sources: list[tuple[str, bool | None, dict[str, str]]] = [
+                *await self._sources(file, mirrors, peers, platform),
+                (file.file, None, {}),
+            ]
+            f = await asyncio.to_thread(_open, part, "wb")
+            try:
+                for read, group in assembly.groups:
+                    if read:
+                        await self._read_group(
+                            file=file, assembly=assembly, group=group, sources=sources, out=f, progress=progress
+                        )
+                        continue
+                    for piece in group:
+                        body = await asyncio.to_thread(assembly.seed, piece)
+                        await asyncio.to_thread(f.write, assembly.take(piece, body))
+                        if progress is not None:
+                            progress(assembly.hasher.size, file.size)
+            finally:
+                await asyncio.to_thread(f.close)
+            assembly.finish()
         finally:
-            await asyncio.to_thread(f.close)
-        assembly.finish()
+            if left:
+                await asyncio.to_thread(left.unlink, missing_ok=True)
         await asyncio.to_thread(part.replace, dest)
         report.used = True
         return Path(dest)
