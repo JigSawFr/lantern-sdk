@@ -49,6 +49,7 @@ import { definition } from "../schema.ts";
 import * as sig from "../signatures.ts";
 import { short } from "../spki.ts";
 import { COLLECTIONS, syncTime, WRITE_LIMIT } from "../sync.ts";
+import { FORMAT_WORD, REQUIRES_TOKEN, WORDS_MAX } from "../variants.ts";
 import { BUILD_ID, CORE_ID, FAMILIES, HOMEBREW_ID, isPlatform, SHA256_HEX, WORD } from "../vocabulary.ts";
 import {
   ACCOUNT_NAME,
@@ -251,6 +252,14 @@ function parse<T>(check: Check<T>, doc: unknown, what: string): T {
     if (e instanceof DocumentError) throw badRequest(`${what}: ${e.message}`);
     throw e;
   }
+}
+
+/** An optional array of a request, as a list of words of `pattern`: undefined when absent; 400 above 16 words or on a bad one (SPEC.md § 6.3). */
+function wordList(words: string[] | undefined, name: string, pattern: RegExp): string[] | undefined {
+  if (words === undefined) return undefined;
+  if (words.length > WORDS_MAX || words.some((w) => !pattern.test(w)))
+    throw badRequest(`${name} is an array of at most ${WORDS_MAX} words of the form ${pattern.source}.`);
+  return words;
 }
 
 function one<T>(found: T[], what: string): T {
@@ -1240,6 +1249,7 @@ export class LanternApp {
       throw badRequest("type is a lower-case word, such as base, update or dlc.");
     if (titleId !== undefined && !CORE_ID.test(titleId))
       throw badRequest("title_id is 1 to 128 letters, digits, '.', '_' and '-'.");
+    const format = request.query.get("format"); // a format no app has gives an empty list, never an error (L-6.2-7)
     const sort = this.#sort(request);
     const hide = await this.hides(account);
     const apps = (await this.library.apps()).filter(
@@ -1248,9 +1258,10 @@ export class LanternApp {
         (platform === undefined || a.platform === platform) &&
         (kind === undefined || a.type === kind) &&
         (titleId === undefined || a.title_id === titleId) &&
+        (format === undefined || a.format === format) &&
         (!text || fold(a.name).includes(fold(text))),
     );
-    return this.#appsPage(request, apps, this.cursors.scope("apps", platform, kind, titleId, text, sort), sort);
+    return this.#appsPage(request, apps, this.cursors.scope("apps", platform, kind, format, titleId, text, sort), sort);
   }
 
   async hMissing(request: ServerRequest, account: Account): Promise<ServerResponse> {
@@ -1264,6 +1275,8 @@ export class LanternApp {
       throw badRequest("installed is a list of {app_id, version_code}.");
     if (doc.want.length === 0 || doc.want.some((w) => !["base", "update", "dlc"].includes(w)))
       throw badRequest("want lists base, update or dlc.");
+    const formats = wordList(doc.formats, "formats", FORMAT_WORD);
+    const satisfies = wordList(doc.satisfies, "satisfies", REQUIRES_TOKEN);
     const sort = this.#sort(request);
     const hide = await this.hides(account);
     const pairs = doc.installed.map((i): [string, number] => [i.app_id, i.version_code]);
@@ -1272,8 +1285,17 @@ export class LanternApp {
       platform,
       pairs,
       new Set(doc.want),
+      { formats, satisfies },
     );
-    const scope = this.cursors.scope("missing", platform, [...pairs].sort(), [...new Set(doc.want)].sort(), sort);
+    const scope = this.cursors.scope(
+      "missing",
+      platform,
+      [...pairs].sort(),
+      [...new Set(doc.want)].sort(),
+      formats === undefined ? null : [...new Set(formats)].sort(),
+      satisfies === undefined ? null : [...new Set(satisfies)].sort(),
+      sort,
+    );
     return this.#appsPage(request, found, scope, sort);
   }
 

@@ -13,7 +13,8 @@
  * the platform filter, the pairing desk, LAN discovery) are usable on their own.
  */
 
-export { missing } from "../missing.ts";
+export { type MissingFilters, missing } from "../missing.ts";
+export * from "../variants.ts";
 export {
   ACCOUNT_NAME,
   AccountError,

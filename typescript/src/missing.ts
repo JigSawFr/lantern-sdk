@@ -6,6 +6,12 @@
 import type { App } from "./generated/models.ts";
 import { profile, switchIds } from "./profiles.ts";
 
+/** The filters of a missing request (SPEC.md § 6.3): the formats the device reads, the `requires` tokens it provides. */
+export interface MissingFilters {
+  formats?: readonly string[] | undefined;
+  satisfies?: readonly string[] | undefined;
+}
+
 /**
  * What a device of `platform` is missing (SPEC.md § 6.3), among `apps` (of that
  * platform): with `update`, each installed game's newest update above its
@@ -15,9 +21,16 @@ import { profile, switchIds } from "./profiles.ts";
 export function missing(
   apps: readonly App[],
   platform: string,
-  installed: readonly [string, number][],
+  given: readonly [string, number][],
   want: ReadonlySet<string>,
+  filters: MissingFilters = {},
 ): App[] {
+  // An installed app that is one of these also installs what it includes (L-6.3-4).
+  const installed: [string, number][] = [...given];
+  for (const [appId, version] of given)
+    for (const a of apps)
+      if (a.app_id === appId && a.version_code === version)
+        for (const i of a.includes ?? []) installed.push([i.app_id, i.version_code]);
   const replaces = profile(platform)?.newerBaseReplaces ?? false;
   const byApp = new Map(apps.map((a) => [a.app_id, a]));
   const have = new Map<string, number>();
@@ -50,5 +63,15 @@ export function missing(
     if (want.has("dlc")) for (const a of mine) if (a.type === "dlc" && !ids.has(a.app_id)) out.set(a.id, a);
   }
   if (want.has("base")) for (const a of apps) if (a.type === "base" && !have.has(a.title_id)) out.set(a.id, a);
-  return [...out.values()];
+  let found = [...out.values()];
+  // Applied last (L-6.3-3): an absent list filters nothing, an empty one everything it can.
+  if (filters.formats !== undefined) {
+    const formats = new Set(filters.formats);
+    found = found.filter((a) => formats.has(a.format));
+  }
+  if (filters.satisfies !== undefined) {
+    const tokens = new Set(filters.satisfies);
+    found = found.filter((a) => (a.requires ?? []).every((t) => tokens.has(t)));
+  }
+  return found;
 }

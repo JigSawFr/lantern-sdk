@@ -89,6 +89,7 @@ import {
   ifMatch as syncIfMatch,
   WRITE_LIMIT,
 } from "../sync.ts";
+import { FORMAT_WORD, REQUIRES_TOKEN, WORDS_MAX } from "../variants.ts";
 import { BUILD_ID, CORE_ID, FAMILIES, HOMEBREW_ID, isPlatform } from "../vocabulary.ts";
 import { type DeltaReport, deltaDownload } from "./delta.ts";
 import { type DownloadSink, MemorySink, type UploadSource, Verifier } from "./download.ts";
@@ -200,6 +201,19 @@ export interface AppsOptions extends ListOptions {
   titleId?: string;
   q?: string;
   sort?: "name" | "added" | "release";
+  /** Only the apps of this package format (SPEC.md § 6.2, L-6.2-7): a format no app has gives an empty list. */
+  format?: string;
+}
+
+/**
+ * What the device can install (SPEC.md § 6.3, L-6.3-3): `formats`, the package formats it reads, and `satisfies`, the
+ * `requires` tokens it provides. Each is at most 16 words; absent, it filters nothing; empty, it leaves out everything
+ * it can (an empty `satisfies` still passes the apps with no `requires`). installDecision() is the client's own check
+ * of an app it is offered (L-6.1-3, L-6.1-4, L-6.1-5).
+ */
+export interface MissingOptions extends ListOptions {
+  formats?: readonly string[] | undefined;
+  satisfies?: readonly string[] | undefined;
 }
 
 export interface HomebrewOptions extends ListOptions {
@@ -258,6 +272,14 @@ function platformQuery(platform: string | undefined): [string, string][] {
   if (platform === undefined) return [];
   if (!isPlatform(platform)) throw new RangeError(`${platform} is not a platform's name`);
   return [["platform", platform]];
+}
+
+/** `formats` or `satisfies` of a missing request: nothing when absent, else at most 16 words of `pattern` (SPEC.md § 6.3). */
+function words(name: string, list: readonly string[] | undefined, pattern: RegExp): Record<string, string[]> {
+  if (list === undefined) return {};
+  if (list.length > WORDS_MAX || list.some((w) => !pattern.test(w)))
+    throw new RangeError(`${name} is at most ${WORDS_MAX} words of the form ${pattern.source}`);
+  return { [name]: [...list] };
 }
 
 function listing(
@@ -706,7 +728,7 @@ export class LanternClient {
       throw new RangeError("sort is name, added or release");
     const query = [
       ...platformQuery(o.platform),
-      ...listing(o.pageSize, o.cursor, { type: o.type, title_id: o.titleId, q: o.q, sort: o.sort }),
+      ...listing(o.pageSize, o.cursor, { type: o.type, title_id: o.titleId, q: o.q, sort: o.sort, format: o.format }),
     ];
     return { method: "GET", path: "/apps", what: "apps", query, read: models.readAppsPage };
   }
@@ -728,7 +750,7 @@ export class LanternClient {
   #missing(
     installed: Iterable<[string, number] | models.InstalledApp>,
     want: Iterable<string>,
-    o: ListOptions,
+    o: MissingOptions,
   ): Call<AppsPage> {
     this.#needsPlatform(o.platform, "what is missing");
     const wants = [...new Set(want)];
@@ -740,7 +762,13 @@ export class LanternClient {
       path: "/apps/missing",
       what: "missing",
       query: [...platformQuery(o.platform), ...listing(o.pageSize, o.cursor)],
-      body: { schema: SCHEMA, installed: items, want: wants },
+      body: {
+        schema: SCHEMA,
+        installed: items,
+        want: wants,
+        ...words("formats", o.formats, FORMAT_WORD),
+        ...words("satisfies", o.satisfies, REQUIRES_TOKEN),
+      },
       read: models.readAppsPage,
     };
   }
@@ -749,7 +777,7 @@ export class LanternClient {
   missing(
     installed: Iterable<[string, number] | models.InstalledApp>,
     want: Iterable<string> = ["update", "dlc"],
-    options: ListOptions = {},
+    options: MissingOptions = {},
   ): Promise<AppsPage> {
     return this.#send(this.#missing(installed, want, options));
   }
@@ -757,7 +785,7 @@ export class LanternClient {
   iterMissing(
     installed: Iterable<[string, number] | models.InstalledApp>,
     want: Iterable<string> = ["update", "dlc"],
-    options: Omit<ListOptions, "cursor"> = {},
+    options: Omit<MissingOptions, "cursor"> = {},
   ): AsyncGenerator<App> {
     return this.#pages(
       this.#missing([...installed], want, options),

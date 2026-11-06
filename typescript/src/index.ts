@@ -22,6 +22,7 @@ export {
   type HomebrewOptions,
   LanternClient,
   type ListOptions,
+  type MissingOptions,
   type SaveOptions,
   type SourceOptions,
   type TransportFactory,
@@ -67,7 +68,7 @@ export * from "./generated/models.ts";
 export * as homebrew from "./homebrew.ts";
 export * as http from "./http.ts";
 export * as limits from "./limits.ts";
-export { missing } from "./missing.ts";
+export { type MissingFilters, missing } from "./missing.ts";
 export type { Check } from "./model.ts";
 export type { GrantPayload, Peer } from "./peers.ts";
 export * as peers from "./peers.ts";
@@ -83,4 +84,13 @@ export * as staticLibrary from "./static.ts";
 export { HttpStaticSource, StaticLibrary, type StaticSource } from "./static.ts";
 export * as sync from "./sync.ts";
 export { ConsentRequired, GenerationChanged, type SyncState } from "./sync.ts";
+export * as variants from "./variants.ts";
+export {
+  type InstallDecision,
+  included,
+  installDecision,
+  preferVariant,
+  requiresOfName,
+  type VariantApp,
+} from "./variants.ts";
 export * as vocabulary from "./vocabulary.ts";

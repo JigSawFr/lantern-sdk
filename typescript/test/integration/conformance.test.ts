@@ -64,6 +64,12 @@ const REQUIRED = [
   "missing.up-to-date",
   "missing.base",
   "missing.malformed",
+  // Draft 0.9.
+  "apps.format",
+  "missing.formats",
+  "missing.satisfies",
+  "missing.arrays",
+  "missing.includes",
   "files.whole",
   "files.ranges",
   "files.unsatisfiable",
@@ -272,7 +278,7 @@ for (const adapter of ["node:http", "fetchHandler"]) {
   describe(`the conformance suite against the demo, through ${adapter}`, () => {
     for (const token of [false, true]) {
       test(token ? "with a token bound to its key" : "anonymously", async () => {
-        const app = await makeLantern({}, { deltas: true });
+        const app = await makeLantern({}, { deltas: true, variants: true });
         const served = adapter === "node:http" ? await listen(app) : await overFetch(app);
         const peer = token ? await demoPeer(app) : undefined;
         let result: { code: number; report: string };
@@ -312,7 +318,7 @@ for (const adapter of ["node:http", "fetchHandler"]) {
 
 describe("lantern-static: the demo as a static library, checked by the suite's --static", () => {
   test("Lantern Static reached, nothing failed", async () => {
-    const app = await makeLantern({}, { deltas: true });
+    const app = await makeLantern({}, { deltas: true, variants: true });
     const served = await listen(app);
     const out = join(folder, "static");
     try {

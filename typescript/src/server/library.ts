@@ -30,6 +30,7 @@ import { CHEAT_SET } from "../limits.ts";
 import { nodeSha256 } from "../node/hash.ts";
 import { profile, singleFilePath } from "../profiles.ts";
 import { definition } from "../schema.ts";
+import { uniqueTokens } from "../variants.ts";
 import { utc } from "./accounts.ts";
 import type { LibraryChange } from "./events.ts";
 import { FileRef } from "./files.ts";
@@ -310,6 +311,12 @@ export class MemoryLibrary implements Library, Journal {
       if (chunked !== undefined) app.chunks = chunked;
       else delete app.chunks;
     }
+    // `requires` without duplicates, and neither list when empty (SPEC.md § 6.1).
+    if (Array.isArray(app.requires)) {
+      if (app.requires.length === 0) delete app.requires;
+      else app.requires = uniqueTokens(app.requires);
+    }
+    if (Array.isArray(app.includes) && app.includes.length === 0) delete app.includes;
     const problems = definition("app", app);
     if (problems.length > 0) throw new RangeError(`app ${app.id}: ${problems.slice(0, 3).join("; ")}`);
     this.#apps.set(app.id, app);
