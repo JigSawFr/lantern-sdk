@@ -50,6 +50,7 @@ whose conformance suite runs in CI.
 | `peers` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ |
 | `sync` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ |
 | `encrypted_saves` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ |
+| `deltas` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ |
 <!-- families:end -->
 
 Every server in it passes the specification's conformance suite, and every
