@@ -152,7 +152,7 @@ std::optional<std::string_view> ServerRequest::header(std::string_view name) con
 {
     for (const Header& header : headers)
     {
-        if (detail::equal_ignoring_case(header.name, name))
+        if (detail::equal_fold(header.name, name))
             return header.value;
     }
     return std::nullopt;
@@ -208,15 +208,14 @@ void ResponseHeaders::add(std::string_view name, std::string_view value)
 
 void ResponseHeaders::erase(std::string_view name)
 {
-    std::erase_if(
-        entries_, [&](const auto& entry) { return detail::equal_ignoring_case(entry.first, name); });
+    std::erase_if(entries_, [&](const auto& entry) { return detail::equal_fold(entry.first, name); });
 }
 
 std::optional<std::string_view> ResponseHeaders::get(std::string_view name) const noexcept
 {
     for (const auto& entry : entries_)
     {
-        if (detail::equal_ignoring_case(entry.first, name))
+        if (detail::equal_fold(entry.first, name))
             return std::string_view(entry.second);
     }
     return std::nullopt;
@@ -246,7 +245,7 @@ ServerState::~ServerState()
     secure_wipe(secret);
 }
 
-bool equal_ignoring_case(std::string_view a, std::string_view b) noexcept
+bool equal_fold(std::string_view a, std::string_view b) noexcept
 {
     const auto lower = [](char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; };
     return a.size() == b.size()
@@ -531,7 +530,7 @@ Answer preflight(const ServerState& state, const ServerRequest& request)
         const std::string_view item = trim(asked.substr(0, comma));
         asked            = comma == std::string_view::npos ? std::string_view {} : asked.substr(comma + 1);
         const auto known = std::ranges::find_if(
-            cors_headers, [&](std::string_view name) { return equal_ignoring_case(name, item); });
+            cors_headers, [&](std::string_view name) { return equal_fold(name, item); });
         if (known != cors_headers.end() && !allowed.contains(*known))
         {
             if (!allowed.empty())
@@ -556,7 +555,7 @@ Answer preflight(const ServerState& state, const ServerRequest& request)
     response.headers.set("Cache-Control", "no-store");
     response.headers.set("Vary", "Access-Control-Request-Headers");
     response.headers.set("Content-Length", "0");
-    if (equal_ignoring_case(
+    if (equal_fold(
             trim(request.header("Access-Control-Request-Private-Network").value_or(std::string_view {})),
             "true"))
         response.headers.set("Access-Control-Allow-Private-Network", "true");
@@ -585,8 +584,8 @@ void add_cors_headers(const ServerState& state, const ServerRequest& request, Se
             while (!rest.empty())
             {
                 const std::size_t comma = rest.find(',');
-                has_origin = has_origin || equal_ignoring_case(trim(rest.substr(0, comma)), "Origin");
-                rest       = comma == std::string_view::npos ? std::string_view {} : rest.substr(comma + 1);
+                has_origin              = has_origin || equal_fold(trim(rest.substr(0, comma)), "Origin");
+                rest = comma == std::string_view::npos ? std::string_view {} : rest.substr(comma + 1);
             }
             if (!has_origin)
             {

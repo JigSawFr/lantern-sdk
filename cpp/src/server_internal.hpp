@@ -107,7 +107,7 @@ void add_hsts_header(const ServerState& state, const ServerRequest& request, Ser
 [[nodiscard]] bool is_cors_origin(std::string_view origin) noexcept;
 
 // Text helpers.
-[[nodiscard]] bool equal_ignoring_case(std::string_view a, std::string_view b) noexcept;
+[[nodiscard]] bool equal_fold(std::string_view a, std::string_view b) noexcept;
 [[nodiscard]] std::string_view trim(std::string_view text) noexcept;
 // ASCII case folded; the bytes of other characters are kept (a UTF-8 text
 // is searched as it was written).

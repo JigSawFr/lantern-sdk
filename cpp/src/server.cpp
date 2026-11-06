@@ -117,7 +117,7 @@ std::optional<ProblemError> check_caller(const ServerState& state, const ServerR
     const std::string_view scheme = text.substr(0, space);
     const std::string_view value
         = space == std::string_view::npos ? std::string_view {} : detail::trim(text.substr(space + 1));
-    if (!detail::equal_ignoring_case(scheme, "bearer") || value.empty())
+    if (!detail::equal_fold(scheme, "bearer") || value.empty())
     {
         ProblemError error = detail::make_problem(
             state, 401, Code::unauthorized, "Send a token: Authorization: Bearer <token>.");
@@ -503,7 +503,7 @@ bool is_i_json(const json::Value& value)
 bool is_json_media_type(std::string_view header) noexcept
 {
     const std::string_view type = detail::trim(header.substr(0, header.find(';')));
-    return detail::equal_ignoring_case(type, "application/json");
+    return detail::equal_fold(type, "application/json");
 }
 
 // A client's JSON document (§ 3.2, § 12) bound to a MissingRequest: 413 above
