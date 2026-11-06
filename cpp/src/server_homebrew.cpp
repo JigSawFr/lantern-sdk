@@ -327,10 +327,11 @@ void write_port(json::Writer& w, const Port& port)
                 w.end_array();
             }
             w.end_array();
-            if (item.optional)
+            const std::optional<bool> optional = item.optional;
+            if (optional.has_value())
             {
                 w.key("optional");
-                w.boolean(*item.optional);
+                w.boolean(*optional);
             }
         }
         w.end_object();
@@ -621,9 +622,16 @@ std::string_view cheat_problem(const CheatWrite& set)
 {
     if (!is_served_platform(set.platform))
         return "platform is a platform's name (SPEC.md § 4.3).";
-    const auto rules = std::ranges::find_if(
-        cheat_rules, [&](const CheatRules& item) { return item.platform == set.platform; });
-    const bool known = rules != cheat_rules.end();
+    const CheatRules* rules = nullptr;
+    for (const CheatRules& item : cheat_rules)
+    {
+        if (item.platform == set.platform)
+        {
+            rules = &item;
+            break;
+        }
+    }
+    const bool known = rules != nullptr;
     if (known && !rules->has_cheats)
         return "That platform has no cheats (Annex A).";
     const Profile* profile = find_profile(set.platform);

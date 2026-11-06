@@ -881,10 +881,10 @@ Answer route(const ServerState& state, const ServerRequest& request)
     {
         // Whoever reaches the server may ask to pair; the library asks for its scope (§ 5.1), the
         // cheat sets for theirs (writing: another)
-        const bool reading           = request.method == "GET" || request.method == "HEAD";
-        const std::string_view scope = cheat_route
-            ? (reading ? std::string_view { "cheats" } : std::string_view { "cheats.write" })
-            : std::string_view { "library" };
+        const bool reading     = request.method == "GET" || request.method == "HEAD";
+        std::string_view scope = "library";
+        if (cheat_route)
+            scope = reading ? "cheats" : "cheats.write";
         if (auto refused = detail::check_scope(state, *caller, scope))
             return std::unexpected(std::move(*refused));
     }

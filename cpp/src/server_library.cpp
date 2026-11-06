@@ -808,12 +808,18 @@ Result<CheatSet> MemoryLibrary::put_cheat(const CheatWrite& given, std::string_v
         std::pmr::polymorphic_allocator<MemoryFileReader>(allocator_), text, allocator_);
     if (same != nullptr)
     {
-        *same = made;
+        *same        = made;
+        Stored* slot = nullptr;
         for (Stored& file : cheat_files_)
         {
             if (file.name == made.id)
-                file = std::move(stored);
+            {
+                slot = &file;
+                break;
+            }
         }
+        if (slot != nullptr)
+            *slot = std::move(stored);
     }
     else
     {

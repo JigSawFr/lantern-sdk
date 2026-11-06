@@ -581,7 +581,7 @@ class MemoryLibrary final : public Library, public Journal
     [[nodiscard]] bool uses_file(std::string_view name) const noexcept;
     // Stops serving the files only `gone` used.
     void drop_unused_files(const Homebrew& gone);
-    [[nodiscard]] Result<CheatSet> put_cheat(const CheatWrite& set, std::string_view replacing);
+    [[nodiscard]] Result<CheatSet> put_cheat(const CheatWrite& given, std::string_view replacing);
     [[nodiscard]] bool has_app(std::string_view id) const noexcept;
     [[nodiscard]] const Title* find_title(
         std::string_view platform, std::string_view title_id) const noexcept;
