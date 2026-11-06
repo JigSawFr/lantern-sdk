@@ -273,6 +273,7 @@ type call struct {
 	anonymous bool
 	signer    *lantern.SigningKey
 	headers   http.Header
+	raw       []byte // a body that is not JSON: its Content-Type is in headers
 	what      string
 }
 
@@ -334,7 +335,7 @@ func (c *Client) build(ctx context.Context, k *call) (*http.Request, error) {
 	} else if !ok {
 		return nil, fmt.Errorf("%w: %s: plain HTTP is allowed only to a loopback address (SPEC.md § 2)", lantern.ErrInsecureTransport, target)
 	}
-	var body []byte
+	body := k.raw
 	if k.body != nil {
 		var buf bytes.Buffer
 		enc := json.NewEncoder(&buf)
