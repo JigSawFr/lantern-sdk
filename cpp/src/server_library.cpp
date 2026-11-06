@@ -1116,7 +1116,8 @@ Result<std::optional<AppChunks>> MemoryLibrary::chunks_of(
         w.begin_array();
         for (const Cut& cut : *cuts)
         {
-            const auto chunk_hex = to_hex(Sha256::of(content.subspan(cut.offset, cut.length)));
+            const auto chunk_hex = to_hex(Sha256::of(
+                content.subspan(static_cast<std::size_t>(cut.offset), static_cast<std::size_t>(cut.length))));
             w.begin_array();
             w.number(static_cast<std::uint64_t>(cut.length));
             w.string(std::string_view(chunk_hex.data(), chunk_hex.size()));
