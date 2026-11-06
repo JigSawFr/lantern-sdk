@@ -21,7 +21,8 @@ server, a peer's side, and the first slices of a server core
 cheat sets, the
 tokens, pairing, invitations and signed requests that give a device its access,
 the save backups, encrypted ones included, the requests for games and the
-administration API with the rating caps, and the events, a stream and the long poll of `changes`: see
+administration API with the rating caps, the events, a stream and the long poll of `changes`, and the grants
+for peers and the sync: see
 [Server core](#server-core); the other families come in later steps); the C API is in [`../c/`](../c/README.md).
 
 ## What it does
@@ -154,10 +155,11 @@ administration API with the rating caps, and the events, a stream and the long p
 ## Server core
 
 `lantern/server.hpp`: what answers the protocol's routes, with no HTTP
-framework and no socket of its own, as `PeerGate` is for a peer. Seven slices so
+framework and no socket of its own, as `PeerGate` is for a peer. Eight slices so
 far: **Lantern Core, read-only**, **tokens, pairing and signatures**, the
 library's **changes, sections, titles, homebrew and cheat sets**, the
-**save backups**, the **requests and the administration**, and the **events**.
+**save backups**, the **requests and the administration**, the **events**, and the
+**peers and sync**.
 
 - the handshake at `/.well-known/lantern` and `<base>/v1` (§ 4.2), which lists
   only what the server serves: `features` says `library`, `titles`, `changes`,
@@ -397,7 +399,7 @@ are offered when the `AccountStore` administers (`administers()`; `MemoryAccount
 does) and `options.admin` is not false. `GET`/`POST <base>/v1/admin/users`,
 `PATCH`/`DELETE <base>/v1/admin/users/{name}` (a frozen account loses its access at
 once; deleting asks `?confirm=<name>`, refuses the caller's own account, and erases
-the account's devices, invitations, pairings waiting, save backups and requests),
+the account's devices, invitations, pairings waiting, save backups, requests and sync data),
 `GET <base>/v1/admin/devices?user=` and `DELETE .../devices/{id}`, the pairings waiting
 and their approval or refusal (`POST .../pairings/{id}`: the scopes granted are at
 most those asked and the account's, with an optional `rating_cap`), the invitations
@@ -435,13 +437,41 @@ with nothing to say yet is a `ServerResponse` with `hold_ms`: the adapter waits 
 request (`resumed`, `waited_ms`). An adapter that does neither must leave `events` off.
 `unit/server_events_tests.cpp` plays both with a clock of its own, so that no test sleeps.
 
+**Peers** (§ 19.3; `options.grant_seed`, the 32 bytes of an Ed25519 key, and `grant_lifetime`,
+600 s by default, 1 to 900). The server's side of the family is the **grant**: the handshake
+gives the grant key's public half (`peers.key`, `peers.grant_lifetime`, the same for every
+caller) and `GET <base>/v1/grants/sha256/{hex}`, for the scope `library`, answers with a
+grant (`make_grant()` in `peers.hpp`, `<payload>.<signature>`) for an app or a homebrew
+package the caller may read (its platform, its rating cap), and `404` for any other file,
+upper case hex included; the answer is `no-store`. Keep the seed for grants alone. The
+peers themselves (§ 19.4, `PeerGate`) are consoles, and mirrors (§ 19.2) are the library's
+`mirrors` members: neither is a server's route.
+
+**Sync** (§ 20; `options.sync`, a `SyncStore`, which needs accounts; `limits.sync_items` is the
+store's `item_limit()`). `GET <base>/v1/sync` (the scope `sync.read`) gives the account's
+`generation`, the revision and live items of `wishes` and `installed`, and the caller's own
+`device` (`d_…`, its key in `installed`); `GET .../sync/{collection}` reads it whole (no
+deletion) or `?since=<rev>` (every item changed since, deletions included, `410` when they
+were dropped, `400` for a revision never given), in pages like the apps'. `PATCH` (the scope
+`sync.write`) merges 1 to 1000 items by § 20.4's rule (`sync_merge()` in `sync.hpp`; an
+`updated` more than `auth.skew` ahead is the server's time), with `If-Match` (`412`), the
+`generation` checked (`409`), the form of the items (`400`: a wish's key and value, a device's
+id), a device writing its own item of `installed` only (`403`) and the limit (`413`);
+`DELETE .../sync/{collection}` and `DELETE .../sync` erase at once and give a new
+generation, and deleting an account erases its data (L-20.5-3). The event `sync`
+(`{collection, rev}`, rev 0 for an erase) goes to the account's devices with the scope
+`sync.read`. `SyncStore` (`lantern/sync_store.hpp`) keeps each collection's items and
+deletions, revision and the dropped-deletions floor; `MemorySyncStore` is a complete one
+(deletions kept 30 days by default). `unit/server_sync_tests.cpp` plays both.
+
 `adapters/posix/server_posix.hpp` is a blocking HTTP/1.1 listener for the demo
 and the conformance run: one connection at a time, `Connection: close`, a body
 of `Content-Length` bytes, plain HTTP on loopback by default; the connections the
 server holds (event streams, long polls) each go to a thread of their own, 64 at
 most. It is not for an app, and has no TLS. `lantern_demo_server [port] [--private] [--no-encrypted-saves]`
 (`examples/`) serves a small fictional library through it, keeps backups
-(`MemorySaveStore`) and requests (`MemoryRequestStore`) in memory, with the accounts of
+(`MemorySaveStore`), requests (`MemoryRequestStore`) and sync data (`MemorySyncStore`) in
+memory, gives grants for peers (a fixed demo key), with the accounts of
 `examples/demo_accounts.hpp` (mira, noor and the token of mira's console,
 bound to a key made from a fixed phrase), and prints its URL; the conformance
 suite runs against it:
@@ -462,13 +492,14 @@ and deleted), +requests, +admin (accounts, pairings approved with a rating cap
 that hides what is above it, devices revoked, an invitation redeemed, requests
 decided, an account deleted), +events (the stream and its resuming, the
 heartbeat, the streams a token holds, a revoked device's stream ended, the
-long poll) and +encrypted_saves (except without it, where a backup with an
+long poll), +peers (the grant key, grants that verify; the checks of a peer program
+need `--peer` and are left out), +sync (the overview, the merge rule, a date far ahead,
+If-Match, another generation, another device's item, malformed items) and +encrypted_saves (except without it, where a backup with an
 encryption must be a 400); anonymously the suite leaves out the signed requests it has no key
 for and the writing of a set. `ctest -R server` plays the library read by this library's own
 client over the listener, `ctest -R unit` the server's cases in memory.
 
-Not in this slice, and so not offered by the handshake: peers, sync (so
-deleting an account erases no sync data, § 20.5) and discovery; chunks and differential updates for the homebrew
+Not in this slice, and so not offered by the handshake: discovery; chunks and differential updates for the homebrew
 packages (§ 22); compression of the JSON (§ 2.1: the
 library can read gzip, not write it); a `release` sort that means anything (it
 needs titles: every app is without a release for now). Text search folds ASCII

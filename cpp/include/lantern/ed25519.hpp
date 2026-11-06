@@ -1,5 +1,6 @@
-// Ed25519 (RFC 8032) verification, by Monocypher (third_party/monocypher),
-// and the homebrew signature of SPEC.md § 8.4.
+// Ed25519 (RFC 8032) verification and signing, by Monocypher
+// (third_party/monocypher), and the homebrew signature of SPEC.md § 8.4.
+// Signing is for a server's grant key (SPEC.md § 19.3) alone.
 #pragma once
 
 #include <array>
@@ -15,6 +16,15 @@ namespace lantern
 
 using PublicKey      = std::array<std::uint8_t, 32>;
 using SignatureBytes = std::array<std::uint8_t, 64>;
+
+// An Ed25519 private key, as RFC 8032 has it: 32 bytes.
+using Ed25519Seed = std::array<std::uint8_t, 32>;
+
+// The public key of `seed`.
+[[nodiscard]] PublicKey ed25519_public_key(const Ed25519Seed& seed) noexcept;
+// `seed`'s signature of `message`.
+[[nodiscard]] SignatureBytes ed25519_sign(
+    const Ed25519Seed& seed, std::span<const std::uint8_t> message) noexcept;
 
 // Whether `signature` is `public_key`'s over `message`.
 [[nodiscard]] bool ed25519_verify(const SignatureBytes& signature, const PublicKey& public_key,

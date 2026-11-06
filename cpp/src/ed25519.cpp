@@ -1,6 +1,7 @@
 #include <lantern/ed25519.hpp>
 
 #include <lantern/encoding.hpp>
+#include <lantern/hkdf.hpp>
 #include <lantern/homebrew.hpp>
 #include <lantern/sha256.hpp>
 
@@ -72,6 +73,28 @@ bool acceptable_point(const std::uint8_t* point) noexcept
 }
 
 } // namespace
+
+PublicKey ed25519_public_key(const Ed25519Seed& seed) noexcept
+{
+    Ed25519Seed copy = seed; // the key pair wipes the seed it is given
+    std::array<std::uint8_t, 64> secret {};
+    PublicKey key {};
+    crypto_ed25519_key_pair(secret.data(), key.data(), copy.data());
+    secure_wipe(secret);
+    return key;
+}
+
+SignatureBytes ed25519_sign(const Ed25519Seed& seed, std::span<const std::uint8_t> message) noexcept
+{
+    Ed25519Seed copy = seed;
+    std::array<std::uint8_t, 64> secret {};
+    PublicKey key {};
+    crypto_ed25519_key_pair(secret.data(), key.data(), copy.data());
+    SignatureBytes signature {};
+    crypto_ed25519_sign(signature.data(), secret.data(), message.data(), message.size());
+    secure_wipe(secret);
+    return signature;
+}
 
 bool ed25519_verify(const SignatureBytes& signature, const PublicKey& public_key,
     std::span<const std::uint8_t> message) noexcept

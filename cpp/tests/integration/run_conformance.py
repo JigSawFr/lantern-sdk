@@ -20,10 +20,10 @@ Each run starts the demo (examples/demo_server.cpp, on a free loopback port,
 which the demo prints as its URL), runs `run.py URL --origin ORIGIN`, and stops
 the demo. It fails when a check fails, when a check of the families the demo
 serves (the library with its titles, changes and sections, homebrew, cheats, saves with the encrypted ones,
-requests, administration with its invitations and rating caps, events with their long poll, pairing,
-signatures) is not a pass, when an unexpected
-warning is raised, or, with the token, when Lantern Core, +titles, +homebrew, +saves, +cheats, +requests, +admin and
-+events are not among the levels reached (without one the suite cannot check signed requests, nor
+requests, administration with its invitations and rating caps, events with their long poll, grants for peers,
+sync, pairing, signatures) is not a pass, when an unexpected
+warning is raised, or, with the token, when Lantern Core, +titles, +homebrew, +saves, +cheats, +requests, +admin,
++events, +peers and +sync are not among the levels reached (without one the suite cannot check signed requests, nor
 the saves, which need the scope `saves`, and says so).
 Warnings allowed: plain HTTP on loopback, JSON that is not compressed. Standard
 library only; the suite's schema checks need jsonschema and referencing
@@ -97,6 +97,15 @@ EVENTS = [
     "features.events", "events.stream", "events.resume", "events.bad-token", "events.heartbeat", "events.limit",
     "events.revoked", "events.long-poll",
 ]
+# Grants for peers (§ 19.3), read with the scope library: the grant key in the handshake, grants that verify.
+# The peer (§ 19.4) is a console's program, not a server's: its checks need --peer and are left out.
+PEERS = ["features.peers", "peers.handshake", "peers.grant", "values.hex-case"]
+# Sync (§ 20), for a token with the scopes sync.read and sync.write: the overview with the device's id, items
+# merged by the rule, a date far ahead, If-Match, another generation, another device's item, malformed items.
+SYNC = [
+    "features.sync", "sync.overview", "sync.write", "sync.future", "sync.if-match", "sync.generation",
+    "sync.installed", "sync.malformed",
+]
 # Pairing (§ 5.2, § 5.4) is offered to every caller, anonymous included.
 PAIRING = [
     "handshake.auth", "pairing.offered", "pairing.code", "pairing.verify-complete", "pairing.waiting",
@@ -122,17 +131,18 @@ ANONYMOUS = ["cheats.write"]
 WARNINGS = ["transport.https", "compression.json"]
 
 BASE = LIBRARY + CATALOG + HOMEBREW + CHEATS + PAIRING
-CORE_LEVELS = ("Lantern Core", "+titles", "+homebrew", "+saves", "+cheats", "+requests", "+admin", "+events")
+CORE_LEVELS = ("Lantern Core", "+titles", "+homebrew", "+saves", "+cheats", "+requests", "+admin", "+events",
+               "+peers", "+sync")
 
 # (name, the demo's flags, whether it has a token, the levels it must reach, the checks that must pass)
 RUNS = [
     ("anonymous", [], False, (), BASE + ANONYMOUS),
     ("token", [], True, CORE_LEVELS + ("+encrypted_saves",),
-     BASE + WITH_TOKEN + SAVES + ENCRYPTED_SAVES + REQUESTS + ADMIN + EVENTS),
+     BASE + WITH_TOKEN + SAVES + ENCRYPTED_SAVES + REQUESTS + ADMIN + EVENTS + PEERS + SYNC),
     ("private, with a token", ["--private"], True, CORE_LEVELS + ("+encrypted_saves",),
-     BASE + WITH_TOKEN + SAVES + ENCRYPTED_SAVES + REQUESTS + ADMIN + EVENTS + PRIVATE),
+     BASE + WITH_TOKEN + SAVES + ENCRYPTED_SAVES + REQUESTS + ADMIN + EVENTS + PEERS + SYNC + PRIVATE),
     ("without encrypted saves", ["--no-encrypted-saves"], True, CORE_LEVELS,
-     BASE + WITH_TOKEN + SAVES + NO_ENCRYPTED + REQUESTS + ADMIN + EVENTS),
+     BASE + WITH_TOKEN + SAVES + NO_ENCRYPTED + REQUESTS + ADMIN + EVENTS + PEERS + SYNC),
 ]
 
 

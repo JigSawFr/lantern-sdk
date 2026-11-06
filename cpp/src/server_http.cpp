@@ -250,6 +250,7 @@ ServerState::~ServerState()
     if (observing)
         library->observe(nullptr);
     secure_wipe(secret);
+    secure_wipe(grant_seed);
 }
 
 bool equal_fold(std::string_view a, std::string_view b) noexcept

@@ -137,7 +137,7 @@ FastAPI is `lantern.server.fastapi.include(app, lantern_app)`; in Node, `Lantern
 
 ## 🧩 Families by language
 
-Each family of the specification (SPEC.md § 4.2), read as a client and served (client / server): ✓ yes, – no, ◐ part of it. C++ has a peer's side (`PeerGate`, § 19.4) and the first slices of a server core (the library family with its `titles`, `changes`, `sections` and `homebrew`, and the `cheats` sets, written with the scope `cheats.write`, read anonymously or with a token; the `saves` backups, `requests` for games, `pairing` with invitations and `signatures`, and the `admin` API (accounts, devices, pairings, invitations, rating caps, deleting an account, deciding requests); the `events`, a stream and the long poll of `changes`; all with their conformance run in CI, so ◐ until `tools/check_matrix.py` knows that run; the other families follow), and the C API wraps the C++ client. Rust is being built, a slice at a time ([`rust/`](rust/README.md)): its column is – until a family is read and served, with its conformance run in CI. CI checks the rows against the Python and TypeScript libraries' families and against what their demo servers offer ([`tools/check_matrix.py`](tools/check_matrix.py)); a server marked ✓ is one whose conformance suite runs in CI.
+Each family of the specification (SPEC.md § 4.2), read as a client and served (client / server): ✓ yes, – no, ◐ part of it. C++ has a peer's side (`PeerGate`, § 19.4) and the first slices of a server core (the library family with its `titles`, `changes`, `sections` and `homebrew`, and the `cheats` sets, written with the scope `cheats.write`, read anonymously or with a token; the `saves` backups, `requests` for games, `pairing` with invitations and `signatures`, and the `admin` API (accounts, devices, pairings, invitations, rating caps, deleting an account, deciding requests); the `events`, a stream and the long poll of `changes`; the grants of `peers` and the `sync` collections; all with their conformance run in CI, so ◐ until `tools/check_matrix.py` knows that run; the other families follow), and the C API wraps the C++ client. Rust is being built, a slice at a time ([`rust/`](rust/README.md)): its column is – until a family is read and served, with its conformance run in CI. CI checks the rows against the Python and TypeScript libraries' families and against what their demo servers offer ([`tools/check_matrix.py`](tools/check_matrix.py)); a server marked ✓ is one whose conformance suite runs in CI.
 
 <!-- families:start -->
 | Family | C++ | C | Python | TypeScript | Go | Rust |
@@ -155,7 +155,7 @@ Each family of the specification (SPEC.md § 4.2), read as a client and served (
 | `admin` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | ✓ / – | – / – |
 | `events` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
 | `peers` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
-| `sync` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
+| `sync` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
 | `encrypted_saves` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
 | `deltas` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
 <!-- families:end -->

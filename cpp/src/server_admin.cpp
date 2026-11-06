@@ -234,7 +234,7 @@ Answer user_route(
             return std::unexpected(detail::internal_error(state));
         if (!*deleted)
             return std::unexpected(detail::not_found(state, "No such account."));
-        // Its save backups and requests go with it, at once and whole (L-5.7-7)
+        // Its save backups, requests and sync data go with it, at once and whole (L-5.7-7, L-20.5-3)
         if (state.saves != nullptr)
         {
             const std::scoped_lock lock(state.saves_mutex);
@@ -247,6 +247,8 @@ Answer user_route(
             if (auto erased = state.requests->forget(name); !erased)
                 return std::unexpected(detail::internal_error(state));
         }
+        if (auto erased = detail::forget_sync(state, name); !erased)
+            return std::unexpected(detail::internal_error(state));
         return detail::no_content(state, request);
     }
     const auto prepared = detail::request_document(state, request);
