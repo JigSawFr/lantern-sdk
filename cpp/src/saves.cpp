@@ -58,7 +58,7 @@ Result<bool> MemorySaveStore::drop(std::string_view user, std::string_view save_
 {
     const std::scoped_lock lock(mutex_);
     const Kept* found = nullptr;
-    for (Kept& item : kept_)
+    for (const Kept& item : kept_)
     {
         if (item.user == user && item.save.save_id == save_id)
             found = &item;
