@@ -644,8 +644,15 @@ fn cheats_are_listed_read_checked_and_written() {
     ));
 }
 
-fn example_write() -> lantern_protocol::generated::models::CheatWrite {
-    serde_json::from_value(example("cheat-write")).unwrap()
+fn example_write() -> lantern_protocol::client::NewCheat {
+    lantern_protocol::client::NewCheat {
+        platform: "switch".to_owned(),
+        title_id: "0100ABCD00010000".to_owned(),
+        build_id: Some("4A1B2C3D4E5F6071".to_owned()),
+        source: Some("Noor's notes".to_owned()),
+        note: Some("Endless lamp oil".to_owned()),
+        text: "[Endless lamp oil]\n04000000 0123A4B0 00000063\n".to_owned(),
+    }
 }
 
 #[test]
@@ -837,4 +844,147 @@ fn saves_are_listed_downloaded_and_deleted() {
         .save_delete("0100ABCD00010000", "s_03", None)
         .unwrap();
     assert!(client.save_delete("a/b\n", "s_03", None).is_err());
+}
+
+fn admin_server() -> Fake {
+    Fake::new(|r, _| {
+        let route = r.url.split('?').next().unwrap_or(&r.url);
+        let tail = route.split("/v1/admin/").nth(1).unwrap_or("");
+        match (r.method.as_str(), tail) {
+            ("GET", "users") => json_reply(200, &example("admin-users")),
+            ("POST", "users") => json_reply(201, &example("admin-user")),
+            ("PATCH", t) if t.starts_with("users/") => json_reply(200, &example("admin-user")),
+            ("GET", "devices") => json_reply(200, &example("admin-devices")),
+            ("GET", "pairings") => json_reply(200, &example("admin-pairings")),
+            ("GET", "invitations") => json_reply(200, &example("invitations")),
+            ("POST", "invitations") => json_reply(201, &example("invitation")),
+            ("GET", "requests") => json_reply(200, &example("admin-requests")),
+            ("POST", t) if t.starts_with("requests/") => json_reply(200, &example("request")),
+            ("DELETE" | "POST", _) if tail.contains('/') => reply(204, "text/plain", b"", &[]),
+            _ => serve(r).unwrap(),
+        }
+    })
+}
+
+#[test]
+fn the_admin_family_is_read_and_written() {
+    use lantern_protocol::client::{
+        NewInvitation, NewUser, PageOptions, PairingDecision, RequestDecision, UserChange,
+    };
+    let fake = admin_server();
+    let mut client = Client::new(URL, fake.clone(), options(0.0)).unwrap();
+    client.set_token(Some("et_admin"), None).unwrap();
+    let page = PageOptions::default();
+    assert!(!client.admin_users(&page).unwrap().items.is_empty());
+    assert!(
+        !client
+            .admin_devices(Some("lea"), &page)
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    assert!(!client.admin_pairings(&page).unwrap().items.is_empty());
+    assert!(!client.admin_invitations(&page).unwrap().items.is_empty());
+    assert!(
+        !client
+            .admin_requests(Some("open"), None, Some("switch"), &page)
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    let created = client
+        .admin_user_create(&NewUser {
+            name: "sam".to_owned(),
+            scopes: vec!["library".to_owned()],
+        })
+        .unwrap();
+    assert!(!created.name.is_empty());
+    client
+        .admin_user_update(
+            "sam",
+            &UserChange {
+                state: Some("frozen".to_owned()),
+                scopes: None,
+            },
+        )
+        .unwrap();
+    client.admin_user_delete("sam", "sam").unwrap();
+    client.admin_device_revoke("d_1").unwrap();
+    client
+        .admin_pairing_decide(
+            "pr_1",
+            &PairingDecision {
+                approve: true,
+                ..PairingDecision::default()
+            },
+        )
+        .unwrap();
+    client.admin_invitation_revoke("i_1").unwrap();
+    client
+        .admin_invitation_create(&NewInvitation {
+            user: "sam".to_owned(),
+            scopes: vec!["library".to_owned()],
+            expires: "2026-11-06T18:00:00Z".to_owned(),
+            devices: 2,
+            ..NewInvitation::default()
+        })
+        .unwrap();
+    client
+        .admin_request_decide(
+            "r_12",
+            &RequestDecision::Decline(Some("Only the games this household owns.".to_owned())),
+        )
+        .unwrap();
+    let sent = fake.requests();
+    let delete = sent
+        .iter()
+        .find(|r| r.method == "DELETE" && r.url.contains("/users/sam"))
+        .unwrap();
+    assert!(delete.url.ends_with("/admin/users/sam?confirm=sam"));
+    let post = sent
+        .iter()
+        .find(|r| r.url.contains("/admin/users") && r.method == "POST")
+        .unwrap();
+    let body: Value = serde_json::from_slice(&post.body).unwrap();
+    assert_eq!(body["schema"], 1);
+    let decision = sent
+        .iter()
+        .find(|r| r.url.contains("/admin/pairings/pr_1"))
+        .unwrap();
+    let body: Value = serde_json::from_slice(&decision.body).unwrap();
+    assert_eq!(body["decision"], "approve");
+}
+
+#[test]
+fn an_admin_call_the_specification_forbids_is_not_sent() {
+    use lantern_protocol::client::{NewInvitation, NewUser, PageOptions, RequestDecision};
+    let fake = admin_server();
+    let mut client = Client::new(URL, fake.clone(), options(0.0)).unwrap();
+    // A slip of the finger: the confirmation is not the name.
+    assert!(client.admin_user_delete("sam", "sa").is_err());
+    assert!(client.admin_user_delete("sam", "SAM").is_err());
+    assert!(
+        client
+            .admin_user_create(&NewUser {
+                name: "sam smith".to_owned(),
+                scopes: vec![],
+            })
+            .is_err()
+    );
+    assert!(
+        client
+            .admin_invitation_create(&NewInvitation::default())
+            .is_err()
+    );
+    assert!(
+        client
+            .admin_request_decide("r_1", &RequestDecision::Decline(Some("x".repeat(513))))
+            .is_err()
+    );
+    assert!(
+        client
+            .admin_requests(Some("pending"), None, None, &PageOptions::default())
+            .is_err()
+    );
+    assert!(fake.requests().is_empty());
 }

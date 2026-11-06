@@ -16,9 +16,11 @@ use crate::documents::{SCHEMA, schema_of};
 use crate::download::{DownloadSink, Expected, Verifier};
 use crate::error::{Error, Result};
 use crate::generated::models::{
-    AppsPage, Changes, CheatSet, CheatSets, CheatWrite, Handshake, Homebrew, HomebrewPage,
-    PairingCode, PairingToken, Save, Saves, Sections, Title, TitleChanges, TitleRequest,
-    TitleRequests, Titles, Upload, UploadRequest,
+    AdminDevices, AdminPairingDecision, AdminPairings, AdminRequestDecision, AdminRequests,
+    AdminUser, AdminUserCreate, AdminUserUpdate, AdminUsers, AppsPage, Changes, CheatSet,
+    CheatSets, CheatWrite, Handshake, Homebrew, HomebrewPage, Invitation, InvitationCreate,
+    Invitations, PairingCode, PairingToken, RatingCap, Save, Saves, Sections, Title, TitleChanges,
+    TitleRequest, TitleRequests, Titles, Upload, UploadRequest,
 };
 use crate::http::{
     JSON_TYPE, Origin, PLATFORM_HEADER, media_type, on_origin, origin, plain_http_allowed, quote,
@@ -172,6 +174,116 @@ pub struct AppsOptions {
     pub sort: Option<String>,
     /// `format`.
     pub format: Option<String>,
+}
+
+/// Which page of a list to read (SPEC.md § 6.2).
+#[derive(Debug, Clone, Default)]
+pub struct PageOptions {
+    /// Items per page.
+    pub page_size: Option<u32>,
+    /// The cursor of the page to read.
+    pub cursor: Option<String>,
+}
+
+/// A cheat set to write (SPEC.md § 10).
+#[derive(Debug, Clone, Default)]
+pub struct NewCheat {
+    /// The platform.
+    pub platform: String,
+    /// The title.
+    pub title_id: String,
+    /// The build, on platforms whose cheats depend on it.
+    pub build_id: Option<String>,
+    /// Where the set comes from.
+    pub source: Option<String>,
+    /// A note, 120 bytes at most.
+    pub note: Option<String>,
+    /// The set's text, 1 MiB at most.
+    pub text: String,
+}
+
+impl NewCheat {
+    fn document(&self) -> Result<CheatWrite> {
+        if self.text.len() > crate::limits::CHEAT_SET {
+            return Err(Error::field("a cheat set is 1 MiB at most", "text"));
+        }
+        if self
+            .note
+            .as_deref()
+            .is_some_and(|n| n.len() > crate::limits::NOTE)
+        {
+            return Err(Error::field("a note is 120 bytes at most", "note"));
+        }
+        check_id(&self.title_id, "title_id")?;
+        check_id(&self.platform, "platform")?;
+        Ok(CheatWrite {
+            schema: SCHEMA,
+            platform: self.platform.clone(),
+            title_id: self.title_id.clone(),
+            build_id: self.build_id.clone(),
+            source: self.source.clone(),
+            note: self.note.clone(),
+            text: self.text.clone(),
+            ..CheatWrite::default()
+        })
+    }
+}
+
+/// An account to make (SPEC.md § 5.7).
+#[derive(Debug, Clone, Default)]
+pub struct NewUser {
+    /// 1 to 64 letters, digits, `.`, `_` and `-`.
+    pub name: String,
+    /// The scopes it holds.
+    pub scopes: Vec<String>,
+}
+
+/// A change to an account: freeze or thaw it, and/or change its scopes.
+#[derive(Debug, Clone, Default)]
+pub struct UserChange {
+    /// `active` or `frozen`.
+    pub state: Option<String>,
+    /// The scopes it then holds.
+    pub scopes: Option<Vec<String>>,
+}
+
+/// The decision on a waiting pairing.
+#[derive(Debug, Clone, Default)]
+pub struct PairingDecision {
+    /// `true` to approve, `false` to refuse.
+    pub approve: bool,
+    /// The account, the admin's own when absent.
+    pub user: Option<String>,
+    /// The scopes granted (at most those asked and held), those asked when absent.
+    pub scopes: Option<Vec<String>>,
+    /// The rating cap of the device.
+    pub rating_cap: Option<RatingCap>,
+}
+
+/// An invitation to make.
+#[derive(Debug, Clone, Default)]
+pub struct NewInvitation {
+    /// The account it is for.
+    pub user: String,
+    /// The scopes it grants.
+    pub scopes: Vec<String>,
+    /// When it lapses (RFC 3339).
+    pub expires: String,
+    /// How many devices may redeem it.
+    pub devices: u32,
+    /// The rating cap of those devices.
+    pub rating_cap: Option<RatingCap>,
+    /// A note for people.
+    pub note: Option<String>,
+}
+
+/// An admin's decision on an open request (SPEC.md § 11).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RequestDecision {
+    /// Decline, with the words for the requester (512 bytes at most).
+    Decline(Option<String>),
+    /// The title has arrived or is done otherwise.
+    Done,
 }
 
 /// Options of the homebrew list.
@@ -1094,32 +1206,18 @@ impl<T: Transport> Client<T> {
         Ok(sink.bytes().to_vec())
     }
 
-    fn check_cheat_write(write: &CheatWrite) -> Result<()> {
-        if write.text.len() > crate::limits::CHEAT_SET {
-            return Err(Error::field("a cheat set is 1 MiB at most", "text"));
-        }
-        if write
-            .note
-            .as_deref()
-            .is_some_and(|n| n.len() > crate::limits::NOTE)
-        {
-            return Err(Error::field("a note is 120 bytes at most", "note"));
-        }
-        check_id(&write.title_id, "title_id")
-    }
-
     /// Adds a cheat set (scope `cheats.write`): `201` with the new set, `409`
     /// [`ProblemKind::Conflict`] when it exists (then replace it).
     ///
     /// # Errors
     ///
     /// When the set breaks a limit, or any error of the exchange.
-    pub fn cheat_add(&mut self, write: &CheatWrite) -> Result<CheatSet> {
-        Self::check_cheat_write(write)?;
+    pub fn cheat_add(&mut self, cheat: &NewCheat) -> Result<CheatSet> {
+        let write = cheat.document()?;
         let mut call = Call::get("cheat add", "/cheats");
         call.method = "POST";
         call.statuses = &[201];
-        call.body = Some(serde_json::to_vec(write).map_err(|e| Error::document(e.to_string()))?);
+        call.body = Some(serde_json::to_vec(&write).map_err(|e| Error::document(e.to_string()))?);
         call.json_body = true;
         let reply = self.send(&call)?;
         document(&reply.body, "cheat add")
@@ -1130,15 +1228,15 @@ impl<T: Transport> Client<T> {
     /// # Errors
     ///
     /// When the set breaks a limit, or any error of the exchange.
-    pub fn cheat_replace(&mut self, id: &str, write: &CheatWrite) -> Result<()> {
-        Self::check_cheat_write(write)?;
+    pub fn cheat_replace(&mut self, id: &str, cheat: &NewCheat) -> Result<()> {
+        let write = cheat.document()?;
         check_id(id, "id")?;
         let path = format!("/cheats/{}", quote(id));
         let mut call = Call::get("cheat replace", &path);
         call.method = "PUT";
         call.statuses = &[];
         call.empty_statuses = &[204];
-        call.body = Some(serde_json::to_vec(write).map_err(|e| Error::document(e.to_string()))?);
+        call.body = Some(serde_json::to_vec(&write).map_err(|e| Error::document(e.to_string()))?);
         call.json_body = true;
         self.send(&call).map(|_| ())
     }
@@ -1505,6 +1603,314 @@ impl<T: Transport> Client<T> {
         }
     }
 
+    // Administration (SPEC.md § 5.7), for a token with the scope `admin`.
+
+    fn admin_get<D: DeserializeOwned>(
+        &mut self,
+        what: &'static str,
+        path: &str,
+        mut query: Vec<(String, String)>,
+        page: &PageOptions,
+    ) -> Result<D> {
+        query.extend(Self::listing(page.page_size, page.cursor.as_deref()));
+        let mut call = Call::get(what, path);
+        call.query = query;
+        let reply = self.send(&call)?;
+        document(&reply.body, what)
+    }
+
+    fn admin_write<B: serde::Serialize>(
+        &mut self,
+        what: &'static str,
+        method: &'static str,
+        path: &str,
+        body: Option<&B>,
+        status: u16,
+    ) -> Result<Option<Vec<u8>>> {
+        let mut call = Call::get(what, path);
+        call.method = method;
+        if status == 204 {
+            call.statuses = &[];
+            call.empty_statuses = &[204];
+        } else if status == 201 {
+            call.statuses = &[201];
+        }
+        if let Some(body) = body {
+            call.body = Some(serde_json::to_vec(body).map_err(|e| Error::document(e.to_string()))?);
+            call.json_body = true;
+        }
+        let reply = self.send(&call)?;
+        Ok((status != 204).then_some(reply.body))
+    }
+
+    /// The accounts.
+    ///
+    /// # Errors
+    ///
+    /// Any error of the exchange; `403` without the scope `admin`.
+    pub fn admin_users(&mut self, page: &PageOptions) -> Result<AdminUsers> {
+        self.admin_get("admin users", "/admin/users", Vec::new(), page)
+    }
+
+    /// Makes an account (`201`; `409` when the name is taken).
+    ///
+    /// # Errors
+    ///
+    /// When the name is not 1 to 64 letters, digits, `.`, `_` and `-`, or any
+    /// error of the exchange.
+    pub fn admin_user_create(&mut self, user: &NewUser) -> Result<AdminUser> {
+        check_account(&user.name)?;
+        let user = AdminUserCreate {
+            schema: Some(SCHEMA),
+            name: user.name.clone(),
+            scopes: user.scopes.clone(),
+            ..AdminUserCreate::default()
+        };
+        let body = self
+            .admin_write(
+                "admin user create",
+                "POST",
+                "/admin/users",
+                Some(&user),
+                201,
+            )?
+            .unwrap_or_default();
+        document(&body, "admin user create")
+    }
+
+    /// Freezes or thaws an account, or changes its scopes.
+    ///
+    /// # Errors
+    ///
+    /// When `name` is not an account's, `state` is not `active` or `frozen`, or
+    /// any error of the exchange.
+    pub fn admin_user_update(&mut self, name: &str, change: &UserChange) -> Result<AdminUser> {
+        check_account(name)?;
+        if change
+            .state
+            .as_deref()
+            .is_some_and(|s| !["active", "frozen"].contains(&s))
+        {
+            return Err(Error::field("state is active or frozen", "state"));
+        }
+        let update = AdminUserUpdate {
+            schema: Some(SCHEMA),
+            state: change.state.clone(),
+            scopes: change.scopes.clone(),
+            ..AdminUserUpdate::default()
+        };
+        let path = format!("/admin/users/{}", quote(name));
+        let body = self
+            .admin_write("admin user update", "PATCH", &path, Some(&update), 200)?
+            .unwrap_or_default();
+        document(&body, "admin user update")
+    }
+
+    /// Deletes an account, whole and for good. `confirm` must repeat `name`:
+    /// a slip deletes nothing, and nothing is sent.
+    ///
+    /// # Errors
+    ///
+    /// When `confirm` is not `name`, or any error of the exchange (`409` for
+    /// the caller's own account).
+    pub fn admin_user_delete(&mut self, name: &str, confirm: &str) -> Result<()> {
+        check_account(name)?;
+        if confirm != name {
+            return Err(Error::field(
+                "confirm repeats the account's name (SPEC.md § 5.7)",
+                "confirm",
+            ));
+        }
+        let path = format!("/admin/users/{}", quote(name));
+        let mut call = Call::get("admin user delete", &path);
+        call.method = "DELETE";
+        call.query = vec![("confirm".to_owned(), confirm.to_owned())];
+        call.statuses = &[];
+        call.empty_statuses = &[204];
+        self.send(&call).map(|_| ())
+    }
+
+    /// The devices, one token each, of `user` or of every account.
+    ///
+    /// # Errors
+    ///
+    /// Any error of the exchange.
+    pub fn admin_devices(
+        &mut self,
+        user: Option<&str>,
+        page: &PageOptions,
+    ) -> Result<AdminDevices> {
+        let query = user
+            .map(|u| vec![("user".to_owned(), u.to_owned())])
+            .unwrap_or_default();
+        self.admin_get("admin devices", "/admin/devices", query, page)
+    }
+
+    /// Revokes a device's token.
+    ///
+    /// # Errors
+    ///
+    /// Any error of the exchange.
+    pub fn admin_device_revoke(&mut self, id: &str) -> Result<()> {
+        check_id(id, "id")?;
+        let path = format!("/admin/devices/{}", quote(id));
+        self.admin_write::<()>("admin device revoke", "DELETE", &path, None, 204)
+            .map(|_| ())
+    }
+
+    /// The pairings waiting for approval: show each one's code, and the short
+    /// fingerprint of the server's key as pinned ([`Client::last_spki`] and
+    /// [`crate::spki::short`]), so that the user compares them (SPEC.md § 5.7).
+    ///
+    /// # Errors
+    ///
+    /// Any error of the exchange.
+    pub fn admin_pairings(&mut self, page: &PageOptions) -> Result<AdminPairings> {
+        self.admin_get("admin pairings", "/admin/pairings", Vec::new(), page)
+    }
+
+    /// Approves or refuses a waiting pairing.
+    ///
+    /// # Errors
+    ///
+    /// Any error of the exchange.
+    pub fn admin_pairing_decide(&mut self, id: &str, decision: &PairingDecision) -> Result<()> {
+        check_id(id, "id")?;
+        let body = AdminPairingDecision {
+            schema: Some(SCHEMA),
+            decision: if decision.approve {
+                "approve"
+            } else {
+                "refuse"
+            }
+            .to_owned(),
+            user: decision.user.clone(),
+            scopes: decision.scopes.clone(),
+            rating_cap: decision.rating_cap.clone(),
+            ..AdminPairingDecision::default()
+        };
+        let path = format!("/admin/pairings/{}", quote(id));
+        self.admin_write("admin pairing decision", "POST", &path, Some(&body), 204)
+            .map(|_| ())
+    }
+
+    /// The invitations that can still be redeemed.
+    ///
+    /// # Errors
+    ///
+    /// Any error of the exchange.
+    pub fn admin_invitations(&mut self, page: &PageOptions) -> Result<Invitations> {
+        self.admin_get("admin invitations", "/admin/invitations", Vec::new(), page)
+    }
+
+    /// Makes an invitation (`201`, with its `code` and `link`).
+    ///
+    /// # Errors
+    ///
+    /// When the account's name or the number of devices is not valid, or any
+    /// error of the exchange.
+    pub fn admin_invitation_create(&mut self, invitation: &NewInvitation) -> Result<Invitation> {
+        check_account(&invitation.user)?;
+        if invitation.devices < 1 {
+            return Err(Error::field(
+                "an invitation is for one device at least",
+                "devices",
+            ));
+        }
+        let body = InvitationCreate {
+            schema: Some(SCHEMA),
+            user: invitation.user.clone(),
+            scopes: invitation.scopes.clone(),
+            expires: invitation.expires.clone(),
+            devices: i64::from(invitation.devices),
+            rating_cap: invitation.rating_cap.clone(),
+            note: invitation.note.clone(),
+            ..InvitationCreate::default()
+        };
+        let reply = self
+            .admin_write(
+                "admin invitation create",
+                "POST",
+                "/admin/invitations",
+                Some(&body),
+                201,
+            )?
+            .unwrap_or_default();
+        document(&reply, "admin invitation create")
+    }
+
+    /// Revokes an invitation: its code then gives `410`.
+    ///
+    /// # Errors
+    ///
+    /// Any error of the exchange.
+    pub fn admin_invitation_revoke(&mut self, id: &str) -> Result<()> {
+        check_id(id, "id")?;
+        let path = format!("/admin/invitations/{}", quote(id));
+        self.admin_write::<()>("admin invitation revoke", "DELETE", &path, None, 204)
+            .map(|_| ())
+    }
+
+    /// Every account's requests, newest first, filtered by `status`
+    /// (`open`, `done`, `declined`), `user` and `platform`.
+    ///
+    /// # Errors
+    ///
+    /// When `status` is not one, or any error of the exchange.
+    pub fn admin_requests(
+        &mut self,
+        status: Option<&str>,
+        user: Option<&str>,
+        platform: Option<&str>,
+        page: &PageOptions,
+    ) -> Result<AdminRequests> {
+        if status.is_some_and(|s| !["open", "done", "declined"].contains(&s)) {
+            return Err(Error::field("status is open, done or declined", "status"));
+        }
+        let mut query = Self::platform_query(platform);
+        for (name, value) in [("status", status), ("user", user)] {
+            if let Some(v) = value {
+                query.push((name.to_owned(), v.to_owned()));
+            }
+        }
+        self.admin_get("admin requests", "/admin/requests", query, page)
+    }
+
+    /// Declines (with a `reason`, 512 bytes at most) or completes an open
+    /// request; `409` when it is no longer open.
+    ///
+    /// # Errors
+    ///
+    /// When the reason is too long, or any error of the exchange.
+    pub fn admin_request_decide(
+        &mut self,
+        id: &str,
+        decision: &RequestDecision,
+    ) -> Result<TitleRequest> {
+        check_id(id, "id")?;
+        let (word, reason) = match decision {
+            RequestDecision::Decline(reason) => ("decline", reason.clone()),
+            RequestDecision::Done => ("done", None),
+        };
+        if reason
+            .as_deref()
+            .is_some_and(|r| r.len() > crate::limits::NAME)
+        {
+            return Err(Error::field("a reason is 512 bytes at most", "reason"));
+        }
+        let body = AdminRequestDecision {
+            schema: Some(SCHEMA),
+            decision: word.to_owned(),
+            reason,
+            ..AdminRequestDecision::default()
+        };
+        let path = format!("/admin/requests/{}", quote(id));
+        let reply = self
+            .admin_write("admin request decision", "POST", &path, Some(&body), 200)?
+            .unwrap_or_default();
+        document(&reply, "admin request decision")
+    }
+
     // Pairing (SPEC.md § 5.2).
 
     /// Starts a pairing: the device asks `scopes`, with a key that binds the
@@ -1766,6 +2172,22 @@ fn check_base(base: &str) -> Result<String> {
 
 /// A document read from a body within SPEC.md § 13's limits; a newer `schema`
 /// is [`Error::NewerSchema`].
+/// An account's name: 1 to 64 letters, digits, `.`, `_` and `-` (SPEC.md § 5.7).
+fn check_account(name: &str) -> Result<()> {
+    if name.is_empty()
+        || name.len() > 64
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        return Err(Error::field(
+            "an account's name is 1 to 64 letters, digits, . _ and -",
+            "name",
+        ));
+    }
+    Ok(())
+}
+
 /// A listed value (a kind, a genre): 1 to 32 lower-case letters, digits and
 /// `_`, starting with a letter (SPEC.md § 8.5).
 fn listed_word(word: &str) -> bool {
