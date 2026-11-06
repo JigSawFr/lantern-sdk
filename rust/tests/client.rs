@@ -597,3 +597,77 @@ fn a_kind_that_is_not_a_word_is_refused_before_it_is_sent() {
     );
     assert!(fake.requests().is_empty());
 }
+
+#[test]
+fn cheats_are_listed_read_checked_and_written() {
+    let text: &'static [u8] = b"[Endless lamp oil]\n04000000 0123A4B0 00000063\n";
+    let set = json!({"id": "cs_1", "platform": "switch", "title_id": "0100ABCD00010000",
+        "build_id": "4A1B2C3D4E5F6071", "size": text.len(), "sha256": sha256_hex(text)});
+    let listing = json!({"schema": 1, "cheats": [set.clone()]});
+    let created = {
+        let mut c = set.clone();
+        c["schema"] = json!(1);
+        c
+    };
+    let fake = Fake::new(move |r, _| match (r.method.as_str(), r.url.as_str()) {
+        ("GET", u) if u.contains("/cheats/cs_1") => reply(200, "text/plain", text, &[]),
+        ("GET", u) if u.contains("/cheats") => json_reply(200, &listing),
+        ("POST", u) if u.ends_with("/cheats") => json_reply(201, &created),
+        ("PUT" | "DELETE", _) => reply(204, "text/plain", b"", &[]),
+        _ => serve(r).unwrap(),
+    });
+    let mut client = Client::new(URL, fake.clone(), options(0.0)).unwrap();
+    client.set_token(Some("et_example"), None).unwrap();
+    let sets = client
+        .cheat_sets("0100ABCD00010000", Some("4A1B2C3D4E5F6071"), None)
+        .unwrap();
+    assert_eq!(sets.cheats.len(), 1);
+    assert_eq!(client.cheat_text(&sets.cheats[0]).unwrap(), text);
+    let mut write = example_write();
+    assert_eq!(client.cheat_add(&write).unwrap().id, "cs_1");
+    client.cheat_replace("cs_1", &write).unwrap();
+    client.cheat_delete("cs_1").unwrap();
+    // Over a limit: nothing is sent.
+    let before = fake.requests().len();
+    write.text = "x".repeat((1 << 20) + 1);
+    assert!(client.cheat_add(&write).is_err());
+    write.text.clear();
+    write.note = Some("n".repeat(121));
+    assert!(client.cheat_replace("cs_1", &write).is_err());
+    assert_eq!(fake.requests().len(), before);
+    // A text that is not what the set says is refused.
+    let mut wrong = sets.cheats[0].clone();
+    wrong.sha256 = "0".repeat(64);
+    assert!(matches!(
+        client.cheat_text(&wrong).unwrap_err(),
+        Error::Integrity(_)
+    ));
+}
+
+fn example_write() -> lantern_protocol::generated::models::CheatWrite {
+    serde_json::from_value(example("cheat-write")).unwrap()
+}
+
+#[test]
+fn requests_are_listed_made_and_withdrawn() {
+    let fake = Fake::new(|r, _| match r.method.as_str() {
+        "GET" if r.url.contains("/requests") => json_reply(200, &example("requests")),
+        "POST" => json_reply(201, &example("request")),
+        "DELETE" => reply(204, "text/plain", b"", &[]),
+        _ => serve(r).unwrap(),
+    });
+    let mut client = Client::new(URL, fake.clone(), options(0.0)).unwrap();
+    client.set_token(Some("et_example"), None).unwrap();
+    assert_eq!(client.requests(None).unwrap().requests.len(), 2);
+    let made = client.request_title("0100EFEF00020000", None).unwrap();
+    assert_eq!(made.id, "r_12");
+    client.request_withdraw("r_12").unwrap();
+    assert!(client.request_title("", None).is_err());
+    let post = fake
+        .requests()
+        .into_iter()
+        .find(|r| r.method == "POST")
+        .unwrap();
+    let body: Value = serde_json::from_slice(&post.body).unwrap();
+    assert_eq!(body["title_id"], "0100EFEF00020000");
+}

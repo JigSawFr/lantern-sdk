@@ -16,8 +16,8 @@ use crate::documents::{SCHEMA, schema_of};
 use crate::download::{DownloadSink, Expected, Verifier};
 use crate::error::{Error, Result};
 use crate::generated::models::{
-    AppsPage, Changes, Handshake, Homebrew, HomebrewPage, PairingCode, PairingToken, Sections,
-    Title, TitleChanges, Titles,
+    AppsPage, Changes, CheatSet, CheatSets, CheatWrite, Handshake, Homebrew, HomebrewPage,
+    PairingCode, PairingToken, Sections, Title, TitleChanges, TitleRequest, TitleRequests, Titles,
 };
 use crate::http::{
     JSON_TYPE, Origin, PLATFORM_HEADER, media_type, on_origin, origin, plain_http_allowed, quote,
@@ -960,6 +960,183 @@ impl<T: Transport> Client<T> {
         call.json_body = true;
         let reply = self.send(&call)?;
         document(&reply.body, "homebrew updates")
+    }
+
+    // Cheats (SPEC.md § 10).
+
+    /// The cheat sets of a build (SPEC.md § 10): a build may have several,
+    /// from several sources.
+    ///
+    /// # Errors
+    ///
+    /// When `title_id` is not an id, or any error of the exchange.
+    pub fn cheat_sets(
+        &mut self,
+        title_id: &str,
+        build_id: Option<&str>,
+        platform: Option<&str>,
+    ) -> Result<CheatSets> {
+        check_id(title_id, "title_id")?;
+        let mut call = Call::get("cheats", "/cheats");
+        call.query = Self::platform_query(platform);
+        call.query
+            .push(("title_id".to_owned(), title_id.to_owned()));
+        if let Some(build) = build_id {
+            check_id(build, "build_id")?;
+            call.query.push(("build_id".to_owned(), build.to_owned()));
+        }
+        let reply = self.send(&call)?;
+        document(&reply.body, "cheats")
+    }
+
+    /// The text of a cheat set, checked against its `size` and `sha256`, at
+    /// most 1 MiB (SPEC.md § 10). Write it where the profile says
+    /// ([`crate::profiles::cheat_path`]).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Integrity`] when it is not what the set says, or any error of
+    /// the exchange.
+    pub fn cheat_text(&mut self, set: &CheatSet) -> Result<Vec<u8>> {
+        let size = u64::try_from(set.size).map_err(|_| Error::field("a negative size", "size"))?;
+        if size > crate::limits::CHEAT_SET as u64 {
+            return Err(Error::field("a cheat set is 1 MiB at most", "size"));
+        }
+        check_id(&set.id, "id")?;
+        let mut sink = crate::download::MemorySink::new();
+        let path = format!("/cheats/{}", quote(&set.id));
+        if self.base.is_none() {
+            self.handshake()?;
+        }
+        let url = self.v1(&path)?;
+        self.download(
+            &url,
+            &mut sink,
+            Expected {
+                sha256: &set.sha256,
+                size,
+            },
+            false,
+        )?;
+        Ok(sink.bytes().to_vec())
+    }
+
+    fn check_cheat_write(write: &CheatWrite) -> Result<()> {
+        if write.text.len() > crate::limits::CHEAT_SET {
+            return Err(Error::field("a cheat set is 1 MiB at most", "text"));
+        }
+        if write
+            .note
+            .as_deref()
+            .is_some_and(|n| n.len() > crate::limits::NOTE)
+        {
+            return Err(Error::field("a note is 120 bytes at most", "note"));
+        }
+        check_id(&write.title_id, "title_id")
+    }
+
+    /// Adds a cheat set (scope `cheats.write`): `201` with the new set, `409`
+    /// [`ProblemKind::Conflict`] when it exists (then replace it).
+    ///
+    /// # Errors
+    ///
+    /// When the set breaks a limit, or any error of the exchange.
+    pub fn cheat_add(&mut self, write: &CheatWrite) -> Result<CheatSet> {
+        Self::check_cheat_write(write)?;
+        let mut call = Call::get("cheat add", "/cheats");
+        call.method = "POST";
+        call.statuses = &[201];
+        call.body = Some(serde_json::to_vec(write).map_err(|e| Error::document(e.to_string()))?);
+        call.json_body = true;
+        let reply = self.send(&call)?;
+        document(&reply.body, "cheat add")
+    }
+
+    /// Replaces a cheat set (scope `cheats.write`).
+    ///
+    /// # Errors
+    ///
+    /// When the set breaks a limit, or any error of the exchange.
+    pub fn cheat_replace(&mut self, id: &str, write: &CheatWrite) -> Result<()> {
+        Self::check_cheat_write(write)?;
+        check_id(id, "id")?;
+        let path = format!("/cheats/{}", quote(id));
+        let mut call = Call::get("cheat replace", &path);
+        call.method = "PUT";
+        call.statuses = &[];
+        call.empty_statuses = &[204];
+        call.body = Some(serde_json::to_vec(write).map_err(|e| Error::document(e.to_string()))?);
+        call.json_body = true;
+        self.send(&call).map(|_| ())
+    }
+
+    /// Deletes a cheat set (scope `cheats.write`).
+    ///
+    /// # Errors
+    ///
+    /// Any error of the exchange.
+    pub fn cheat_delete(&mut self, id: &str) -> Result<()> {
+        check_id(id, "id")?;
+        let path = format!("/cheats/{}", quote(id));
+        let mut call = Call::get("cheat delete", &path);
+        call.method = "DELETE";
+        call.statuses = &[];
+        call.empty_statuses = &[204];
+        self.send(&call).map(|_| ())
+    }
+
+    // Requests (SPEC.md § 11).
+
+    /// The account's own requests of the platform, newest first.
+    ///
+    /// # Errors
+    ///
+    /// Any error of the exchange.
+    pub fn requests(&mut self, platform: Option<&str>) -> Result<TitleRequests> {
+        let mut call = Call::get("requests", "/requests");
+        call.query = Self::platform_query(platform);
+        let reply = self.send(&call)?;
+        document(&reply.body, "requests")
+    }
+
+    /// Asks for a game the server does not have: `201` with the new request,
+    /// or `200` with the open one for the same title.
+    ///
+    /// # Errors
+    ///
+    /// When `title_id` is not an id, or any error of the exchange.
+    pub fn request_title(
+        &mut self,
+        title_id: &str,
+        platform: Option<&str>,
+    ) -> Result<TitleRequest> {
+        check_id(title_id, "title_id")?;
+        let mut body = json!({ "schema": SCHEMA, "title_id": title_id });
+        if let Some(p) = platform {
+            set(&mut body, "platform", json!(p));
+        }
+        let mut call = Call::get("request", "/requests");
+        call.method = "POST";
+        call.statuses = &[200, 201];
+        call.body = Some(serde_json::to_vec(&body).map_err(|e| Error::document(e.to_string()))?);
+        call.json_body = true;
+        let reply = self.send(&call)?;
+        document(&reply.body, "request")
+    }
+
+    /// Withdraws the account's own request, whatever its status.
+    ///
+    /// # Errors
+    ///
+    /// Any error of the exchange; `404` for another account's request.
+    pub fn request_withdraw(&mut self, id: &str) -> Result<()> {
+        check_id(id, "id")?;
+        let path = format!("/requests/{}", quote(id));
+        let mut call = Call::get("request withdraw", &path);
+        call.method = "DELETE";
+        call.statuses = &[];
+        call.empty_statuses = &[204];
+        self.send(&call).map(|_| ())
     }
 
     // Pairing (SPEC.md § 5.2).
