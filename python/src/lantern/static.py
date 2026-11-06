@@ -86,6 +86,7 @@ from lantern.http import Headers, plain_http_allowed
 from lantern.limits import CHEAT_SET, JSON_DOCUMENT, load_json
 from lantern.missing import homebrew_updates, missing
 from lantern.store import NewerOnDisk
+from lantern.uid import check_uid
 from lantern.vocabulary import FAMILIES, HOMEBREW_ID, PLATFORM
 
 T = TypeVar("T")
@@ -460,6 +461,7 @@ def export(
     holds a lantern.json of a newer schema; ValueError when it holds a v1/ that is not an earlier export's."""
     from lantern.server.files import FileRef
 
+    check_uid(uid)
     if not 1 <= page_size <= 1000:
         raise ValueError("page_size is 1 to 1000 (SPEC.md § 21.2)")
     root = Path(out)

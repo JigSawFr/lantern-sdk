@@ -93,7 +93,13 @@ def test_the_handshake_offers_pairing_and_signatures_to_everyone() -> None:
     with pytest.raises(ValueError, match="skew"):
         lantern(skew=30)
     with pytest.raises(ValueError, match="not both"):
-        LanternApp(build_library(), uid="u", name="n", accounts=MemoryAccounts(), authenticate=lambda r: None)
+        LanternApp(
+            build_library(),
+            uid="6f1c2a8e-2b1d-4c3e-9f00-112233445566",
+            name="n",
+            accounts=MemoryAccounts(),
+            authenticate=lambda r: None,
+        )
 
 
 def test_pairing_with_a_key() -> None:

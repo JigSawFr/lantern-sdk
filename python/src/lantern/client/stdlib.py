@@ -7,7 +7,7 @@ import ssl
 from collections.abc import Iterator
 from urllib.parse import urlsplit
 
-from lantern.client.tls import check_pin, peer_spki, unverified_context
+from lantern.client.tls import MINIMUM_VERSION, check_pin, peer_spki, unverified_context, verified_context
 from lantern.client.transport import CHUNK, Request, Response
 from lantern.errors import TransportError
 from lantern.http import Headers
@@ -36,7 +36,8 @@ class StdlibTransport:
     ) -> None:
         self.verify = verify and pin is None
         self.pin = pin
-        self._context = context or ssl.create_default_context(cafile=cafile)
+        self._context = context or verified_context(cafile)
+        self._context.minimum_version = max(self._context.minimum_version, MINIMUM_VERSION)  # SPEC.md § 2, L-2-9
         self._unverified = unverified_context()
         self.seen: str | None = None
 

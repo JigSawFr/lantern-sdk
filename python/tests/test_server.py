@@ -444,7 +444,9 @@ def test_families_at_zero_and_unknown_routes(app: LanternApp) -> None:
         problem(call(app, "GET", BASE + path), 404, "not_found")
     for path in ("/saves", "/requests"):  # an account's own: not without a token (SPEC.md § 4.2)
         problem(call(app, "GET", BASE + path), 401, "unauthorized")
-    bare = LanternApp(MemoryLibrary(families=("library",)), uid="u", name="Bare shelf")
+    bare = LanternApp(
+        MemoryLibrary(families=("library",)), uid="6f1c2a8e-2b1d-4c3e-9f00-112233445566", name="Bare shelf"
+    )
     for path in ("/sections", "/saves", "/requests", "/cheats", "/titles/0100AB1200010000"):
         problem(call(bare, "GET", BASE + path), 404, "not_found")
     problem(call(app, "GET", "/api/elsewhere"), 404, "not_found")
@@ -467,10 +469,16 @@ def test_a_failure_of_the_server_answers_500() -> None:
 
 def test_options() -> None:
     with pytest.raises(ValueError, match="path"):
-        LanternApp(MemoryLibrary(), uid="u", name="n", base="api")
+        LanternApp(MemoryLibrary(), uid="6f1c2a8e-2b1d-4c3e-9f00-112233445566", name="n", base="api")
     with pytest.raises(ValueError, match="page_limit"):
-        LanternApp(MemoryLibrary(), uid="u", name="n", page_limit=5000)
-    app = LanternApp(MemoryLibrary(), uid="u", name="n", platforms=["switch", "switch"], motd="Hello")
+        LanternApp(MemoryLibrary(), uid="6f1c2a8e-2b1d-4c3e-9f00-112233445566", name="n", page_limit=5000)
+    app = LanternApp(
+        MemoryLibrary(),
+        uid="6f1c2a8e-2b1d-4c3e-9f00-112233445566",
+        name="n",
+        platforms=["switch", "switch"],
+        motd="Hello",
+    )
     hello = body(call(app, "GET", BASE))
     assert hello["platforms"] == ["switch"] and hello["motd"] == "Hello"
 

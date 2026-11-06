@@ -125,6 +125,7 @@ from lantern.server.saves import (
 from lantern.server.sync import SyncStore
 from lantern.server.title_requests import OPEN_LIMIT, STATUSES, RequestStore, StoredRequest, new_request_id
 from lantern.spki import short as spki_short
+from lantern.uid import check_uid
 from lantern.vocabulary import (
     BUILD_ID,
     CORE_ID,
@@ -200,6 +201,10 @@ CORS_EXPOSED = (
     "Link",
 )
 CORS_MAX_AGE = 600
+#: What an address names by a SHA-256 never changes (SPEC.md § 14, L-14-5).
+IMMUTABLE = "max-age=31536000, immutable"
+#: The shortest `max-age` of Strict-Transport-Security (SPEC.md § 2, L-2-11): six months.
+HSTS_MIN = 15552000
 #: An origin as a browser writes it: a scheme, a host and a port, without a path.
 ORIGIN = re.compile(r"^https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$|^https?://\[[0-9A-Fa-f:.]+\](?::[0-9]{1,5})?$")
 #: A cheat set's document: its text (1 MiB at most), escaped in JSON.
@@ -341,6 +346,10 @@ class LanternApp:
       Origin) and Access-Control-Expose-Headers on every answer, errors included, and its preflights are
       answered 204 without a token. No cookie is ever read or set, and Access-Control-Allow-Credentials is
       never sent.
+    - `hsts`, `hsts_max_age`: Strict-Transport-Security (SPEC.md § 2, L-2-11) is sent on every answer that came over
+      HTTPS (the request's scheme); `hsts=True` sends it also when TLS ends before the app (a proxy), `hsts_max_age`
+      being 15552000 seconds or more (a year by default). Never over plain HTTP otherwise.
+    - `uid` must be a random UUID of version 4 or 7 in lower case (§ 4.2, L-4.2-9); anything else is a ValueError.
     - A library that offers "deltas" (a ChunkSource, as MemoryLibrary(deltas=…) is) gives the chunk indexes
       of its files (SPEC.md § 22) at <base>/v1/chunks/sha256/{hex}.
     """
@@ -385,7 +394,12 @@ class LanternApp:
         requests: RequestStore | None = None,
         cheat_writes: bool = True,
         cors_origins: Iterable[str] = (),
+        hsts: bool = False,
+        hsts_max_age: int = 31536000,
     ) -> None:
+        check_uid(uid)
+        if not hsts_max_age >= HSTS_MIN:
+            raise ValueError("hsts_max_age is 15552000 seconds (six months) or more (SPEC.md § 2, L-2-11)")
         if not sig.SKEW_RANGE[0] <= skew <= sig.SKEW_RANGE[1]:
             raise ValueError("skew is 60 to 900 seconds (SPEC.md § 5.4)")
         if accounts is not None and authenticate is not None:
@@ -406,6 +420,7 @@ class LanternApp:
         if platforms is not None and (unserved := [p for p in platforms if not served(p)]):
             raise ValueError(f"platforms: nothing is served of {unserved[0]}, which installs nothing (Annex A.7)")
         self.cors_origins = origins
+        self.hsts, self.hsts_max_age = hsts, hsts_max_age
         self.library, self.uid, self.name, self.base = library, uid, name, base.rstrip("/")
         self.software, self.motd = software, motd
         self.authenticate, self.public = authenticate, public
@@ -457,7 +472,14 @@ class LanternApp:
         except Exception as e:  # noqa: BLE001 - any failure of the server answers 500 (SPEC.md § 12)
             self.on_error(e)
             response = problem_response(request, ProblemError(500, "internal", "The server failed; try again later."))
-        return self.with_cors(request, response)
+        return self.with_hsts(request, self.with_cors(request, response))
+
+    def with_hsts(self, request: ServerRequest, response: ServerResponse) -> ServerResponse:
+        """`Strict-Transport-Security` (L-2-11) on an answer that went over TLS, or when the app is told it is
+        served over HTTPS (`hsts=True`: behind a proxy that ends TLS); never over plain HTTP otherwise."""
+        if self.hsts or request.scheme == "https":
+            response.headers["Strict-Transport-Security"] = f"max-age={self.hsts_max_age}"
+        return response
 
     # Browsers (SPEC.md § 2.5).
 
@@ -1221,7 +1243,13 @@ class LanternApp:
         raw = self.library.chunk_index(sha) if found and isinstance(self.library, ChunkSource) else None
         if raw is None:
             raise not_found("This file has no chunk index: read it whole.")
-        return json_bytes_response(request, raw)
+        response = json_bytes_response(request, raw)
+        if response.status in (200, 304):
+            # What an address names by a SHA-256 never changes (SPEC.md § 14, L-14-5).
+            response.headers["Cache-Control"] = (
+                "private, " if request.header("Authorization") else "public, "
+            ) + IMMUTABLE
+        return response
 
     # Sync (SPEC.md § 20).
 
