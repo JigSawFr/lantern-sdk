@@ -24,7 +24,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 #: The columns of the table, in order, and which of them are servers that are checked.
-LIBRARIES = ("C++", "C", "Python", "TypeScript")
+LIBRARIES = ("C++", "C", "Python", "TypeScript", "Rust")
 CHECKED = ("Python", "TypeScript")
 CELL = re.compile(r"^(✓|–) / (✓|–|◐)$")
 

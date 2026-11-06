@@ -32,7 +32,9 @@
         { "type": "generic", "path": "c/include/lantern/lantern.h" },
         { "type": "generic", "path": "python/src/lantern/_version.py" },
         { "type": "json", "path": "typescript/package.json", "jsonpath": "$.version" },
-        { "type": "generic", "path": "typescript/src/client/client.ts" }
+        { "type": "generic", "path": "typescript/src/client/client.ts" },
+        { "type": "toml", "path": "rust/Cargo.toml", "jsonpath": "$.package.version" },
+        { "type": "toml", "path": "rust/Cargo.lock", "jsonpath": "$.package[?(@.name=='lantern-protocol')].version" }
       ]
     }
   }

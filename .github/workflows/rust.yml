@@ -1,0 +1,123 @@
+# The Rust library (rust/): the generated models against the specification's
+# schemas, rustfmt, clippy (pedantic, no unwrap or indexing on received data),
+# the documentation, the tests on Linux, macOS and Windows against the
+# specification's examples and vectors, the oldest Rust the crate declares
+# (rust-version), the build for WebAssembly, and the dependencies' licences
+# and advisories (cargo-deny).
+# Nothing is published here: release.yml builds, attests and publishes a
+# release (RELEASING.md).
+name: rust
+
+# Called by ci.yml when the Rust library's files change: its folder, the
+# specification (the submodule), the Python generator whose graph of models it
+# follows, and this workflow (.github/scripts/changes.sh)
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: rust
+
+env:
+  # The toolchain of rust/rust-toolchain.toml; the newest stable
+  RUST_VERSION: "1.97.0"
+  # rust-version of rust/Cargo.toml
+  MSRV: "1.90"
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUSTFLAGS: "-D warnings"
+  RUSTDOCFLAGS: "-D warnings"
+  PYTHONUTF8: "1"
+
+jobs:
+  lint:
+    name: generated models, rustfmt, clippy, docs
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Rust ${{ env.RUST_VERSION }}
+        run: rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt,clippy --no-self-update
+      - name: The generated models are those of the pinned specification
+        run: python3 tools/generate.py --check
+      - name: rustfmt
+        run: cargo fmt --check
+      - name: clippy
+        run: cargo clippy --locked --all-targets --all-features
+      - name: Documentation
+        run: cargo doc --locked --no-deps --all-features
+      - name: The package's contents
+        run: cargo package --locked --list --allow-dirty | tail -n 20
+
+  test:
+    name: tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-26.04, macos-26, windows-2025 ]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Rust ${{ env.RUST_VERSION }}
+        shell: bash
+        run: rustup toolchain install "$RUST_VERSION" --profile minimal --no-self-update
+      - name: Tests
+        run: cargo test --locked --all-features
+
+  msrv:
+    name: the oldest Rust (rust-version)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Rust ${{ env.MSRV }}
+        run: rustup toolchain install "$MSRV" --profile minimal --no-self-update
+      - name: Tests
+        run: cargo +"$MSRV" test --locked --all-features
+        env:
+          # A newer compiler's lints are not the older one's business
+          RUSTFLAGS: ""
+
+  wasm:
+    name: WebAssembly
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Rust ${{ env.RUST_VERSION }}
+        run: rustup toolchain install "$RUST_VERSION" --profile minimal --target wasm32-unknown-unknown --no-self-update
+      - name: Build
+        run: cargo build --locked --target wasm32-unknown-unknown
+
+  deny:
+    name: licences and advisories
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    env:
+      CARGO_DENY_VERSION: "0.20.2"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust ${{ env.RUST_VERSION }}
+        run: rustup toolchain install "$RUST_VERSION" --profile minimal --no-self-update
+      - name: cargo-deny ${{ env.CARGO_DENY_VERSION }}
+        run: cargo install cargo-deny --locked --version "$CARGO_DENY_VERSION"
+      - name: cargo deny check
+        run: cargo deny check
