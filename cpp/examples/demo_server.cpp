@@ -1,20 +1,24 @@
 // The server core over a small fictional library, for a look and for the
 // conformance run:
 //
-//     lantern_demo_server [port]
+//     lantern_demo_server [port] [--private]
 //     python3 spec/conformance/run.py http://127.0.0.1:PORT/ --origin https://app.example.org
 //
-// It serves anonymously and read-only (Lantern Core: the handshake, the
-// apps, what a device is missing, the files), over plain HTTP on 127.0.0.1;
-// it prints its URL and serves until it is stopped. No port, or 0: a free one.
+// It serves the library read-only (Lantern Core: the handshake, the apps,
+// what a device is missing, the files) to anyone, and pairs devices: the
+// accounts of demo_accounts.hpp, a token bound to a key, signed requests.
+// `--private` asks for a token on the library. Plain HTTP on 127.0.0.1; it
+// prints its URL and serves until it is stopped. No port, or 0: a free one.
 #include <atomic>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <string_view>
 
 #include <lantern/lantern.hpp>
 
+#include "demo_accounts.hpp"
 #include "demo_library.hpp"
 #include "posix_system.hpp"
 #include "server_posix.hpp"
@@ -40,14 +44,20 @@ int report(const lantern::Error& error)
 
 int main(int argc, char** argv)
 {
-    unsigned port = 0;
-    if (argc > 1)
+    unsigned port   = 0;
+    bool is_private = false;
+    for (int i = 1; i < argc; ++i)
     {
-        char* end    = nullptr;
-        const long n = std::strtol(argv[1], &end, 10);
-        if (end == argv[1] || *end != '\0' || n < 0 || n > 65535)
+        if (std::string_view(argv[i]) == "--private")
         {
-            std::fprintf(stderr, "usage: lantern_demo_server [port]\n");
+            is_private = true;
+            continue;
+        }
+        char* end    = nullptr;
+        const long n = std::strtol(argv[i], &end, 10);
+        if (end == argv[i] || *end != '\0' || n < 0 || n > 65535)
+        {
+            std::fprintf(stderr, "usage: lantern_demo_server [port] [--private]\n");
             return 2;
         }
         port = static_cast<unsigned>(n);
@@ -55,6 +65,11 @@ int main(int argc, char** argv)
 
     lantern::MemoryLibrary library(lantern::demo::base);
     if (auto filled = lantern::demo::fill(library); !filled)
+        return report(filled.error());
+
+    lantern::SystemClock clock;
+    lantern::MemoryAccountStore accounts;
+    if (auto filled = lantern::demo::fill_accounts(accounts, clock.unix_seconds()); !filled)
         return report(filled.error());
 
     const std::array<std::string_view, 1> origins { lantern::demo::origin };
@@ -66,8 +81,9 @@ int main(int argc, char** argv)
     options.cors_origins     = origins;
     options.software_name    = "lantern-sdk C++ demo";
     options.software_version = "0.1";
+    options.accounts         = &accounts;
+    options.require_auth     = is_private;
     lantern::posix::SystemRandom random;
-    lantern::SystemClock clock;
     auto server = lantern::Server::create(library, options, random, clock);
     if (!server)
         return report(server.error());

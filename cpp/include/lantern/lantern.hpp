@@ -2,6 +2,7 @@
 // Everything at once; each header can also be included alone.
 #pragma once
 
+#include <lantern/accounts.hpp>
 #include <lantern/canonical.hpp>
 #include <lantern/chunks.hpp>
 #include <lantern/client.hpp>

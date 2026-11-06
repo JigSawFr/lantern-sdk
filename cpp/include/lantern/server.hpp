@@ -1,29 +1,40 @@
 // The server core (SPEC.md § 17, Lantern Core): what answers a request of
-// the protocol's read routes, with no HTTP framework and no socket of its
-// own. An adapter (adapters/posix/server_posix.hpp for tests and demos, an
-// app's own HTTP server) hands `Server::handle()` a ServerRequest, as the
-// framework parsed it, and sends the ServerResponse it gets back.
+// the protocol's routes, with no HTTP framework and no socket of its own.
+// An adapter (adapters/posix/server_posix.hpp for tests and demos, an app's
+// own HTTP server) hands `Server::handle()` a ServerRequest, as the framework
+// parsed it, and sends the ServerResponse it gets back.
 //
-// This first slice is Lantern Core, anonymous and read-only:
+// What it serves so far is Lantern Core, read-only, and the families that
+// give a device its token:
 //
 // - the handshake, at /.well-known/lantern and at <base>/v1 (§ 4.2), which
-//   lists only the families the server serves: `library`;
+//   lists only the families the server serves (`library`, and `pairing` and
+//   `signatures` when it has accounts) and says who calls;
 // - the platforms (§ 4.3), the apps' listing with its filters, sorts, pages
 //   and cursors (§ 6.2) and what a device is missing (§ 6.3);
 // - the files, with `Range` and `Repr-Digest` (§ 6.6);
+// - with an AccountStore (accounts.hpp): Bearer tokens kept as hashes and
+//   checked with their scopes (§ 5.1), pairing (§ 5.2: the code, the poll
+//   address, the limits per address), the approval page that shows the
+//   server's key (§ 5.3), and device-bound tokens, whose requests carry an
+//   HTTP message signature checked as § 5.4 says, with the replay window of
+//   the injected Clock;
 // - the validators and caching headers of § 14, errors as problem+json
 //   (§ 12), the `schema` rule and the bounds of § 13 on the documents it
 //   reads (§ 3.2), and browsers (§ 2.5): CORS for the origins the app
 //   allows, preflights, Strict-Transport-Security over HTTPS (§ 2).
 //
-// Tokens, pairing, signatures, accounts, titles, homebrew, cheat sets,
-// saves, requests, administration, events, peers, sync and discovery are
-// not here yet: a request for one is a route the server does not have (404),
-// and the handshake says so (`features`). JSON is sent as it is written,
-// never compressed (§ 2.1 asks a server to, as a SHOULD).
+// Approving a pairing is the app's: its own page, once the user is signed in
+// there, calls Server::approve_pairing(). Invitations, administration,
+// titles, homebrew, cheat sets, saves, requests, events, peers, sync and
+// discovery are not here yet: a request for one is a route the server does
+// not have (404), and the handshake says so (`features`). JSON is sent as it
+// is written, never compressed (§ 2.1 asks a server to, as a SHOULD).
 //
-// A Server keeps nothing that a request changes: handle() may be called
-// from several threads when the Library's methods can be.
+// A Server keeps nothing that a request changes but what the AccountStore
+// keeps, the replay window and the limits per address, which it guards
+// itself: handle() may be called from several threads when the Library's and
+// the AccountStore's methods can be.
 #pragma once
 
 #include <array>
@@ -35,6 +46,7 @@
 #include <string_view>
 #include <utility>
 
+#include <lantern/accounts.hpp>
 #include <lantern/device_key.hpp>
 #include <lantern/error.hpp>
 #include <lantern/http_signature.hpp>
@@ -338,6 +350,47 @@ struct ServerOptions
     std::string_view software_name;
     std::string_view software_version;
     std::string_view motd;
+
+    // Tokens, pairing and signatures (§ 5). The store of the accounts, the
+    // devices and the pairings; without it the server is anonymous, takes
+    // no token and offers neither `pairing` nor `signatures`. It must
+    // outlive the server.
+    AccountStore* accounts = nullptr;
+    // A server that is private answers a call without a token with 401 on
+    // the routes that need one; the handshake and pairing stay open to every
+    // caller (§ 4.2). Public (the default): an anonymous caller reads the
+    // library. Needs `accounts`.
+    bool require_auth = false;
+    // Issue and take only tokens bound to a device key (§ 5.4): a pairing
+    // without `key` is a 400 `key_required`, a token without one a 401
+    // `signature_required`. `auth.bearer_only` in the handshake says it.
+    bool bound_only = false;
+    // How many seconds a signature's `created` may differ from the clock
+    // (`auth.skew`), 60 to 900. A nonce is kept twice as long.
+    std::uint32_t skew = default_skew;
+    // The most nonces kept at once; past it, a signed request is a 429 until
+    // the oldest expire. A nonce is never forgotten early (L-5.4-9).
+    std::uint32_t nonce_limit = 65536;
+    // The approval page (§ 5.2, § 5.3): a path of this server, which then
+    // shows the code and the short fingerprint of `spki` and approves
+    // nothing, or an absolute URL of the app's own page.
+    std::string_view verify = "/pair";
+    // The SHA-256 of the server's TLS key, its DER SubjectPublicKeyInfo
+    // (§ 5.3): the approval page shows its short form. None when the server
+    // is plain HTTP on loopback, or a CA vouches for it.
+    std::optional<Digest> spki;
+    // Seconds a new token lives; 0: until it is revoked.
+    std::uint32_t token_lifetime = 0;
+    // A pairing's code: seconds between two polls (1 to 60), seconds it
+    // lives (1 to 600).
+    std::uint32_t pairing_interval = 5;
+    std::uint32_t pairing_expires  = 600;
+    // Pairing requests per address in a window of seconds (L-5.2-8), then 429.
+    std::uint32_t pairing_requests = 30;
+    std::uint32_t pairing_window   = 60;
+    // Wrong invitation codes per address in a window of seconds, then 429.
+    std::uint32_t invitation_attempts = 10;
+    std::uint32_t invitation_window   = 600;
 };
 
 namespace detail
@@ -349,8 +402,9 @@ class Server
 {
   public:
     // Checks the options (the uid, the base, the origins, the limits); the
-    // cursors are sealed with a secret drawn now from `random`. `library`
-    // and `clock` must outlive the server.
+    // cursors are sealed with a secret drawn now from `random`, which also
+    // draws the tokens, the codes and the nonces' keys of a server with
+    // accounts. `library`, `random` and `clock` must outlive the server.
     [[nodiscard]] static Result<Server> create(Library& library, const ServerOptions& options,
         RandomSource& random, Clock& clock, const Allocator& allocator = {});
 
@@ -359,6 +413,24 @@ class Server
     [[nodiscard]] ServerResponse handle(const ServerRequest& request) const;
 
     [[nodiscard]] std::string_view base() const noexcept;
+
+    // The app's side of a pairing (§ 5.2): its approval page, once the user
+    // is signed in there, looks the code up as the user typed it (case,
+    // spaces and dashes ignored), shows the device, the scopes it asks for
+    // and this server's fingerprint, and approves or refuses. Nothing waits
+    // under that code: nothing. Needs `accounts`.
+    [[nodiscard]] Result<std::optional<PendingPairing>> waiting_pairing(
+        std::string_view code, const Allocator& allocator = {}) const;
+    // Approves the pairing for the account `user`: the scopes it asked for
+    // (those of `scopes` among them, or all when `scopes` is empty) that the
+    // account holds. The token waits for the device's next poll. Gives the
+    // scopes granted; nothing when no pairing waits under that code;
+    // Category::usage for an account that does not exist.
+    [[nodiscard]] Result<std::optional<Vector<String>>> approve_pairing(std::string_view code,
+        std::string_view user, std::span<const std::string_view> scopes = {},
+        const Allocator& allocator = {}) const;
+    // Refuses it: the device's next poll is a 410. False when no pairing waits under that code.
+    [[nodiscard]] Result<bool> refuse_pairing(std::string_view code) const;
 
   private:
     explicit Server(std::shared_ptr<const detail::ServerState> state) noexcept

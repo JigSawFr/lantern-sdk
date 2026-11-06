@@ -16,9 +16,10 @@ draft 0.9, variants of one game and packages a device cannot use (`requires`,
 `includes`, the `format` filter, `formats` and `satisfies`), and, since
 draft 0.11, a TLS floor of 1.2 in both transports and `is_valid_server_uid()`
 (a `uid` is a lower case UUID, version 4 or 7). Of a
-server, a peer's side, and the first slice of a server core
-(Lantern Core, anonymous and read-only: see [Server core](#server-core); the
-other families come in later steps); the C API is in [`../c/`](../c/README.md).
+server, a peer's side, and the first slices of a server core
+(Lantern Core, read-only, and the tokens, pairing and signed requests that give
+a device its access: see [Server core](#server-core); the other families come
+in later steps); the C API is in [`../c/`](../c/README.md).
 
 ## What it does
 
@@ -149,14 +150,15 @@ other families come in later steps); the C API is in [`../c/`](../c/README.md).
 
 ## Server core
 
-`lantern/server.hpp`: what answers the protocol's read routes, with no HTTP
-framework and no socket of its own, as `PeerGate` is for a peer. This is the
-first slice, **Lantern Core, anonymous and read-only**:
+`lantern/server.hpp`: what answers the protocol's routes, with no HTTP
+framework and no socket of its own, as `PeerGate` is for a peer. Two slices so
+far: **Lantern Core, read-only**, and **tokens, pairing and signatures**.
 
 - the handshake at `/.well-known/lantern` and `<base>/v1` (§ 4.2), which lists
-  only what the server serves: `features` says `library` and nothing else,
-  the account is anonymous with the scope `library`, `limits.page_size` is
-  the largest page;
+  only what the server serves: `features` says `library`, and `pairing` and
+  `signatures` when the server has accounts, and nothing else; the account is
+  the caller's (`anonymous`, `active` or `frozen`, its scopes, whether its
+  token is bound), `limits.page_size` is the largest page;
 - the platforms (§ 4.3), the listing of apps (§ 6.2) with `platform`, `type`,
   `format`, `title_id`, `q`, the sorts `name`, `added` and `release`,
   `page_size` and cursors that are sealed (HMAC-SHA-256, a secret drawn from
@@ -183,7 +185,7 @@ options.cors_origins = origins;                          // {"https://app.exampl
 auto server = lantern::Server::create(library, options, random, clock);
 
 // In the app's HTTP server, for each request it parsed:
-lantern::ServerRequest request;                          // method, decoded path and query, headers, body, scheme
+lantern::ServerRequest request;                          // method, decoded path and query, headers, body, scheme, target, remote
 const lantern::ServerResponse response = server->handle(request);
 // response.status, response.headers, response.body, or response.file: the
 // bytes [offset, offset + length) of file->reader, to read as they are sent
@@ -192,34 +194,98 @@ const lantern::ServerResponse response = server->handle(request);
 `Library` is the app's: its platforms, its apps (every variant, at least those
 a filter keeps; the server applies the filter itself) and the file of a name.
 `MemoryLibrary` is a complete one, for tests and demos; it refuses an app that
-breaks § 6.1 or its platform's profile. `Server::handle()` keeps nothing a
-request changes, and may be called from several threads when the library's
-methods can be. `parse_target()` splits and decodes a request target for an
-adapter; `problem_response()` answers what an adapter cannot read.
+breaks § 6.1 or its platform's profile. `Server::handle()` may be called from
+several threads when the library's and the account store's methods can be.
+`parse_target()` splits and decodes a request target for an adapter;
+`problem_response()` answers what an adapter cannot read.
+
+### Tokens, pairing and signatures
+
+Give the server an `AccountStore` (`lantern/accounts.hpp`) and it takes
+`Authorization: Bearer` tokens, pairs devices and checks signed requests:
+
+```cpp
+lantern::MemoryAccountStore accounts;                    // or the app's own lantern::AccountStore
+accounts.add_account("lea", {"library", "saves"});       // an account and its scopes (§ 5.7)
+options.accounts = &accounts;
+options.require_auth = false;                            // true: a private server, 401 without a token
+options.spki = sha256_of_the_tls_key;                    // the approval page shows its short form (§ 5.3)
+
+// The app's approval page, once the user is signed in there (§ 5.2):
+server->approve_pairing(typed_code, "lea");              // the scopes asked for that the account holds
+```
+
+- **Tokens** (§ 5.1): 256 random bits, `et_` and base64url. The store keeps
+  the SHA-256 of a token, never the token; the server hashes what it is sent
+  and asks the store for the device by that hash, which the memory store
+  compares in constant time. A device's scopes are cut back to its account's at
+  every request. An unknown, revoked or expired token, another scheme and an
+  empty token give `401` with `WWW-Authenticate: Bearer` (and
+  `error="invalid_token"` when a token was sent); a valid token without the
+  scope, `403 forbidden`; one of a frozen account, `403 account_frozen`.
+  `options.token_lifetime` makes new tokens expire. A server without accounts
+  takes no token at all. Secrets are never written to an error, and the
+  library keeps no log.
+- **Pairing** (§ 5.2): `POST <base>/v1/pairing` gives a code of the specified
+  alphabet (8 symbols, 40 bits, in groups of 4), the approval address with the
+  code in it (`verify_complete`), and a poll address of 192 random bits;
+  `GET` on it answers `202` while waiting, then the token once, then `410`. A
+  code lives 10 minutes at most; the polls are counted from the last one
+  answered (`429 slow_down` with the seconds left); pairing requests per
+  address and wrong invitation codes per address are limited
+  (`options.pairing_requests`, `invitation_attempts`). A key of small order
+  or that does not decode is a `400` (L-5.4-12). `Server::waiting_pairing()`,
+  `approve_pairing()` and `refuse_pairing()` are the app's side: approval
+  never goes through the device.
+- **The approval page** (§ 5.3): `GET <verify>` (`/pair`) shows the code and
+  the short fingerprint of `options.spki`, and approves nothing. An app with a
+  page of its own gives `options.verify` an absolute address.
+- **Signed requests** (§ 5.4): a request with a bound token carries a
+  signature of `@method`, `@target-uri`, `authorization` and, with a body,
+  `content-digest`, checked in the specified order (`signature_required`,
+  `signature_invalid`, `signature_expired`, `signature_replayed`) and answered
+  with `Accept-Signature`; a body that does not match its `Content-Digest` is a
+  `422 digest_mismatch`. The window (`options.skew`, 300 s) and the replay
+  memory (a nonce is kept per key for twice the window, in `options.nonce_limit`
+  entries; full, the server answers `429` rather than forget) are read from the
+  `Clock` given to `Server::create()`. A pairing made with a key polls with
+  requests signed by it. `options.bound_only` refuses tokens without a key.
+
+`AccountStore` is the app's own store behind a few methods (accounts, devices
+by token hash, pairings); each must be atomic and safe from several threads.
+`MemoryAccountStore` is a complete one, for tests and demos. The `random`
+given to `Server::create()` must outlive the server: it draws the tokens, the
+codes and the poll addresses.
 
 `adapters/posix/server_posix.hpp` is a blocking HTTP/1.1 listener for the demo
 and the conformance run: one connection at a time, `Connection: close`, a body
 of `Content-Length` bytes, plain HTTP on loopback by default. It is not for an
-app, and has no TLS. `lantern_demo_server [port]` (`examples/`) serves a small
-fictional library through it and prints its URL; the conformance suite runs
-against it:
+app, and has no TLS. `lantern_demo_server [port] [--private]` (`examples/`)
+serves a small fictional library through it, with the accounts of
+`examples/demo_accounts.hpp` (mira, noor and the token of mira's console,
+bound to a key made from a fixed phrase), and prints its URL; the conformance
+suite runs against it:
 
 ```sh
 build/dev/examples/lantern_demo_server 8080 &
 python3 ../spec/conformance/run.py http://127.0.0.1:8080/ --origin https://app.example.org
 ```
 
-Anonymously the suite reaches **Lantern Core**: no check fails, the two
-warnings are plain HTTP on loopback and JSON that is not compressed, and what
-needs a token is skipped; `ctest -R conformance` plays it, `ctest -R
-server` the library read by this library's own client over the listener.
+`ctest -R conformance` plays the suite three times, each against a demo of its
+own: anonymously, with the console's token and its device key, and with the
+token against `--private`. No check fails; the two warnings are plain HTTP on
+loopback and JSON that is not compressed; with the token the run reaches
+**Lantern Core**, anonymously the suite leaves out the signed requests it has
+no key for. `ctest -R server` plays the library read by this library's own
+client over the listener, `ctest -R unit` the server's cases in memory.
 
-Not in this slice, and so not offered by the handshake: tokens, pairing,
-signatures and accounts; titles, homebrew, cheat sets, saves, requests,
-administration, events, peers, sync and discovery; `changes`; compression of
-the JSON (§ 2.1: the library can read gzip, not write it); a `release` sort
-that means anything (it needs titles: every app is without a release for now).
-Text search folds ASCII case only, not Unicode's.
+Not in this slice, and so not offered by the handshake: invitations (§ 5.5; a
+code in a pairing request is unknown) and the administration API, so rating
+caps (§ 5.6) too; titles, homebrew, cheat sets, saves, requests, events,
+peers, sync and discovery; `changes`; compression of the JSON (§ 2.1: the
+library can read gzip, not write it); a `release` sort that means anything (it
+needs titles: every app is without a release for now). Text search folds ASCII
+case only, not Unicode's.
 
 ## Building
 
