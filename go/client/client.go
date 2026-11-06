@@ -272,6 +272,7 @@ type call struct {
 	rawURL    string
 	anonymous bool
 	signer    *lantern.SigningKey
+	headers   http.Header
 	what      string
 }
 
@@ -367,6 +368,9 @@ func (c *Client) build(ctx context.Context, k *call) (*http.Request, error) {
 	if k.body != nil {
 		h.Set("Content-Type", "application/json")
 	}
+	for name, values := range k.headers {
+		h[http.CanonicalHeaderKey(name)] = append([]string(nil), values...)
+	}
 	if o, err := lantern.OriginOf(target); err == nil && o == c.origin {
 		c.mu.Lock()
 		token, key := c.token, c.key
@@ -451,15 +455,8 @@ func (c *Client) do(ctx context.Context, req *http.Request, limit int64) (*respo
 		return nil, fmt.Errorf("%w: %w", lantern.ErrTransport, err)
 	}
 	defer resp.Body.Close()
-	if resp.TLS != nil && len(resp.TLS.PeerCertificates) > 0 {
-		seen := spki(resp.TLS.PeerCertificates[0])
-		c.mu.Lock()
-		c.lastSPKI = seen
-		pin := c.pin
-		c.mu.Unlock()
-		if pin != "" && !lantern.CheckPin(seen, pin) { // a transport of the application's own
-			return nil, &lantern.PinMismatchError{Seen: seen, Pinned: pin, Where: c.origin.Host}
-		}
+	if err := c.checkPin(resp); err != nil {
+		return nil, err
 	}
 	max := limit
 	if resp.StatusCode >= 400 {
@@ -477,6 +474,23 @@ func (c *Client) do(ctx context.Context, req *http.Request, limit int64) (*respo
 		}
 	}
 	return &response{status: resp.StatusCode, header: resp.Header, body: body}, nil
+}
+
+// checkPin remembers the key a connection showed and, for a transport of the application's own
+// (which cannot check it before the request), checks it against the pin afterwards.
+func (c *Client) checkPin(resp *http.Response) error {
+	if resp.TLS == nil || len(resp.TLS.PeerCertificates) == 0 {
+		return nil
+	}
+	seen := spki(resp.TLS.PeerCertificates[0])
+	c.mu.Lock()
+	c.lastSPKI = seen
+	pin := c.pin
+	c.mu.Unlock()
+	if pin != "" && !lantern.CheckPin(seen, pin) {
+		return &lantern.PinMismatchError{Seen: seen, Pinned: pin, Where: c.origin.Host}
+	}
+	return nil
 }
 
 func (c *Client) note(what string, h http.Header) {
