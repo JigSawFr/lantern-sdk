@@ -706,7 +706,11 @@ LANTERN_API lantern_status lantern_client_admin_update_user(lantern_client* clie
     const lantern_admin_user_update u = copy_struct(change);
     lantern::AdminUserUpdate settings(lantern::Allocator(resource_of(client)));
     settings.state = text(u.state);
-    strings(settings.scopes, u.scopes, u.scope_count);
+    if (u.scopes != nullptr)
+    {
+        settings.scopes.emplace(lantern::Allocator(resource_of(client)));
+        strings(*settings.scopes, u.scopes, u.scope_count);
+    }
     return give(client, client->client.admin_update_user(text(name), settings), out, error);
 }
 

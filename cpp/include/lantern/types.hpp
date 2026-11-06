@@ -3077,22 +3077,21 @@ struct AdminUserUpdate
     using allocator_type = Allocator;
 
     String state;
-    Vector<String> scopes;
+    std::optional<Vector<String>> scopes;
 
     AdminUserUpdate() : AdminUserUpdate(allocator_type{}) {}
     explicit AdminUserUpdate(const allocator_type& allocator)
-        : state(allocator),
-          scopes(allocator)
+        : state(allocator)
     {
     }
     AdminUserUpdate(const AdminUserUpdate& other, const allocator_type& allocator)
         : state(other.state, allocator),
-          scopes(other.scopes, allocator)
+          scopes(with_allocator(other.scopes, allocator))
     {
     }
     AdminUserUpdate(AdminUserUpdate&& other, const allocator_type& allocator)
         : state(std::move(other.state), allocator),
-          scopes(std::move(other.scopes), allocator)
+          scopes(with_allocator(std::move(other.scopes), allocator))
     {
     }
     AdminUserUpdate(const AdminUserUpdate&)            = default;

@@ -48,7 +48,7 @@ const NAMES: Record<string, string> = {
   "handshake/software": "Software",
   "handshake/account": "Account",
   "handshake/limits": "Limits",
-  "sync/collections{}": "SyncCollectionState",
+  "sync/collections{}": "SyncSummary",
   "sections/sections[]": "Section",
   "title-changes/removed[]": "RemovedTitle",
   "missing-request/installed[]": "InstalledApp",

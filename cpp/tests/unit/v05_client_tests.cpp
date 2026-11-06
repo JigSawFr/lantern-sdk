@@ -717,6 +717,30 @@ TEST_CASE("admin: deleting an account, its name typed again")
     CHECK(own.error().effective_code() == Code::conflict);
 }
 
+TEST_CASE("admin: an account's scopes emptied are sent as `scopes: []` (SPEC.md 5.7)")
+{
+    Setup setup;
+    const std::string user = spec_file("examples/v1/admin-user.json");
+    REQUIRE(!user.empty());
+    setup.transport.respond = [&user](const Recorded&) { return json_answer(user); };
+
+    AdminUserUpdate change;
+    change.scopes.emplace();
+    const auto emptied = setup.client->admin_update_user("sam", change);
+    REQUIRE(emptied);
+    CHECK(setup.transport.requests.back().method == "PATCH");
+    CHECK(setup.transport.requests.back().body.find(R"("scopes":[])") != std::string::npos);
+
+    // Not given: left out, and a change that gives nothing is refused
+    AdminUserUpdate frozen;
+    frozen.state = "frozen";
+    REQUIRE(setup.client->admin_update_user("sam", frozen));
+    CHECK(setup.transport.requests.back().body.find("scopes") == std::string::npos);
+    const auto nothing = setup.client->admin_update_user("sam", AdminUserUpdate{});
+    REQUIRE_FALSE(nothing);
+    CHECK(nothing.error().category() == Category::usage);
+}
+
 TEST_CASE("saves: an encrypted backup's metadata, only to a server that offers the family")
 {
     Setup setup;

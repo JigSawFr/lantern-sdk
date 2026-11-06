@@ -1370,7 +1370,7 @@ typedef struct lantern_admin_user_update
 {
     size_t struct_size;
     const char* state; /* NULL: unchanged */
-    const char* const* scopes; /* none: unchanged */
+    const char* const* scopes; /* NULL: unchanged; not NULL with a zero count: no scope at all */
     size_t scope_count;
 } lantern_admin_user_update;
 typedef struct lantern_rating_cap_input
