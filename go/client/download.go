@@ -118,7 +118,14 @@ func (c *Client) OpenFile(ctx context.Context, app *lantern.App, offset int64, p
 	if err != nil {
 		return nil, err
 	}
-	f := &File{body: resp.Body, size: app.Size, sha: app.SHA256, Offset: offset}
+	return c.newFile(resp, app.Size, app.SHA256, offset, prefix, true)
+}
+
+// newFile checks an answer's headers before a byte is given (see OpenFile) and makes the File that
+// reads it. A server's file carries a Repr-Digest (needDigest); a mirror's or a peer's may not,
+// but one that is there must be the document's: its bytes are checked in any case.
+func (c *Client) newFile(resp *http.Response, size int64, sha string, offset int64, prefix *lantern.Sha256, needDigest bool) (*File, error) {
+	f := &File{body: resp.Body, size: size, sha: sha, Offset: offset}
 	fail := func(format string, args ...any) (*File, error) {
 		resp.Body.Close()
 		return nil, fmt.Errorf("%w: %s", lantern.ErrIntegrity, fmt.Sprintf(format, args...))
@@ -131,25 +138,27 @@ func (c *Client) OpenFile(ctx context.Context, app *lantern.App, offset int64, p
 		if offset > 0 {
 			f.Restarted, f.Offset, prefix = true, 0, nil
 		}
-		if resp.ContentLength >= 0 && resp.ContentLength != app.Size {
-			return fail("%d bytes announced, the app has %d", resp.ContentLength, app.Size)
+		if resp.ContentLength >= 0 && resp.ContentLength != size {
+			return fail("%d bytes announced, the document has %d", resp.ContentLength, size)
 		}
 	case http.StatusPartialContent:
 		if offset == 0 {
 			return fail("a partial answer to a request for the whole file")
 		}
 		var start, end, total int64
-		if n, _ := fmt.Sscanf(resp.Header.Get("Content-Range"), "bytes %d-%d/%d", &start, &end, &total); n != 3 || start != offset || end != app.Size-1 || total != app.Size {
-			return fail("Content-Range %q is not bytes %d-%d/%d", lantern.Clip(resp.Header.Get("Content-Range"), 60), offset, app.Size-1, app.Size)
+		if n, _ := fmt.Sscanf(resp.Header.Get("Content-Range"), "bytes %d-%d/%d", &start, &end, &total); n != 3 || start != offset || end != size-1 || total != size {
+			return fail("Content-Range %q is not bytes %d-%d/%d", lantern.Clip(resp.Header.Get("Content-Range"), 60), offset, size-1, size)
 		}
 	default:
 		resp.Body.Close()
 		return nil, c.expect(&response{status: resp.StatusCode}, "file", http.StatusOK)
 	}
 	if v := resp.Header.Get("Repr-Digest"); v == "" {
-		return fail("no Repr-Digest")
-	} else if got := lantern.DigestSHA256(v); got != app.SHA256 {
-		return fail("Repr-Digest %q is not the app's SHA-256", lantern.Clip(v, 80))
+		if needDigest {
+			return fail("no Repr-Digest")
+		}
+	} else if got := lantern.DigestSHA256(v); got != sha {
+		return fail("Repr-Digest %q is not the document's SHA-256", lantern.Clip(v, 80))
 	}
 	if prefix != nil {
 		f.hash = prefix
@@ -221,26 +230,34 @@ func (f *File) Close() error { return f.body.Close() }
 // SHA-256 are the app's is renamed to path: a wrong one is deleted and the error is
 // lantern.ErrIntegrity. progress, when set, is told how many bytes of the file are there.
 func (c *Client) Download(ctx context.Context, app *lantern.App, path string, progress func(done, total int64)) error {
+	return download(ctx, app.Size, app.SHA256, path, progress, func(offset int64, prefix *lantern.Sha256) (*File, error) {
+		return c.OpenFile(ctx, app, offset, prefix)
+	})
+}
+
+// download saves a file of size bytes and SHA-256 sha at path, the way Download says, from the
+// answer open gives for a byte offset (and the SHA-256 state of the bytes before it).
+func download(ctx context.Context, size int64, sha, path string, progress func(done, total int64), open func(offset int64, prefix *lantern.Sha256) (*File, error)) error {
 	part := path + ".part"
 	var offset int64
 	var prefix *lantern.Sha256
-	if st, err := os.Stat(part); err == nil && st.Mode().IsRegular() && st.Size() > 0 && st.Size() <= app.Size {
+	if st, err := os.Stat(part); err == nil && st.Mode().IsRegular() && st.Size() > 0 && st.Size() <= size {
 		if h, err := hashFile(part, st.Size()); err == nil {
 			offset, prefix = st.Size(), h
 		}
 	}
-	if offset == app.Size && prefix != nil { // a copy that is all there: nothing to ask
-		if prefix.Hex() != app.SHA256 {
+	if offset == size && prefix != nil { // a copy that is all there: nothing to ask
+		if prefix.Hex() != sha {
 			os.Remove(part)
-			return fmt.Errorf("%w: SHA-256 %s, the app says %s", lantern.ErrIntegrity, prefix.Hex(), app.SHA256)
+			return fmt.Errorf("%w: SHA-256 %s, the document says %s", lantern.ErrIntegrity, prefix.Hex(), sha)
 		}
 		return os.Rename(part, path)
 	}
-	file, err := c.OpenFile(ctx, app, offset, prefix)
+	file, err := open(offset, prefix)
 	if err != nil {
 		if offset > 0 && errors.Is(err, lantern.ErrBadRequest) { // 416: the copy is not a prefix of this file
 			os.Remove(part)
-			return c.Download(ctx, app, path, progress)
+			return download(ctx, size, sha, path, progress, open)
 		}
 		return err
 	}
@@ -270,7 +287,7 @@ func (c *Client) Download(ctx context.Context, app *lantern.App, path string, pr
 			}
 			done += int64(n)
 			if progress != nil {
-				progress(done, app.Size)
+				progress(done, size)
 			}
 		}
 		if rerr == io.EOF {
@@ -278,7 +295,7 @@ func (c *Client) Download(ctx context.Context, app *lantern.App, path string, pr
 		}
 		if rerr != nil {
 			out.Close()
-			if errors.Is(rerr, lantern.ErrIntegrity) && done >= app.Size {
+			if errors.Is(rerr, lantern.ErrIntegrity) && done >= size {
 				os.Remove(part) // all the bytes came and they are wrong: a resume would not mend them
 			}
 			return rerr

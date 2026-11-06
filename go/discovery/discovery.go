@@ -174,6 +174,13 @@ type Options struct {
 // Discover sends the discovery datagram to each of addresses (directed broadcasts, or a server's
 // own address) and gathers the replies for Timeout; each server once, by uid and address.
 func Discover(ctx context.Context, addresses []string, opts Options) ([]Found, error) {
+	return gather(ctx, addresses, opts, Request, ReadReply, func(f Found) [2]string { return [2]string{f.UID, f.Address} })
+}
+
+// gather sends a datagram to each address and reads the replies for the time asked, with read:
+// each answerer once, by key.
+func gather[T any](ctx context.Context, addresses []string, opts Options, request []byte,
+	read func(data []byte, address string) *T, key func(T) [2]string) ([]T, error) {
 	if opts.Port == 0 {
 		opts.Port = Port
 	}
@@ -193,7 +200,7 @@ func Discover(ctx context.Context, addresses []string, opts Options) ([]Found, e
 		if err != nil {
 			return nil, err
 		}
-		if _, err := conn.WriteTo(Request, dest); err != nil {
+		if _, err := conn.WriteTo(request, dest); err != nil {
 			return nil, err
 		}
 	}
@@ -205,7 +212,7 @@ func Discover(ctx context.Context, addresses []string, opts Options) ([]Found, e
 	defer stop()
 	_ = conn.SetReadDeadline(deadline)
 
-	var found []Found
+	var found []T
 	seen := map[[2]string]bool{}
 	buf := make([]byte, lantern.MaxDatagram+1)
 	for {
@@ -218,8 +225,8 @@ func Discover(ctx context.Context, addresses []string, opts Options) ([]Found, e
 			return found, err
 		}
 		host, _, _ := net.SplitHostPort(source.String())
-		if f := ReadReply(buf[:n], host); f != nil && !seen[[2]string{f.UID, f.Address}] {
-			seen[[2]string{f.UID, f.Address}] = true
+		if f := read(buf[:n], host); f != nil && !seen[key(*f)] {
+			seen[key(*f)] = true
 			found = append(found, *f)
 		}
 	}
