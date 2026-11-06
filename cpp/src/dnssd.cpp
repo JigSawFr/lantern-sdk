@@ -387,7 +387,7 @@ class Gathered
             const ParsedName instance = read_name(message, start, allocator_);
             if (!instance.ok || instance.labels < 2 || instance.rest != service_key_)
                 return;
-            Instance* known = find(instance.key);
+            const Instance* known = find(instance.key);
             if (ttl == 0)
             {
                 if (known != nullptr)
@@ -586,7 +586,7 @@ Result<void> browse_dnssd(UdpSocket& socket, const DnssdOptions& options, Discov
         if (!*got || (*got)->size > max_message)
             continue;
         const Datagram& datagram = **got;
-        Bytes message(reinterpret_cast<const std::uint8_t*>(buffer.data()), datagram.size);
+        const Bytes message(reinterpret_cast<const std::uint8_t*>(buffer.data()), datagram.size);
         gathered.add(message, datagram.address_view());
     }
 
