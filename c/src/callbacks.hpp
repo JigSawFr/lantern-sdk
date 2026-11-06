@@ -317,6 +317,6 @@ lantern_upload_source* give_source(Resource* resource, Impl* impl, lantern::Encr
 // A static library, and the resource it was opened with, which its documents use
 struct lantern_static_library
 {
-    lantern_c::Resource* memory; // the box's, which holds its reference
+    lantern_c::Resource* memory {}; // the box's, which holds its reference
     lantern::StaticLibrary library;
 };
