@@ -547,3 +547,46 @@ func TestOpenFileStreamsAndEnds(t *testing.T) {
 		t.Fatal("resumed without the state of the bytes before")
 	}
 }
+
+func TestHomebrewIsCheckedBeforeAByteIsFetched(t *testing.T) {
+	d, c := newDepot(t)
+	ctx := context.Background()
+	other := map[string]any{"schema": 1, "id": "org.example.other", "platform": "switch", "name": "O", "version": "1", "build": 1,
+		"package": map[string]any{"format": "nro", "file": "/api/lantern/v1/files/f_1", "size": 1, "sha256": strings.Repeat("a", 64),
+			"manifest_sha256": strings.Repeat("b", 64), "path": "/switch/org.example.other/org.example.other.nro"}}
+	d.handler = func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, other) }
+	if _, err := c.HomebrewEntry(ctx, "org.example.frostline", "switch"); err == nil {
+		t.Error("an entry that is not the one asked for was taken")
+	}
+	if _, err := c.HomebrewEntry(ctx, "Not An Id", ""); err == nil {
+		t.Error("a bad id was asked for")
+	}
+	if _, err := c.HomebrewEntry(ctx, "org.example.other", "switch"); err != nil {
+		t.Fatal(err)
+	}
+	entry := &lantern.Homebrew{ID: "org.example.frostline", Platform: "switch", Build: 1}
+	before := len(d.requests())
+	for name, p := range map[string]lantern.Package{
+		"a path outside the roots": {Format: "nro", File: "f", Size: 1, SHA256: strings.Repeat("a", 64), Path: ptr("/switch/other/x.nro"),
+			ManifestSHA256: lantern.ManifestSHA256([]lantern.ManifestEntry{{Path: "/switch/other/x.nro", Size: 1, SHA256: strings.Repeat("a", 64)}})},
+		"a digest that is not the manifest's": {Format: "nro", File: "f", Size: 1, SHA256: strings.Repeat("a", 64),
+			Path: ptr("/switch/org.example.frostline/org.example.frostline.nro"), ManifestSHA256: strings.Repeat("0", 64)},
+	} {
+		if _, err := c.DownloadPackage(ctx, entry, p, filepath.Join(t.TempDir(), "p"), nil); !errors.Is(err, lantern.ErrRefused) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// A signature that does not verify.
+	good := lantern.Package{Format: "nro", File: "f", Size: 1, SHA256: strings.Repeat("a", 64), Path: ptr("/switch/org.example.frostline/org.example.frostline.nro")}
+	good.ManifestSHA256 = lantern.ManifestSHA256(lantern.ManifestOf(good))
+	entry.Package = good
+	entry.Signature = &lantern.Signature{Alg: "ed25519", PublicKey: strings.Repeat("A", 43) + "=", Value: strings.Repeat("A", 86) + "=="}
+	if _, err := c.DownloadPackage(ctx, entry, good, filepath.Join(t.TempDir(), "p"), nil); !errors.Is(err, lantern.ErrRefused) {
+		t.Errorf("a signature that does not verify: %v", err)
+	}
+	if got := len(d.requests()); got != before {
+		t.Errorf("%d requests were made for packages that were refused", got-before)
+	}
+}
+
+func ptr[T any](v T) *T { return &v }

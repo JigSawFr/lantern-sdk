@@ -358,3 +358,85 @@ func TestReferencePairingOverPinnedTLS(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+func TestReferenceHomebrew(t *testing.T) {
+	ref := startReference(t, "--public")
+	ctx := context.Background()
+	c, err := client.New(ref.URL, client.Options{Token: ref.Token})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]*lantern.Homebrew{}
+	for e, err := range c.Homebrew(ctx, client.HomebrewOptions{PageSize: 1}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen[e.Platform+"/"+e.ID] = e
+	}
+	if len(seen) < 3 {
+		t.Fatalf("%d entries listed", len(seen))
+	}
+	var ports int
+	for key, listed := range seen {
+		entry, err := c.HomebrewEntry(ctx, listed.ID, listed.Platform)
+		if err != nil {
+			t.Fatalf("%s: %v", key, err)
+		}
+		if entry.Package.ManifestSHA256 != listed.Package.ManifestSHA256 || entry.Package.SHA256 != listed.Package.SHA256 {
+			t.Errorf("%s: the entry and the listing differ", key)
+		}
+		pkg, ok := lantern.PickPackage(entry, "x86_64")
+		if !ok {
+			pkg, ok = lantern.PickPackage(entry, "aarch64")
+		}
+		if !ok {
+			t.Errorf("%s: no package fits", key)
+			continue
+		}
+		plan, err := lantern.PlanInstall(entry, pkg)
+		if err != nil {
+			t.Errorf("%s: %v", key, err)
+			continue
+		}
+		if valid, signed := lantern.VerifySignature(entry, pkg); signed && !valid {
+			t.Errorf("%s: the signature does not verify", key)
+		}
+		if entry.Port != nil {
+			ports++
+			if problems := lantern.PortProblems(entry); len(problems) != 0 {
+				t.Errorf("%s: %v", key, problems)
+			}
+		}
+		if problems := lantern.RequiresProblems(entry); len(problems) != 0 {
+			t.Errorf("%s: %v", key, problems)
+		}
+		dest := filepath.Join(t.TempDir(), "package")
+		got, err := c.DownloadPackage(ctx, entry, pkg, dest, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", key, err)
+		}
+		if len(got.Free)+len(got.Consent) != len(plan.Free)+len(plan.Consent) {
+			t.Errorf("%s: the plans differ", key)
+		}
+		if st, err := os.Stat(dest); err != nil || st.Size() != pkg.Size {
+			t.Errorf("%s: the package is not there whole", key)
+		}
+	}
+	if ports == 0 {
+		t.Error("no port among the entries")
+	}
+	if _, err := c.HomebrewEntry(ctx, "org.example.nothing", ""); err == nil {
+		t.Error("an unknown id gave an entry")
+	}
+	zero := int64(0)
+	count := 0
+	for _, err := range c.HomebrewUpdates(ctx, "switch", []client.InstalledHomebrew{{ID: "org.example.frostline", Build: zero}}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		count++
+	}
+	if count == 0 {
+		t.Error("an installed build 0 has no update")
+	}
+}
