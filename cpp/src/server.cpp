@@ -187,9 +187,13 @@ Answer handshake(const ServerState& state, const ServerRequest& request, const d
         w.boolean(caller.key.has_value());
     }
     w.end_object();
-    // Per family, the schema it is written in, or 0: `library` for a caller
+    // Per family, the schema it is written in, or 0: `library` and the
+    // families the library offers (titles, changes, sections) for a caller
     // who may read it, and `pairing` and `signatures` for every caller (§ 4.2,
     // L-4.2-5) when the server has accounts; nothing else is here yet
+    const bool titles   = reads_library && state.library->offers_titles();
+    const bool changes  = reads_library && state.library->journal() != nullptr;
+    const bool sections = reads_library && state.library->offers_sections();
     w.key("features");
     w.begin_object();
     constexpr std::array families { std::string_view { "library" }, std::string_view { "titles" },
@@ -200,7 +204,8 @@ Answer handshake(const ServerState& state, const ServerRequest& request, const d
         std::string_view { "encrypted_saves" }, std::string_view { "deltas" } };
     for (const std::string_view family : families)
     {
-        const bool offered = (family == "library" && reads_library)
+        const bool offered = (family == "library" && reads_library) || (family == "titles" && titles)
+            || (family == "changes" && changes) || (family == "sections" && sections)
             || ((family == "pairing" || family == "signatures") && state.accounts != nullptr);
         w.key(family);
         w.number(offered ? known_schema : std::uint64_t { 0 });
@@ -639,15 +644,8 @@ Answer missing_route(const ServerState& state, const ServerRequest& request)
 
 // GET <base>/v1/files/<name> (§ 6.6): the whole file or one range of it,
 // with the validators and the digest of the whole file on every answer.
-Answer file_route(const ServerState& state, const ServerRequest& request, std::string_view name)
+Answer serve_file(const ServerState& state, const ServerRequest& request, const LibraryFile& file)
 {
-    auto found = state.library->file(name, state.allocator);
-    if (!found)
-        return std::unexpected(detail::internal_error(state));
-    if (!*found)
-        return std::unexpected(detail::not_found(state, "No such file; read the app again."));
-    const LibraryFile& file = **found;
-
     ServerResponse response(state.allocator);
     detail::caching_headers(response.headers, request);
     const auto hex = to_hex(file.sha256);
@@ -702,6 +700,55 @@ Answer file_route(const ServerState& state, const ServerRequest& request, std::s
     return response;
 }
 
+// GET <base>/v1/files/<name> (§ 6.6).
+Answer file_route(const ServerState& state, const ServerRequest& request, std::string_view name)
+{
+    auto found = state.library->file(name, state.allocator);
+    if (!found)
+        return std::unexpected(detail::internal_error(state));
+    if (!*found)
+        return std::unexpected(detail::not_found(state, "No such file; read the app again."));
+    return serve_file(state, request, **found);
+}
+
+// Whether a title shows the image of that name: its url ends with
+// /v1/media/<name> (§ 7.1).
+bool shows_media(const Title& title, std::string_view suffix) noexcept
+{
+    const auto shown = [&](const std::optional<Image>& image)
+    { return image && !image->external.value_or(false) && std::string_view(image->url).ends_with(suffix); };
+    return shown(title.icon) || shown(title.banner)
+        || std::ranges::any_of(title.screenshots, [&](const Image& image)
+            { return !image.external.value_or(false) && std::string_view(image.url).ends_with(suffix); });
+}
+
+// GET <base>/v1/media/<name> (§ 7.1, L-7.1-2): an image of a title, on this
+// origin, named by its content, so that it is kept for good (L-14-5).
+Answer media_route(const ServerState& state, const ServerRequest& request, std::string_view name)
+{
+    String suffix("/v1/media/", state.allocator);
+    suffix.append(name);
+    auto titles = state.library->titles(
+        request.header("Accept-Language").value_or(std::string_view {}), state.allocator);
+    if (!titles)
+        return std::unexpected(detail::internal_error(state));
+    if (std::ranges::none_of(*titles, [&](const Title& title) { return shows_media(title, suffix); }))
+        return std::unexpected(detail::not_found(state, "No such image."));
+    auto found = state.library->media(name, state.allocator);
+    if (!found)
+        return std::unexpected(detail::internal_error(state));
+    if (!*found)
+        return std::unexpected(detail::not_found(state, "No such image."));
+    auto served = serve_file(state, request, **found);
+    if (served && served->status < 300)
+    {
+        served->headers.set("Cache-Control",
+            request.header("Authorization") ? "private, max-age=31536000, immutable"
+                                            : "public, max-age=31536000, immutable");
+    }
+    return served;
+}
+
 struct Route
 {
     enum class Kind : std::uint8_t
@@ -710,6 +757,12 @@ struct Route
         apps,
         missing,
         file,
+        changes,
+        titles,
+        title_changes,
+        title,
+        media,
+        sections,
         pairing_start,
         pairing_poll,
     };
@@ -739,6 +792,18 @@ Route route_of(std::string_view rest) noexcept
         return { Route::Kind::missing, "POST", {} };
     if (count == 2 && segments[0] == "files" && !segments[1].empty())
         return { Route::Kind::file, "GET, HEAD", segments[1] };
+    if (count == 1 && segments[0] == "changes")
+        return { Route::Kind::changes, "GET, HEAD", {} };
+    if (count == 1 && segments[0] == "titles")
+        return { Route::Kind::titles, "GET, HEAD", {} };
+    if (count == 2 && segments[0] == "titles" && segments[1] == "changes")
+        return { Route::Kind::title_changes, "GET, HEAD", {} };
+    if (count == 2 && segments[0] == "titles" && !segments[1].empty())
+        return { Route::Kind::title, "GET, HEAD", segments[1] };
+    if (count == 2 && segments[0] == "media" && !segments[1].empty())
+        return { Route::Kind::media, "GET, HEAD", segments[1] };
+    if (count == 1 && segments[0] == "sections")
+        return { Route::Kind::sections, "GET, HEAD", {} };
     if (count == 1 && segments[0] == "pairing")
         return { Route::Kind::pairing_start, "POST", {} };
     if (count == 2 && segments[0] == "pairing" && !segments[1].empty())
@@ -798,6 +863,27 @@ Answer route(const ServerState& state, const ServerRequest& request)
         = chosen.kind == Route::Kind::pairing_start || chosen.kind == Route::Kind::pairing_poll;
     if (pairing && state.accounts == nullptr)
         return std::unexpected(detail::not_found(state, "This server does not offer it."));
+    // The families a library offers, or not (§ 4.2)
+    bool offered = true;
+    switch (chosen.kind)
+    {
+        case Route::Kind::changes:
+            offered = state.library->journal() != nullptr;
+            break;
+        case Route::Kind::titles:
+        case Route::Kind::title_changes:
+        case Route::Kind::title:
+        case Route::Kind::media:
+            offered = state.library->offers_titles();
+            break;
+        case Route::Kind::sections:
+            offered = state.library->offers_sections();
+            break;
+        default:
+            break;
+    }
+    if (!offered)
+        return std::unexpected(detail::not_found(state, "This server does not offer it."));
     const auto caller = detail::identify(state, request);
     if (!caller)
         return std::unexpected(caller.error());
@@ -819,6 +905,18 @@ Answer route(const ServerState& state, const ServerRequest& request)
             return missing_route(state, request);
         case Route::Kind::file:
             return file_route(state, request, chosen.name);
+        case Route::Kind::changes:
+            return detail::changes_route(state, request);
+        case Route::Kind::titles:
+            return detail::titles_route(state, request);
+        case Route::Kind::title_changes:
+            return detail::title_changes_route(state, request);
+        case Route::Kind::title:
+            return detail::title_route(state, request, chosen.name);
+        case Route::Kind::media:
+            return media_route(state, request, chosen.name);
+        case Route::Kind::sections:
+            return detail::sections_route(state, request);
         case Route::Kind::pairing_start:
             return detail::pairing_start(state, request);
         case Route::Kind::pairing_poll:
@@ -833,6 +931,17 @@ Answer route(const ServerState& state, const ServerRequest& request)
 
 namespace detail
 {
+
+std::expected<std::optional<std::string_view>, ProblemError> platform_param(
+    const ServerState& state, const ServerRequest& request)
+{
+    return platform_of(state, request);
+}
+
+void write_app_json(json::Writer& w, const App& app)
+{
+    write_app(w, app);
+}
 
 String number_text(std::uint64_t value, const Allocator& allocator)
 {

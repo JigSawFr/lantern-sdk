@@ -5,7 +5,8 @@
 //     python3 spec/conformance/run.py http://127.0.0.1:PORT/ --origin https://app.example.org
 //
 // It serves the library read-only (Lantern Core: the handshake, the apps,
-// what a device is missing, the files) to anyone, and pairs devices: the
+// what a device is missing, the files, with its changes and sections, and
+// its titles with their images) to anyone, and pairs devices: the
 // accounts of demo_accounts.hpp, a token bound to a key, signed requests.
 // `--private` asks for a token on the library. Plain HTTP on 127.0.0.1; it
 // prints its URL and serves until it is stopped. No port, or 0: a free one.

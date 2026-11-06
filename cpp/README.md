@@ -17,9 +17,9 @@ draft 0.9, variants of one game and packages a device cannot use (`requires`,
 draft 0.11, a TLS floor of 1.2 in both transports and `is_valid_server_uid()`
 (a `uid` is a lower case UUID, version 4 or 7). Of a
 server, a peer's side, and the first slices of a server core
-(Lantern Core, read-only, and the tokens, pairing and signed requests that give
-a device its access: see [Server core](#server-core); the other families come
-in later steps); the C API is in [`../c/`](../c/README.md).
+(Lantern Core, read-only, with its changes, sections and titles, and the
+tokens, pairing and signed requests that give a device its access: see
+[Server core](#server-core); the other families come in later steps); the C API is in [`../c/`](../c/README.md).
 
 ## What it does
 
@@ -151,12 +151,14 @@ in later steps); the C API is in [`../c/`](../c/README.md).
 ## Server core
 
 `lantern/server.hpp`: what answers the protocol's routes, with no HTTP
-framework and no socket of its own, as `PeerGate` is for a peer. Two slices so
-far: **Lantern Core, read-only**, and **tokens, pairing and signatures**.
+framework and no socket of its own, as `PeerGate` is for a peer. Three slices so
+far: **Lantern Core, read-only**, **tokens, pairing and signatures**, and the
+library's **changes, sections and titles**.
 
 - the handshake at `/.well-known/lantern` and `<base>/v1` (§ 4.2), which lists
-  only what the server serves: `features` says `library`, and `pairing` and
-  `signatures` when the server has accounts, and nothing else; the account is
+  only what the server serves: `features` says `library`, `titles`, `changes`
+  and `sections` when the library offers them, and `pairing` and `signatures`
+  when the server has accounts, and nothing else; the account is
   the caller's (`anonymous`, `active` or `frozen`, its scopes, whether its
   token is bound), `limits.page_size` is the largest page;
 - the platforms (§ 4.3), the listing of apps (§ 6.2) with `platform`, `type`,
@@ -198,6 +200,51 @@ breaks § 6.1 or its platform's profile. `Server::handle()` may be called from
 several threads when the library's and the account store's methods can be.
 `parse_target()` splits and decodes a request target for an adapter;
 `problem_response()` answers what an adapter cannot read.
+
+### Changes, sections and titles
+
+A `Library` offers these families by overriding methods that, by default,
+offer none, so that a library written for the first slice keeps working:
+
+- **Titles** (§ 7): `offers_titles()` and `titles(languages)`, every title (the
+  server narrows by platform and id itself): `GET <base>/v1/titles/{title_id}`
+  (404 for an unknown one, 400 when several platforms have the id and the client
+  named none), `GET <base>/v1/titles?ids=` for 1 to 100 ids at once (each id in
+  `titles` or in `unknown`, once), and the images of `GET <base>/v1/media/{name}`,
+  which `media(name)` reads, served only if a title shows them, with
+  `Cache-Control: public, max-age=31536000, immutable` (`private` with a
+  token). `languages` is the request's `Accept-Language`, as written; a library
+  with texts in several languages picks the best (§ 2.2).
+- **Changes** (§ 6.4, § 7.3): `journal()` returns a `Journal` (its `position()`
+  with an `epoch`, the position now and the oldest it answers from; the apps
+  added and removed, the titles changed and removed, since a position). The
+  server seals each position into a `since` token (HMAC-SHA-256, like the
+  cursors, of a kind of its own for the apps' and the titles' changes):
+  without `since`, `GET <base>/v1/changes` gives no app and the token of now;
+  a token the server never gave is a `400`, one of another epoch or older than
+  the journal a `410`. `GET <base>/v1/titles/changes` follows the same rules,
+  with `more` for a journal that gives part of them; without a journal, it
+  gives a token that no one can use (`410`). No `wait` yet: it comes with
+  the events.
+- **Sections** (§ 6.5): `offers_sections()` and `sections(languages)`; the
+  server leaves out the apps of another platform and the ids the library does
+  not have, and a shelf left empty.
+
+`MemoryLibrary` serves them once told to: `add_title()` (refuses what § 7.1
+and Annex A do not allow), `add_media()` (an image on the server's origin,
+named by its SHA-256), `add_section()`, `keep_journal(n)` for the last `n`
+changes (call it before the first one), and `remove_app()`, `remove_title()`
+and `remove_section()`, which the journal records.
+
+```cpp
+library.keep_journal();
+auto icon = library.add_media(png_bytes, "png");         // an Image: url and sha256
+lantern::Title title;
+title.platform = "switch"; title.title_id = "0100AB1200010000"; title.name = "Lumen Drift";
+title.icon = *icon;
+library.add_title(title);
+library.add_section("new", "New this month", app_ids);
+```
 
 ### Tokens, pairing and signatures
 

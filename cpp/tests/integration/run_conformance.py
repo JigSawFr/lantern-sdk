@@ -15,8 +15,9 @@ pairing and invitation checks leave their address rate limited for a while):
 Each run starts the demo (examples/demo_server.cpp, on a free loopback port,
 which the demo prints as its URL), runs `run.py URL --origin ORIGIN`, and stops
 the demo. It fails when a check fails, when a check of the families the demo
-serves (the library, pairing, signatures) is not a pass, when an unexpected
-warning is raised, or, with the token, when Lantern Core is not among the
+serves (the library with its titles, changes and sections, pairing, signatures) is
+not a pass, when an unexpected
+warning is raised, or, with the token, when Lantern Core and +titles are not among the
 levels reached (without one the suite cannot check signed requests, and says
 so).
 Warnings allowed: plain HTTP on loopback, JSON that is not compressed. Standard
@@ -53,6 +54,13 @@ LIBRARY = [
     "documents.date", "language.problem", "features.library",
     "cors.preflight", "cors.max-age", "cors.responses", "cors.other-origin", "cors.credentials",
 ]
+# The families the library offers beside the apps: changes (§ 6.4), sections (§ 6.5; the suite only
+# probes the route, as `features.sections`) and titles (§ 7), images and title changes included.
+CATALOG = [
+    "features.changes", "features.sections", "features.titles", "changes.token", "changes.bad-token",
+    "titles.known", "titles.unknown", "titles.bulk", "titles.bulk-limit", "titles.images", "titles.changes",
+    "titles.bad-token",
+]
 # Pairing (§ 5.2, § 5.4) is offered to every caller, anonymous included.
 PAIRING = [
     "handshake.auth", "pairing.offered", "pairing.code", "pairing.verify-complete", "pairing.waiting",
@@ -72,9 +80,9 @@ PRIVATE = ["auth.missing"]
 WARNINGS = ["transport.https", "compression.json"]
 
 RUNS = [
-    ("anonymous", False, False, LIBRARY + PAIRING),
-    ("token", False, True, LIBRARY + PAIRING + WITH_TOKEN),
-    ("private, with a token", True, True, LIBRARY + PAIRING + WITH_TOKEN + PRIVATE),
+    ("anonymous", False, False, LIBRARY + CATALOG + PAIRING),
+    ("token", False, True, LIBRARY + CATALOG + PAIRING + WITH_TOKEN),
+    ("private, with a token", True, True, LIBRARY + CATALOG + PAIRING + WITH_TOKEN + PRIVATE),
 ]
 
 
@@ -107,7 +115,7 @@ def run_once(args, key_file, name, private, token, required):
     if int(summary.group(2)):
         problems.append(f"{summary.group(2)} check(s) failed")
     # Anonymously, the checks of signed requests are left out (a server that signs needs a token for them)
-    if token and "Lantern Core" not in levels.group(1):
+    if token and not all(level in levels.group(1) for level in ("Lantern Core", "+titles")):
         problems.append(f"levels reached: {levels.group(1)}")
     problems += [f"{check}: {status.get(check, 'absent')}, expected PASS" for check in required
                  if status.get(check) != "PASS"]

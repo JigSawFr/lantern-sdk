@@ -213,6 +213,31 @@ struct CursorPosition
 [[nodiscard]] std::expected<CursorPosition, ProblemError> open_cursor(
     const ServerState& state, std::string_view cursor, std::string_view scope);
 
+// A `since` token (§ 6.4, § 7.3): a position of the library's journal, sealed
+// like a cursor. `kind` is 's' for <base>/v1/changes, 't' for the titles'.
+[[nodiscard]] String seal_since(
+    const ServerState& state, char kind, std::string_view epoch, std::uint64_t position);
+// The position a token names: 400 for a token the server never gave (or of
+// the other kind), 410 for one of another epoch or older than the journal.
+[[nodiscard]] std::expected<std::uint64_t, ProblemError> open_since(
+    const ServerState& state, char kind, std::string_view token, const JournalPosition& journal);
+
+// The platform a caller names (§ 4.3): ?platform=, else the Lantern-Platform
+// header; nothing for every platform. 400 for what is not a name.
+[[nodiscard]] std::expected<std::optional<std::string_view>, ProblemError> platform_param(
+    const ServerState& state, const ServerRequest& request);
+// An app as a document lists it (§ 6.1).
+void write_app_json(json::Writer& w, const App& app);
+
+// Changes (§ 6.4), titles (§ 7) and sections (§ 6.5): each 404 when the
+// library does not offer the family.
+[[nodiscard]] Answer changes_route(const ServerState& state, const ServerRequest& request);
+[[nodiscard]] Answer titles_route(const ServerState& state, const ServerRequest& request);
+[[nodiscard]] Answer title_route(
+    const ServerState& state, const ServerRequest& request, std::string_view title_id);
+[[nodiscard]] Answer title_changes_route(const ServerState& state, const ServerRequest& request);
+[[nodiscard]] Answer sections_route(const ServerState& state, const ServerRequest& request);
+
 // Who calls (§ 4.2, § 5.1): no token (anonymous), a token of an account, or
 // of an account that is frozen. A token is checked against the store; its
 // scopes are the device's, cut back to the account's.
