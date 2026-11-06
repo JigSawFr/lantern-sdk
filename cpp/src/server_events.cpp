@@ -57,6 +57,7 @@ struct Audience
     bool requests = false;
     bool saves    = false;
     bool admin    = false;
+    bool sync     = false;
 
     static Audience of(const ServerState& state, const Caller& caller)
     {
@@ -65,6 +66,7 @@ struct Audience
         audience.requests = !detail::check_scope(state, caller, "requests").has_value();
         audience.saves    = !detail::check_scope(state, caller, "saves").has_value();
         audience.admin    = !detail::check_scope(state, caller, "admin").has_value();
+        audience.sync     = !detail::check_scope(state, caller, "sync.read").has_value();
         return audience;
     }
 
@@ -76,6 +78,8 @@ struct Audience
             return requests;
         if (scope == "saves")
             return saves;
+        if (scope == "sync.read")
+            return sync;
         return scope == "admin" && admin;
     }
 };
@@ -528,6 +532,24 @@ void record_request_event(const ServerState& state, const StoredRequest& request
     record_event(state, "request", data, "requests", request.user, request.platform, request.title_id);
 }
 
+void record_sync_event(
+    const ServerState& state, std::string_view user, std::string_view collection, std::uint64_t rev)
+{
+    if (!state.events)
+        return;
+    String data(state.allocator);
+    json::Writer w(data);
+    w.begin_object();
+    w.key("schema");
+    w.number(known_schema);
+    w.key("collection");
+    w.string(collection);
+    w.key("rev");
+    w.number(rev);
+    w.end_object();
+    record_event(state, "sync", data, "sync.read", user, {}, {});
+}
+
 void record_pairing_event(const ServerState& state, const PendingPairing& pairing)
 {
     if (!state.events)
@@ -558,12 +580,12 @@ void record_pairing_event(const ServerState& state, const PendingPairing& pairin
 
 std::optional<ProblemError> check_events(const ServerState& state, const Caller& caller)
 {
-    for (const std::string_view scope : { "library", "requests", "saves", "admin" })
+    for (const std::string_view scope : { "library", "requests", "saves", "admin", "sync.read" })
     {
         if (!check_scope(state, caller, scope))
             return std::nullopt;
     }
-    // None of the four: say what the first would have needed
+    // None of them: say what the first would have needed
     return check_scope(state, caller, "library");
 }
 

@@ -12,11 +12,13 @@
 #include <lantern/byte_range.hpp>
 #include <lantern/client.hpp>
 #include <lantern/digest.hpp>
+#include <lantern/ed25519.hpp>
 #include <lantern/encoding.hpp>
 #include <lantern/missing.hpp>
 #include <lantern/profiles.hpp>
 #include <lantern/requests.hpp>
 #include <lantern/saves.hpp>
+#include <lantern/sync_store.hpp>
 
 #include "server_internal.hpp"
 
@@ -200,6 +202,8 @@ Answer handshake(const ServerState& state, const ServerRequest& request, const d
         = state.requests != nullptr && !detail::check_scope(state, caller, "requests").has_value();
     const bool admin  = state.admin && !detail::check_scope(state, caller, "admin").has_value();
     const bool events = state.events && !detail::check_events(state, caller).has_value();
+    const bool peers  = state.peers && reads_library;
+    const bool sync   = state.sync != nullptr && !detail::check_scope(state, caller, "sync.read").has_value();
     w.key("features");
     w.begin_object();
     constexpr std::array families { std::string_view { "library" }, std::string_view { "titles" },
@@ -215,7 +219,7 @@ Answer handshake(const ServerState& state, const ServerRequest& request, const d
             || (family == "homebrew" && homebrew) || (family == "cheats" && cheats)
             || (family == "saves" && saves) || (family == "encrypted_saves" && saves && state.encrypted_saves)
             || (family == "requests" && requests) || (family == "admin" && admin)
-            || (family == "events" && events)
+            || (family == "events" && events) || (family == "peers" && peers) || (family == "sync" && sync)
             || ((family == "pairing" || family == "signatures") && state.accounts != nullptr);
         w.key(family);
         w.number(offered ? known_schema : std::uint64_t { 0 });
@@ -231,10 +235,28 @@ Answer handshake(const ServerState& state, const ServerRequest& request, const d
         w.number(static_cast<std::uint64_t>(state.skew));
         w.end_object();
     }
+    if (state.peers)
+    {
+        // The same for every caller (L-19.3-3)
+        String key(state.allocator);
+        base64_encode(state.grant_public, key);
+        w.key("peers");
+        w.begin_object();
+        w.key("key");
+        w.string(key);
+        w.key("grant_lifetime");
+        w.number(static_cast<std::uint64_t>(state.grant_lifetime));
+        w.end_object();
+    }
     w.key("limits");
     w.begin_object();
     w.key("page_size");
     w.number(static_cast<std::uint64_t>(state.page_limit));
+    if (state.sync != nullptr)
+    {
+        w.key("sync_items");
+        w.number(static_cast<std::uint64_t>(state.sync->item_limit()));
+    }
     if (state.saves != nullptr)
     {
         w.key("save_body");
@@ -791,6 +813,9 @@ struct Route
         request,
         admin,
         events,
+        sync_all,
+        sync_collection,
+        grant,
     };
     Kind kind = Kind::none;
     std::string_view allowed; // the methods it takes
@@ -854,6 +879,12 @@ Route route_of(std::string_view rest) noexcept
         return { Route::Kind::upload, "HEAD, PATCH, DELETE", segments[1], {} };
     if (count == 1 && segments[0] == "events")
         return { Route::Kind::events, "GET", {}, {} };
+    if (count == 1 && segments[0] == "sync")
+        return { Route::Kind::sync_all, "GET, HEAD, DELETE", {}, {} };
+    if (count == 2 && segments[0] == "sync" && !segments[1].empty())
+        return { Route::Kind::sync_collection, "GET, HEAD, PATCH, DELETE", segments[1], {} };
+    if (count == 3 && segments[0] == "grants" && segments[1] == "sha256" && !segments[2].empty())
+        return { Route::Kind::grant, "GET, HEAD", segments[2], {} };
     if (count == 1 && segments[0] == "pairing")
         return { Route::Kind::pairing_start, "POST", {}, {} };
     if (count == 2 && segments[0] == "pairing" && !segments[1].empty())
@@ -973,6 +1004,13 @@ Answer route(const ServerState& state, const ServerRequest& request)
         case Route::Kind::admin:
             offered = state.admin && (chosen.name != "requests" || state.requests != nullptr);
             break;
+        case Route::Kind::sync_all:
+        case Route::Kind::sync_collection:
+            offered = state.sync != nullptr;
+            break;
+        case Route::Kind::grant:
+            offered = state.peers;
+            break;
         default:
             break;
     }
@@ -1007,6 +1045,8 @@ Answer route(const ServerState& state, const ServerRequest& request)
             scope = "requests";
         if (chosen.kind == Route::Kind::admin)
             scope = "admin";
+        if (chosen.kind == Route::Kind::sync_all || chosen.kind == Route::Kind::sync_collection)
+            scope = reading ? "sync.read" : "sync.write";
         // The events are for whoever may read one kind of them (§ 18.2)
         const bool long_poll = chosen.kind == Route::Kind::changes && state.events && request.param("wait");
         if (chosen.kind == Route::Kind::events || long_poll)
@@ -1075,6 +1115,12 @@ Answer route(const ServerState& state, const ServerRequest& request)
             return detail::admin_route(state, request, *caller, chosen.name, chosen.second);
         case Route::Kind::events:
             return detail::events_route(state, request, *caller);
+        case Route::Kind::sync_all:
+            return detail::sync_route(state, request, *caller, {}, true);
+        case Route::Kind::sync_collection:
+            return detail::sync_route(state, request, *caller, chosen.name, false);
+        case Route::Kind::grant:
+            return detail::grant_route(state, request, *caller, chosen.name);
         case Route::Kind::pairing_start:
             return detail::pairing_start(state, request);
         case Route::Kind::pairing_poll:
@@ -1213,6 +1259,16 @@ Result<Server> Server::create(Library& library, const ServerOptions& options, Ra
     if (options.requests != nullptr && options.accounts == nullptr)
         return fail(Category::usage, "requests need accounts: a request belongs to one");
 
+    if (options.sync != nullptr)
+    {
+        if (options.accounts == nullptr)
+            return fail(Category::usage, "sync needs accounts: its data belongs to one");
+        if (options.sync->item_limit() < 1 || options.sync->item_limit() > 100000)
+            return fail(Category::usage, "limits.sync_items is 1 to 100000 (SPEC.md 13)");
+    }
+    if (options.grant_seed && (options.grant_lifetime < 1 || options.grant_lifetime > 900))
+        return fail(Category::usage, "grant_lifetime is 1 to 900 seconds (SPEC.md 19.3)");
+
     if (options.events
         && (options.heartbeat < 5 || options.heartbeat > 60 || options.event_streams < 1
             || options.wait_limit < 30 || options.wait_limit > 300 || options.events_kept < 1
@@ -1263,6 +1319,14 @@ Result<Server> Server::create(Library& library, const ServerOptions& options, Ra
     state->save_limits         = options.save_limits;
     state->encrypted_saves     = options.saves != nullptr && options.encrypted_saves;
     state->requests            = options.requests;
+    state->sync                = options.sync;
+    if (options.grant_seed)
+    {
+        state->peers          = true;
+        state->grant_seed     = *options.grant_seed;
+        state->grant_public   = ed25519_public_key(*options.grant_seed);
+        state->grant_lifetime = options.grant_lifetime;
+    }
     state->admin = options.accounts != nullptr && options.admin && options.accounts->administers();
     if (auto filled = random.fill(state->secret); !filled)
         return std::unexpected(filled.error());

@@ -359,6 +359,7 @@ std::expected<Caller, ProblemError> identify(const ServerState& state, const Ser
     caller.state = (*account)->frozen ? Caller::State::frozen : Caller::State::active;
     caller.name  = (*account)->name;
     caller.device.assign((*device)->name);
+    caller.device_id.assign((*device)->id);
     // A token never holds a scope its account does not (§ 5.1)
     for (const std::string_view known : known_scopes)
     {

@@ -166,6 +166,37 @@ Result<PublicKey> grant_key_of(const Handshake& handshake) noexcept
     return key;
 }
 
+Result<String> make_grant(const Ed25519Seed& seed, std::string_view uid, const Digest& sha256,
+    std::uint64_t size, std::int64_t exp, const Allocator& allocator)
+{
+    if (!is_uuid(uid))
+        return fail(Category::usage, "a grant names its server by its uid (SPEC.md 19.3)");
+    // These keys in this order and no space (§ 19.3)
+    String payload(allocator);
+    payload.append(R"({"exp":)");
+    std::array<char, 24> number {};
+    auto* end = std::to_chars(number.data(), number.data() + number.size(), exp).ptr;
+    payload.append(number.data(), end);
+    payload.append(R"(,"purpose":")");
+    payload.append(purpose);
+    payload.append(R"(","sha256":")");
+    const auto hex = to_hex(sha256);
+    payload.append(hex.data(), hex.size());
+    payload.append(R"(","size":)");
+    end = std::to_chars(number.data(), number.data() + number.size(), size).ptr;
+    payload.append(number.data(), end);
+    payload.append(R"(,"uid":")");
+    payload.append(uid);
+    payload.append(R"("})");
+    const auto* bytes              = reinterpret_cast<const std::uint8_t*>(payload.data());
+    const SignatureBytes signature = ed25519_sign(seed, std::span(bytes, payload.size()));
+    String grant(allocator);
+    base64url_encode(std::span(bytes, payload.size()), grant);
+    grant.push_back('.');
+    base64url_encode(signature, grant);
+    return grant;
+}
+
 Result<GrantClaims> verify_grant(std::string_view grant, const Digest& sha256, std::int64_t now,
     std::span<const GrantKey> servers) noexcept
 {

@@ -24,6 +24,7 @@
 #include <lantern/requests.hpp>
 #include <lantern/saves.hpp>
 #include <lantern/server.hpp>
+#include <lantern/sync_store.hpp>
 
 namespace lantern::detail
 {
@@ -199,6 +200,15 @@ struct ServerState final : LibraryObserver, std::enable_shared_from_this<ServerS
     // title already?) and the change it leads to one step.
     RequestStore* requests = nullptr;
     mutable std::mutex requests_mutex;
+    // The sync data (§ 20) and its store; this mutex makes a write's checks (generation, If-Match, the
+    // limit) and the changes they lead to one step.
+    SyncStore* sync = nullptr;
+    mutable std::mutex sync_mutex;
+    // The grant key (§ 19.3), when the server offers peers: its seed and public key, the grants' lifetime.
+    bool peers = false;
+    std::array<std::uint8_t, 32> grant_seed {};
+    std::array<std::uint8_t, 32> grant_public {};
+    std::uint32_t grant_lifetime = 0;
     // The administration API (§ 5.7) and the invitations (§ 5.5): the account store keeps what they need.
     bool admin = false;
     // Events (§ 18): offered, the limits, and the journal.
@@ -524,6 +534,7 @@ struct Caller
     State state = State::anonymous;
     String name; // the account's, when there is one
     String device; // what the user calls the paired device, when there is one
+    String device_id; // the paired device's id (`d_…`, § 5.7), when there is one
     Vector<String> scopes; // in the order of known_scopes
     std::optional<PublicKey> key; // the token is bound to it
     std::optional<RatingCap> rating_cap; // what its device may see (§ 5.6)
@@ -531,6 +542,7 @@ struct Caller
     explicit Caller(const Allocator& allocator)
         : name(allocator)
         , device(allocator)
+        , device_id(allocator)
         , scopes(allocator)
     {
     }
@@ -567,6 +579,9 @@ void record_library_event(const ServerState& state, std::span<const LibraryChang
 void record_save_event(const ServerState& state, std::string_view user, const Save& save);
 void record_request_event(const ServerState& state, const StoredRequest& request, bool deleted);
 void record_pairing_event(const ServerState& state, const PendingPairing& pairing);
+// The event `sync` (§ 18.2): a collection of the account `user` changed to revision `rev` (0: erased).
+void record_sync_event(
+    const ServerState& state, std::string_view user, std::string_view collection, std::uint64_t rev);
 // Whether the caller may read any kind of event (§ 18.2): nothing, or the problem.
 [[nodiscard]] std::optional<ProblemError> check_events(const ServerState& state, const Caller& caller);
 // The stream (§ 18.1) and the long poll of `changes` (§ 18.3).
@@ -584,6 +599,17 @@ void write_app_changes(json::Writer& w, const AppChanges& changes);
     const ServerState& state, const ServerRequest& request, const Caller& caller);
 [[nodiscard]] Answer request_route(
     const ServerState& state, const ServerRequest& request, const Caller& caller, std::string_view id);
+
+// Sync (§ 20), for a caller with the scope `sync.read` (reading) or `sync.write`: each 404 when the server
+// keeps no sync data. `collection` is the name after /v1/sync/, empty for /v1/sync itself.
+[[nodiscard]] Answer sync_route(const ServerState& state, const ServerRequest& request, const Caller& caller,
+    std::string_view collection, bool whole);
+// Erases an account's sync data (§ 5.7, L-20.5-3); nothing without a store.
+[[nodiscard]] Result<void> forget_sync(const ServerState& state, std::string_view user);
+
+// Grants for peers (§ 19.3), for a caller with the scope `library`: 404 when the server offers none.
+[[nodiscard]] Answer grant_route(
+    const ServerState& state, const ServerRequest& request, const Caller& caller, std::string_view hex);
 
 // The admin's side of the requests (§ 11): every account's, and deciding an open one.
 [[nodiscard]] Answer admin_requests_route(const ServerState& state, const ServerRequest& request);

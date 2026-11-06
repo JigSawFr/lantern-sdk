@@ -67,10 +67,22 @@
 //   thread and no timer: a stream is an EventStream the adapter steps with
 //   its own clock, a long poll a response with `hold_ms` that the adapter
 //   waits out (see ServerResponse).
+// - with ServerOptions::grant_seed (§ 19.3), the family `peers` of a server:
+//   the grant key's public half in the handshake (`peers.key`,
+//   `peers.grant_lifetime`) and the grants at <base>/v1/grants/sha256/<hex>,
+//   signed for an app or a homebrew package the caller may read. The peers
+//   themselves (§ 19.4) are consoles, not servers: PeerGate (peers.hpp);
+// - with a SyncStore (sync_store.hpp) and accounts: the sync of § 20, for the
+//   scopes `sync.read` and `sync.write`: the overview with the device's id,
+//   the collections `wishes` and `installed` read whole or after a revision
+//   (pages, `410` for deletions gone), written item by item by the merge
+//   rule with `If-Match`, the generation and the limit of items checked, a
+//   device writing its own item of `installed` only, and erasing a
+//   collection or all of them. The event `sync` tells the account's devices.
 //
 // Approving a pairing is the app's, or an admin's: the app's own page, once
 // the user is signed in there, calls Server::approve_pairing(); an admin app
-// uses the administration API. Peers, sync and discovery are not here yet: a
+// uses the administration API. Discovery, mirrors and the other families are not here yet: a
 // request for one is a route the server does not have (404), and the
 // handshake says so (`features`). JSON is sent as it is written, never
 // compressed (§ 2.1 asks a server to, as a SHOULD).
@@ -104,6 +116,7 @@ namespace lantern
 
 class SaveStore;
 class RequestStore;
+class SyncStore;
 
 // A request, as the adapter hands it over. It only looks at what the
 // adapter owns: every view stays valid while handle() runs.
@@ -905,6 +918,18 @@ struct ServerOptions
     // where they are kept. Needs `accounts`; without it the server offers no
     // `requests`. It must outlive the server.
     RequestStore* requests = nullptr;
+
+    // Sync (§ 20), for the accounts with the scopes `sync.read` and `sync.write`: where it is kept. Needs
+    // `accounts`; without it the server offers no `sync`. It must outlive the server.
+    SyncStore* sync = nullptr;
+
+    // Peers (§ 19.3): the seed of the server's grant key, 32 bytes of an Ed25519 key; with it the server
+    // offers `peers` (it also needs a library that serves files, which every Library does). Keep it, for
+    // grants alone: peers learn its public key from the handshake. None: no `peers`.
+    std::optional<std::array<std::uint8_t, 32>> grant_seed;
+    // `peers.grant_lifetime`: the seconds a grant lives, 1 to 900.
+    std::uint32_t grant_lifetime = 600;
+
     // The administration API (§ 5.7) and the invitations (§ 5.5), when the
     // account store administers (AccountStore::administers()); false: neither.
     bool admin = true;

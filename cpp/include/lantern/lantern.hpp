@@ -35,6 +35,7 @@
 #include <lantern/sha256.hpp>
 #include <lantern/static_library.hpp>
 #include <lantern/sync.hpp>
+#include <lantern/sync_store.hpp>
 #include <lantern/tls.hpp>
 #include <lantern/transport.hpp>
 #include <lantern/types.hpp>

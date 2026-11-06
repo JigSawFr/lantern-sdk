@@ -9,7 +9,9 @@
 // with their images, its homebrew and its cheat sets) to anyone, takes cheat
 // sets from a token with the scope cheats.write, keeps save backups (also
 // encrypted ones) in memory for the accounts with the scope saves, keeps the
-// requests for games of the accounts with the scope requests, tells what
+// requests for games of the accounts with the scope requests, keeps their
+// sync data (wishes and what a console has installed, § 20) in memory for the
+// scopes sync.read and sync.write, gives grants for peers (§ 19.3), tells what
 // changes as events (a stream and the long poll of `changes`, § 18), and pairs
 // devices: the accounts of demo_accounts.hpp, a token bound to a key, signed
 // requests, invitations. An account with the scope admin runs the
@@ -90,6 +92,8 @@ int main(int argc, char** argv)
 
     lantern::MemorySaveStore saves;
     lantern::MemoryRequestStore requests;
+    lantern::posix::SystemRandom random;
+    lantern::MemorySyncStore sync(random);
     const std::array<std::string_view, 1> origins { lantern::demo::origin };
     lantern::ServerOptions options;
     options.uid              = lantern::demo::uid;
@@ -103,13 +107,14 @@ int main(int argc, char** argv)
     options.require_auth     = is_private;
     options.saves            = &saves;
     options.requests         = &requests;
+    options.sync             = &sync;
+    options.grant_seed       = lantern::demo::grant_seed();
     options.encrypted_saves  = encrypted;
     // Events: a line on a stream every 5 seconds at least, which keeps the conformance run short
     options.events     = true;
     options.heartbeat  = 5;
     options.wait_limit = 30;
-    lantern::posix::SystemRandom random;
-    auto server = lantern::Server::create(library, options, random, clock);
+    auto server        = lantern::Server::create(library, options, random, clock);
     if (!server)
         return report(server.error());
 

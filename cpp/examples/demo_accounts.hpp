@@ -17,6 +17,14 @@ inline constexpr std::string_view token = "et_demo-0123456789abcdef0123456789abc
 // The seed of the console's key is the SHA-256 of this phrase: for the demo only, never a real device's.
 inline constexpr std::string_view key_phrase = "Mira's fictional console key";
 
+// The seed of the server's grant key (SPEC.md § 19.3) is the SHA-256 of this phrase: for the demo only.
+inline constexpr std::string_view grant_phrase = "Demo shelf's fictional grant key";
+
+inline std::array<std::uint8_t, 32> grant_seed()
+{
+    return Sha256::of(grant_phrase);
+}
+
 inline DeviceKey device_key()
 {
     return DeviceKey::from_seed(Sha256::of(key_phrase));

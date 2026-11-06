@@ -97,13 +97,16 @@ add_library(lantern
     src/server_homebrew.cpp
     src/server_http.cpp
     src/server_library.cpp
+    src/server_peers.cpp
     src/server_requests.cpp
     src/server_saves.cpp
+    src/server_sync.cpp
     src/sha256.cpp
     src/sharing.cpp
     src/static_library.cpp
     src/sync.cpp
     src/sync_client.cpp
+    src/sync_store.cpp
     src/tls.cpp
     src/url.cpp
     src/writes.cpp

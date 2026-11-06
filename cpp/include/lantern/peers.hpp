@@ -75,6 +75,13 @@ struct GrantClaims
 [[nodiscard]] Result<GrantClaims> verify_grant(std::string_view grant, const Digest& sha256, std::int64_t now,
     std::span<const GrantKey> servers) noexcept;
 
+// A server's side of § 19.3: the grant for the file `sha256` of `size`
+// bytes, valid until `exp` (Unix seconds), signed by the server's grant key
+// (`seed`); `uid` is the server's, lower case. Category::usage for a uid that
+// is not a UUID.
+[[nodiscard]] Result<String> make_grant(const Ed25519Seed& seed, std::string_view uid, const Digest& sha256,
+    std::uint64_t size, std::int64_t exp, const Allocator& allocator = {});
+
 // A peer, where its discovery reply says it serves.
 struct PeerEndpoint
 {
