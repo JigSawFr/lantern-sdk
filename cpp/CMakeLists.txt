@@ -52,6 +52,7 @@ set_target_properties(lantern_monocypher PROPERTIES
 
 add_library(lantern
     src/admin.cpp
+    src/byte_range.cpp
     src/canonical.cpp
     src/chunks.cpp
     src/client.cpp
@@ -75,6 +76,7 @@ add_library(lantern
     src/http_signature.cpp
     src/json.cpp
     src/memory.cpp
+    src/missing.cpp
     src/pairing.cpp
     src/paths.cpp
     src/peers.cpp
@@ -82,6 +84,10 @@ add_library(lantern
     src/profiles.cpp
     src/requires.cpp
     src/variants.cpp
+    src/server.cpp
+    src/server_cursor.cpp
+    src/server_http.cpp
+    src/server_library.cpp
     src/sha256.cpp
     src/sharing.cpp
     src/static_library.cpp
@@ -134,6 +140,18 @@ endif ()
 
 if (LANTERN_BUILD_EXAMPLES AND NOT WIN32)
     add_subdirectory(examples)
+endif ()
+
+# The specification's conformance suite against the demo server (anonymously:
+# Lantern Core); the suite is Python 3, and the spec/ submodule's
+if (LANTERN_BUILD_TESTS AND TARGET lantern_demo_server)
+    find_package(Python3 COMPONENTS Interpreter)
+    if (Python3_FOUND AND EXISTS "${LANTERN_SPEC_DIR}/conformance/run.py")
+        add_test(NAME conformance
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/run_conformance.py
+                --demo $<TARGET_FILE:lantern_demo_server> --suite ${LANTERN_SPEC_DIR}/conformance/run.py)
+        set_tests_properties(conformance PROPERTIES TIMEOUT 300)
+    endif ()
 endif ()
 
 if (LANTERN_INSTALL)

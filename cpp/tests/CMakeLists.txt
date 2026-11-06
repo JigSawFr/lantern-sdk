@@ -43,6 +43,7 @@ if (LANTERN_BUILD_TESTS)
         unit/paths_tests.cpp
         unit/profiles_tests.cpp
         unit/requires_tests.cpp
+        unit/server_tests.cpp
         unit/signing_tests.cpp
         unit/v04_client_tests.cpp
         unit/v05_client_tests.cpp
@@ -58,6 +59,23 @@ if (LANTERN_BUILD_TESTS)
         lantern_no_exceptions(lantern_unit_tests)
     endif ()
     add_test(NAME unit COMMAND lantern_unit_tests)
+
+    # The server core behind the POSIX listener, read by this library's
+    # own client on loopback; and the conformance suite against the demo
+    # server (python3 spec/conformance/run.py)
+    find_package(Threads)
+    if (TARGET lantern_posix_server AND Threads_FOUND)
+        add_executable(lantern_server_tests integration/main.cpp integration/server_tests.cpp)
+        target_include_directories(lantern_server_tests PRIVATE ${PROJECT_SOURCE_DIR}/examples)
+        target_link_libraries(lantern_server_tests PRIVATE Lantern::lantern Lantern::posix_http Lantern::posix_server
+            lantern_doctest Threads::Threads)
+        lantern_warnings(lantern_server_tests)
+        if (LANTERN_NO_EXCEPTIONS)
+            lantern_no_exceptions(lantern_server_tests)
+        endif ()
+        add_test(NAME server COMMAND lantern_server_tests)
+        set_tests_properties(server PROPERTIES TIMEOUT 120)
+    endif ()
 
     # Against the reference server (spec/server), on loopback: Python 3 and
     # the POSIX adapter

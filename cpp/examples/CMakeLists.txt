@@ -7,3 +7,12 @@ foreach (example read_library pair_device)
         lantern_no_exceptions(lantern_${example})
     endif ()
 endforeach ()
+
+# The server core over a fictional library, for the conformance run
+# (tests/integration/run_conformance.py)
+add_executable(lantern_demo_server demo_server.cpp)
+target_link_libraries(lantern_demo_server PRIVATE Lantern::lantern Lantern::posix_http Lantern::posix_server)
+lantern_warnings(lantern_demo_server)
+if (LANTERN_NO_EXCEPTIONS)
+    lantern_no_exceptions(lantern_demo_server)
+endif ()

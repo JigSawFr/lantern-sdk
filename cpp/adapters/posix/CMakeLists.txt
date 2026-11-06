@@ -13,3 +13,14 @@ lantern_warnings(lantern_posix_http)
 if (LANTERN_NO_EXCEPTIONS)
     lantern_no_exceptions(lantern_posix_http)
 endif ()
+
+# A minimal HTTP/1.1 listener for the server core (include/lantern/server.hpp):
+# for the demo server and the conformance run, never for an app
+add_library(lantern_posix_server STATIC server_posix.cpp)
+add_library(Lantern::posix_server ALIAS lantern_posix_server)
+target_include_directories(lantern_posix_server PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(lantern_posix_server PUBLIC Lantern::lantern PRIVATE Lantern::posix_http)
+lantern_warnings(lantern_posix_server)
+if (LANTERN_NO_EXCEPTIONS)
+    lantern_no_exceptions(lantern_posix_server)
+endif ()

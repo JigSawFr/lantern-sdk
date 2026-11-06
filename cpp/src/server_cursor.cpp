@@ -1,0 +1,189 @@
+// SPEC.md § 6.2: cursors a server can give without keeping them.
+//
+// A cursor holds the sort key of a page's last item, the listing it belongs
+// to and when it was given, sealed with the server's secret (HMAC-SHA-256).
+// The next page starts after that key, so reading while the library changes
+// neither skips nor repeats an item. A cursor the server never gave, or gave
+// for another listing, is a 400; an expired one, a 410.
+#include <algorithm>
+#include <array>
+#include <charconv>
+
+#include <lantern/encoding.hpp>
+#include <lantern/hkdf.hpp>
+#include <lantern/json.hpp>
+#include <lantern/sha256.hpp>
+
+#include "server_internal.hpp"
+
+namespace lantern::detail
+{
+
+namespace
+{
+
+constexpr std::string_view prefix        = "c_";
+constexpr std::size_t mac_bytes          = 16;
+constexpr std::size_t max_minor_in_token = 100;
+
+std::span<const std::uint8_t> bytes_of(std::string_view text) noexcept
+{
+    return { reinterpret_cast<const std::uint8_t*>(text.data()), text.size() };
+}
+
+std::array<std::uint8_t, mac_bytes> mac_of(const ServerState& state, std::string_view raw)
+{
+    String message("c.", state.allocator);
+    message.append(raw);
+    const Digest full = HmacSha256::of(state.secret, bytes_of(message));
+    std::array<std::uint8_t, mac_bytes> out {};
+    std::copy_n(full.begin(), out.size(), out.begin());
+    return out;
+}
+
+// RFC 4648 § 5 without padding, back to bytes; false for anything else.
+bool decode_url(std::string_view text, Vector<std::uint8_t>& out)
+{
+    if (text.empty() || text.size() % 4 == 1)
+        return false;
+    String standard(text.size() + 3, '=', out.get_allocator());
+    for (std::size_t i = 0; i < text.size(); ++i)
+    {
+        standard[i] = text[i];
+        if (text[i] == '-')
+            standard[i] = '+';
+        else if (text[i] == '_')
+            standard[i] = '/';
+    }
+    standard.resize((text.size() + 3) / 4 * 4, '=');
+    const auto size = base64_decoded_size(standard);
+    if (!size)
+        return false;
+    out.resize(*size);
+    return base64_decode(standard, out);
+}
+
+} // namespace
+
+int compare(const SortKey& a, const SortKey& b) noexcept
+{
+    if (a.major != b.major)
+        return a.major < b.major ? -1 : 1;
+    if (const int minor = a.minor.compare(b.minor); minor != 0)
+        return minor < 0 ? -1 : 1;
+    if (const int id = a.id.compare(b.id); id != 0)
+        return id < 0 ? -1 : 1;
+    return 0;
+}
+
+String scope_of(std::span<const std::string_view> parts, const Allocator& allocator)
+{
+    Sha256 hash;
+    for (const std::string_view part : parts)
+    {
+        hash.update(part);
+        hash.update(std::string_view("\x1f", 1));
+    }
+    const auto hex = to_hex(hash.finish());
+    return { hex.data(), 16, allocator };
+}
+
+String seal_cursor(const ServerState& state, std::string_view scope, const SortKey& key)
+{
+    // When it was given, to a sixtieth of the cursors' lifetime: two identical
+    // requests in a row give the same page, so the same ETag (§ 14), unless a
+    // window ends between them
+    const std::int64_t step = std::max<std::int64_t>(1, state.cursor_lifetime / 60);
+    const std::int64_t now  = state.clock->unix_seconds();
+    const std::int64_t when = now / step * step;
+    // A sort key too long for `opaque` (512 characters) is found again by its id
+    const bool by_id = key.minor.size() > max_minor_in_token;
+
+    String raw(state.allocator);
+    json::Writer w(raw);
+    w.begin_object();
+    w.key("s");
+    w.string(scope);
+    w.key("a");
+    w.number(key.major);
+    if (by_id)
+    {
+        w.key("l");
+        w.boolean(true);
+    }
+    else
+    {
+        w.key("n");
+        w.string(key.minor);
+    }
+    w.key("i");
+    w.string(key.id);
+    w.key("t");
+    w.number(when);
+    w.end_object();
+
+    const auto mac = mac_of(state, raw);
+    String token(prefix, state.allocator);
+    base64url_encode(bytes_of(raw), token);
+    token.push_back('.');
+    base64url_encode(mac, token);
+    return token;
+}
+
+std::expected<CursorPosition, ProblemError> open_cursor(
+    const ServerState& state, std::string_view cursor, std::string_view scope)
+{
+    const auto never_given
+        = [&] { return bad_request(state, "Unknown cursor: one this server never gave."); };
+    if (cursor.size() > 1024 || !cursor.starts_with(prefix))
+        return std::unexpected(never_given());
+    cursor.remove_prefix(prefix.size());
+    const std::size_t dot = cursor.find('.');
+    if (dot == std::string_view::npos)
+        return std::unexpected(never_given());
+    Vector<std::uint8_t> raw(state.allocator);
+    Vector<std::uint8_t> given(state.allocator);
+    if (!decode_url(cursor.substr(0, dot), raw) || !decode_url(cursor.substr(dot + 1), given)
+        || given.size() != mac_bytes)
+        return std::unexpected(never_given());
+    const std::string_view text(reinterpret_cast<const char*>(raw.data()), raw.size());
+    const auto expected   = mac_of(state, text);
+    std::uint32_t differs = 0;
+    for (std::size_t i = 0; i < mac_bytes; ++i)
+        differs |= static_cast<std::uint32_t>(expected[i]) ^ static_cast<std::uint32_t>(given[i]);
+    if (differs != 0)
+        return std::unexpected(never_given());
+
+    json::Limits limits;
+    limits.max_document = 4096;
+    const auto document = json::parse(text, limits, state.allocator.resource());
+    if (!document || !document->root().is_object())
+        return std::unexpected(never_given());
+    const json::Value& root = document->root();
+    const json::Value* s    = root.find("s");
+    const json::Value* a    = root.find("a");
+    const json::Value* i    = root.find("i");
+    const json::Value* t    = root.find("t");
+    const json::Value* n    = root.find("n");
+    const json::Value* l    = root.find("l");
+    if (s == nullptr || !s->is_string() || a == nullptr || i == nullptr || !i->is_string() || t == nullptr
+        || (n == nullptr) == (l == nullptr) || (n != nullptr && !n->is_string()))
+        return std::unexpected(never_given());
+    const auto major  = a->to_i64();
+    const auto issued = t->to_i64();
+    if (!major || !issued)
+        return std::unexpected(never_given());
+    if (s->text() != scope)
+        return std::unexpected(bad_request(state, "This cursor belongs to another listing."));
+    if (state.clock->unix_seconds() - *issued > static_cast<std::int64_t>(state.cursor_lifetime))
+        return std::unexpected(gone(state, "Cursor expired: read the list again from its start."));
+    CursorPosition position(state.allocator);
+    position.key.major = *major;
+    position.key.id.assign(i->text());
+    if (n != nullptr)
+        position.key.minor.assign(n->text());
+    position.by_id = n == nullptr;
+    return position;
+}
+
+} // namespace lantern::detail

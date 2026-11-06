@@ -16,8 +16,9 @@ draft 0.9, variants of one game and packages a device cannot use (`requires`,
 `includes`, the `format` filter, `formats` and `satisfies`), and, since
 draft 0.11, a TLS floor of 1.2 in both transports and `is_valid_server_uid()`
 (a `uid` is a lower case UUID, version 4 or 7). Of a
-server, only a peer's side for now; a server core is for later (see
-[Not there yet](#not-there-yet)); the C API is in [`../c/`](../c/README.md).
+server, a peer's side, and the first slice of a server core
+(Lantern Core, anonymous and read-only: see [Server core](#server-core); the
+other families come in later steps); the C API is in [`../c/`](../c/README.md).
 
 ## What it does
 
@@ -145,6 +146,80 @@ server, only a peer's side for now; a server core is for later (see
 - **The TLS transports**, optional targets: `Lantern::curl` (libcurl and
   the TLS it was built with) and `Lantern::mbedtls` (mbedTLS 2.28 or 3, for
   the consoles), both pinning through `ServerTrust`.
+
+## Server core
+
+`lantern/server.hpp`: what answers the protocol's read routes, with no HTTP
+framework and no socket of its own, as `PeerGate` is for a peer. This is the
+first slice, **Lantern Core, anonymous and read-only**:
+
+- the handshake at `/.well-known/lantern` and `<base>/v1` (§ 4.2), which lists
+  only what the server serves: `features` says `library` and nothing else,
+  the account is anonymous with the scope `library`, `limits.page_size` is
+  the largest page;
+- the platforms (§ 4.3), the listing of apps (§ 6.2) with `platform`, `type`,
+  `format`, `title_id`, `q`, the sorts `name`, `added` and `release`,
+  `page_size` and cursors that are sealed (HMAC-SHA-256, a secret drawn from
+  the app's `RandomSource`) and neither skip nor repeat an app, and
+  what a device is missing (§ 6.3), computed by the same `missing_apps()` as
+  a client does over a static library;
+- the files (§ 6.6): `Range`, `If-Range`, 206, 416 with `Content-Range`,
+  `Repr-Digest` of the whole file on every answer, HEAD, a strong ETag; a
+  file is read piece by piece through a `FileReader`, never held whole;
+- `ETag` and `If-None-Match` (304), `Vary` and `Cache-Control` (§ 14),
+  errors as `application/problem+json` (§ 12), request documents read with
+  the `schema` rule (§ 3.2), I-JSON and § 13's bounds (§ 2.3), a parameter
+  given twice refused (§ 2.4);
+- browsers (§ 2.5): CORS for the origins the app allows, with preflights
+  answered without a token, and `Strict-Transport-Security` over HTTPS (§ 2).
+
+```cpp
+lantern::MemoryLibrary library("/api/lantern");          // or the app's own lantern::Library
+library.add_app(draft, package_bytes);                   // size and SHA-256 from the bytes
+lantern::ServerOptions options;
+options.uid  = "3d5c7e1a-0b2f-4c6d-9e8a-1f2b3c4d5e6f";   // a lower case UUID, version 4 or 7
+options.name = "Lea's shelf";
+options.cors_origins = origins;                          // {"https://app.example.org"}
+auto server = lantern::Server::create(library, options, random, clock);
+
+// In the app's HTTP server, for each request it parsed:
+lantern::ServerRequest request;                          // method, decoded path and query, headers, body, scheme
+const lantern::ServerResponse response = server->handle(request);
+// response.status, response.headers, response.body, or response.file: the
+// bytes [offset, offset + length) of file->reader, to read as they are sent
+```
+
+`Library` is the app's: its platforms, its apps (every variant, at least those
+a filter keeps; the server applies the filter itself) and the file of a name.
+`MemoryLibrary` is a complete one, for tests and demos; it refuses an app that
+breaks § 6.1 or its platform's profile. `Server::handle()` keeps nothing a
+request changes, and may be called from several threads when the library's
+methods can be. `parse_target()` splits and decodes a request target for an
+adapter; `problem_response()` answers what an adapter cannot read.
+
+`adapters/posix/server_posix.hpp` is a blocking HTTP/1.1 listener for the demo
+and the conformance run: one connection at a time, `Connection: close`, a body
+of `Content-Length` bytes, plain HTTP on loopback by default. It is not for an
+app, and has no TLS. `lantern_demo_server [port]` (`examples/`) serves a small
+fictional library through it and prints its URL; the conformance suite runs
+against it:
+
+```sh
+build/dev/examples/lantern_demo_server 8080 &
+python3 ../spec/conformance/run.py http://127.0.0.1:8080/ --origin https://app.example.org
+```
+
+Anonymously the suite reaches **Lantern Core**: no check fails, the two
+warnings are plain HTTP on loopback and JSON that is not compressed, and what
+needs a token is skipped; `ctest -R conformance` plays it, `ctest -R
+server` the library read by this library's own client over the listener.
+
+Not in this slice, and so not offered by the handshake: tokens, pairing,
+signatures and accounts; titles, homebrew, cheat sets, saves, requests,
+administration, events, peers, sync and discovery; `changes`; compression of
+the JSON (§ 2.1: the library can read gzip, not write it); a `release` sort
+that means anything (it needs titles: every app is without a release for now).
+Text search folds ASCII case only, not Unicode's.
 
 ## Building
 
@@ -575,7 +650,10 @@ if (done)
   for a later version.
 - **Annex B's retries** (backoff with jitter, `Retry-After` as a floor):
   the errors carry what they need, the app retries.
-- A server core (beyond a peer's `PeerGate`). The C API is in [`../c/`](../c/README.md).
+- The rest of the server core (see [Server core](#server-core)): tokens,
+  pairing, signatures, accounts, titles, homebrew, cheat sets, saves,
+  requests, administration, events, peers, sync and discovery, and
+  compressed JSON. The C API is in [`../c/`](../c/README.md).
 
 ## Layout
 
@@ -585,9 +663,9 @@ if (done)
 | `src/` | The library; `src/generated/` from `tools/gen_types.py` |
 | `adapters/curl/`, `adapters/mbedtls/` | The TLS transports, `Lantern::curl` and `Lantern::mbedtls` |
 | `adapters/http1/` | HTTP/1.1 over a byte stream, and POSIX TCP, for the mbedTLS and loopback adapters |
-| `adapters/posix/` | The loopback HTTP adapter, `/dev/urandom` and a UDP socket, tests and examples only |
+| `adapters/posix/` | The loopback HTTP adapter, `/dev/urandom`, a UDP socket and the demo's HTTP listener (`server_posix.hpp`), tests and examples only |
 | `third_party/` | Monocypher and doctest, as published (`THIRD_PARTY_NOTICES.md`) |
 | `tests/unit/`, `tests/integration/` | doctest; the integration tests start `spec/server`, its peer and a static export, over HTTPS too for the adapters, and every scenario of `python/tools/hostile_server.py` |
 | `tests/fuzz/` | libFuzzer targets and their seed corpus |
 | `tests/consumer/` | An app using the library, both ways |
-| `examples/` | `read_library` and `pair_device`, the examples above |
+| `examples/` | `read_library` and `pair_device`, the examples above; `lantern_demo_server`, the server core over a fictional library |

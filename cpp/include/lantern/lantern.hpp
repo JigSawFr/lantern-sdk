@@ -28,6 +28,7 @@
 #include <lantern/pinning.hpp>
 #include <lantern/profiles.hpp>
 #include <lantern/requires.hpp>
+#include <lantern/server.hpp>
 #include <lantern/sha256.hpp>
 #include <lantern/static_library.hpp>
 #include <lantern/sync.hpp>
