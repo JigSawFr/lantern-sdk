@@ -7,6 +7,7 @@
 #include <charconv>
 #include <system_error>
 
+#include <lantern/byte_range.hpp>
 #include <lantern/digest.hpp>
 #include <lantern/discovery.hpp>
 #include <lantern/encoding.hpp>
@@ -310,62 +311,6 @@ PeerAnswer problem(std::uint16_t status, std::string_view body, std::uint32_t re
     return answer;
 }
 
-struct Range
-{
-    std::uint64_t first = 0;
-    std::uint64_t last  = 0;
-};
-
-// One range of "bytes=a-b", "bytes=a-" or "bytes=-n"; nothing for a range
-// header the peer ignores; `unsatisfiable` for one outside the file.
-std::optional<Range> parse_range(std::string_view value, std::uint64_t size, bool& unsatisfiable) noexcept
-{
-    unsatisfiable = false;
-    if (!take(value, "bytes=") || value.contains(','))
-        return std::nullopt;
-    const std::size_t dash = value.find('-');
-    if (dash == std::string_view::npos)
-        return std::nullopt;
-    const std::string_view a = value.substr(0, dash);
-    const std::string_view b = value.substr(dash + 1);
-    std::uint64_t first      = 0;
-    std::uint64_t last       = 0;
-    const auto number        = [](std::string_view text, std::uint64_t& out)
-    {
-        const auto result = std::from_chars(text.data(), text.data() + text.size(), out);
-        return !text.empty() && result.ec == std::errc {} && result.ptr == text.data() + text.size();
-    };
-    if (a.empty())
-    {
-        std::uint64_t suffix = 0;
-        if (!number(b, suffix))
-            return std::nullopt;
-        if (suffix == 0 || size == 0)
-        {
-            unsatisfiable = true;
-            return std::nullopt;
-        }
-        first = size - std::min(size, suffix);
-        last  = size - 1;
-    }
-    else
-    {
-        if (!number(a, first))
-            return std::nullopt;
-        if (b.empty())
-            last = size == 0 ? 0 : size - 1;
-        else if (!number(b, last) || last < first)
-            return std::nullopt;
-        if (first >= size)
-        {
-            unsatisfiable = true;
-            return std::nullopt;
-        }
-        last = std::min(last, size - 1);
-    }
-    return Range { first, last };
-}
-
 std::size_t write_number(std::span<char> out, std::uint64_t value) noexcept
 {
     const auto result = std::to_chars(out.data(), out.data() + out.size(), value);
@@ -540,19 +485,18 @@ PeerAnswer PeerGate::handle(const PeerRequest& request)
     if (!request.range.empty()
         && (request.if_range.empty() || request.if_range == std::string_view(etag.data(), etag.size())))
     {
-        bool unsatisfiable = false;
-        const auto range   = parse_range(request.range, *size, unsatisfiable);
-        if (unsatisfiable)
+        const RangeParse range = parse_range_header(request.range, *size);
+        if (range.verdict == RangeVerdict::unsatisfiable)
         {
             PeerAnswer out = problem(416, problem_416);
             out.size       = *size;
             return out;
         }
-        if (range)
+        if (range.verdict == RangeVerdict::satisfiable)
         {
             answer.status = 206;
-            answer.offset = range->first;
-            answer.length = range->last - range->first + 1;
+            answer.offset = range.first;
+            answer.length = range.last - range.first + 1;
         }
     }
     if (request.method == "HEAD")

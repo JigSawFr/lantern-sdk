@@ -148,6 +148,8 @@ void Sha256::compress(const std::uint8_t* block) noexcept
 
 void Sha256::update(std::span<const std::byte> bytes) noexcept
 {
+    if (bytes.empty()) // no bytes, maybe no pointer either: nothing to copy
+        return;
     const auto* data = reinterpret_cast<const std::uint8_t*>(bytes.data());
     std::size_t size = bytes.size();
     auto filled      = static_cast<std::size_t>(state_.length % 64);
