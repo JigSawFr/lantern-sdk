@@ -85,7 +85,7 @@ exclude-newer = "14 days"
 path = "src/lantern/_version.py"
 
 [tool.hatch.build.targets.sdist]
-include = ["src/lantern", "tests", "tools", "README.md", "LICENSE", "pyproject.toml"]
+include = ["src/lantern", "tests", "tools", "examples", "README.md", "LICENSE", "pyproject.toml"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lantern"]
@@ -113,6 +113,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S", "PLR", "B011", "BLE001", "PT018", "PT011"]
 "tools/**" = ["S"]
+"examples/**" = ["S", "T201", "INP001"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["lantern"]
@@ -121,7 +122,7 @@ known-first-party = ["lantern"]
 strict = true
 python_version = "3.11"
 mypy_path = "src"
-files = ["src", "tests", "tools"]
+files = ["src", "tests", "tools", "examples"]
 warn_unreachable = true
 
 [[tool.mypy.overrides]]
@@ -137,6 +138,7 @@ addopts = "-ra --strict-markers"
 markers = [
     "integration: against the reference server of the specification (spec/server), and DNS-SD on loopback",
     "conformance: the specification's conformance suite against the demo servers",
+    "examples: the files of examples/, run as a user would run them",
 ]
 filterwarnings = ["error"]
 

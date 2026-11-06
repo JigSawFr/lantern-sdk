@@ -340,6 +340,21 @@ def test_more_bytes_than_the_size_deletes_the_part(tmp_path: Path) -> None:
     asyncio.run(run())
 
 
+def test_an_empty_file_is_downloaded_without_a_request_for_a_part(tmp_path: Path) -> None:
+    sha = hashlib.sha256(b"").hexdigest()
+    c, _ = client(lambda r: (200, {}, b""), base="/api/lantern")
+    assert c.download("/f", tmp_path / "e", sha256=sha, size=0).read_bytes() == b""
+    assert not (tmp_path / "e.part").exists()
+
+    async def run() -> None:
+        transport = AsyncFakeTransport(lambda r: (200, {}, b""))
+        async with AsyncLanternClient("http://127.0.0.1:1/", transport=transport, base="/api/lantern") as ac:
+            assert (await ac.download("/f", tmp_path / "g", sha256=sha, size=0)).read_bytes() == b""
+        assert not (tmp_path / "g.part").exists()
+
+    asyncio.run(run())
+
+
 def test_a_bad_content_range_is_refused(tmp_path: Path) -> None:
     data = b"moss" * 50
     sha = hashlib.sha256(data).hexdigest()

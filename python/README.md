@@ -360,6 +360,10 @@ The client records what a server deprecates (`Deprecation`, `Sunset`, §
 `lantern.client.what_fits(apps, free)` says which apps fit in the device's
 free space (`installed_size`, § 6.3).
 
+## Examples
+
+[`examples/`](examples/) holds files run as they are, in CI, against the demo server or from their command line (`tests/test_examples.py`): [`read_library.py`](examples/read_library.py) (handshake, apps, `missing`, a verified download), [`serve_flask.py`](examples/serve_flask.py) and [`serve_fastapi.py`](examples/serve_fastapi.py) (a server in a dozen lines), [`static_library.py`](examples/static_library.py) (written, then read).
+
 ## What both sides check
 
 - `lantern.models`: every document of `spec/schemas/v1`, as dataclasses

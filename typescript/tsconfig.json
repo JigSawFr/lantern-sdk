@@ -20,7 +20,8 @@
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "customConditions": ["source"]
   },
-  "include": ["src", "test", "tools"]
+  "include": ["src", "test", "tools", "examples"]
 }
