@@ -64,6 +64,9 @@ const REQUIRED = [
   "missing.up-to-date",
   "missing.base",
   "missing.malformed",
+  // Draft 0.11 (the TLS and HSTS checks skip over plain HTTP; the unit tests cover them).
+  "handshake.uid",
+  "cache.immutable",
   // Draft 0.9.
   "apps.format",
   "missing.formats",

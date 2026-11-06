@@ -36,7 +36,7 @@ import { DATAGRAM, NAME, printable } from "../limits.ts";
 import { GRANT_HEADER, grantKey, plainHttpToPeer, verifyGrant } from "../peers.ts";
 import { isLocalAddress } from "./discovery.ts";
 import { FileRef, fileResponse } from "./files.ts";
-import { HttpProblem, isStream, problemResponse, ServerRequest, type ServerResponse } from "./http.ts";
+import { checkUid, HttpProblem, isStream, problemResponse, ServerRequest, type ServerResponse } from "./http.ts";
 import { Limiter, slowDown } from "./pairing.ts";
 
 export interface PeerOptions {
@@ -82,7 +82,7 @@ export class PeerServer {
     this.slots = slots;
     this.base = (options.base ?? "/lantern").replace(/\/+$/, "");
     this.name = printable(options.name ?? "Lantern peer", NAME);
-    this.uid = options.uid ?? randomUUID();
+    this.uid = options.uid === undefined ? randomUUID() : checkUid(options.uid);
     this.clock = options.clock ?? (() => Date.now() / 1000);
     this.#limiter = new Limiter(options.rate ?? 10, 1);
   }

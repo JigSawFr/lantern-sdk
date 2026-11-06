@@ -155,7 +155,7 @@ describe("the toolkit's server and the client", () => {
       } as never);
       ids.set(id, made.id);
     }
-    app = new LanternApp(lib, { uid: "test-shelf", name: "Variants", base: "/api/lantern" });
+    app = new LanternApp(lib, { uid: "a1b2c3d4-0000-4000-8000-0000000000a1", name: "Variants", base: "/api/lantern" });
     served = await listen(app);
     client = new LanternClient(served.url, { userAgent: AGENT, platform: "switch" });
   });
@@ -355,7 +355,11 @@ describe("a static export keeps requires and includes", () => {
       const { id, ...rest } = a;
       lib.addAppFile({ ...(rest as object), data: new TextEncoder().encode(id), name: "Paper Kite" } as never);
     }
-    await writeStatic(await libraryInput(lib, { uid: "test-shelf", name: "Variants" }), folder, { pageSize: 2 });
+    await writeStatic(
+      await libraryInput(lib, { uid: "a1b2c3d4-0000-4000-8000-0000000000a1", name: "Variants" }),
+      folder,
+      { pageSize: 2 },
+    );
     const staticLib = await StaticLibrary.open(new FileStaticSource(folder));
     const apps: App[] = [];
     for await (const a of staticLib.apps("switch")) apps.push(a);

@@ -67,7 +67,9 @@ import { fileResponse } from "./files.ts";
 import {
   BODY_LIMIT,
   badRequest,
+  checkUid,
   emptyResponse,
+  HSTS,
   HttpProblem,
   htmlResponse,
   jsonResponse,
@@ -385,6 +387,12 @@ export interface LanternAppOptions {
   tokenLifetime?: number;
   /** The scheme clients reach the server by, when a proxy in front of it changes it (a signature covers it). */
   scheme?: string;
+  /**
+   * Send `Strict-Transport-Security: max-age=31536000` (SPEC.md § 2, L-2-11). Off by default: tell the app it is
+   * served over HTTPS (true, or `scheme: "https"`), as when a proxy ends TLS in front of it. `listen()` and
+   * `nodeHandler()` add it to answers on a TLS socket by themselves.
+   */
+  hsts?: boolean;
   /** The server's approval page at `verify` (signing the user in, then `app.desk.approve()`). */
   pairPage?: (request: ServerRequest) => Promise<ServerResponse> | ServerResponse;
   /** Where a failure of the server goes (console.error by default); it answers 500 `internal`. */
@@ -462,6 +470,7 @@ export class LanternApp {
   readonly verify: string;
   readonly spki: string | undefined;
   readonly scheme: string | undefined;
+  readonly hsts: boolean;
   readonly pairPage: LanternAppOptions["pairPage"];
   readonly nonces: sig.NonceCache;
   readonly desk: PairingDesk | undefined;
@@ -499,7 +508,7 @@ export class LanternApp {
     const pageLimit = options.pageLimit ?? 500;
     if (pageLimit < 1 || pageLimit > 1000) throw new RangeError("pageLimit is 1 to 1000 (SPEC.md § 13)");
     this.library = library;
-    this.uid = options.uid;
+    this.uid = checkUid(options.uid);
     this.name = options.name;
     this.base = base.replace(/\/+$/, "");
     this.software = options.software;
@@ -519,6 +528,7 @@ export class LanternApp {
     this.verify = options.verify ?? "/pair";
     this.spki = options.spki?.toLowerCase();
     this.scheme = options.scheme;
+    this.hsts = options.hsts ?? options.scheme === "https";
     this.pairPage = options.pairPage;
     this.nonces = new sig.NonceCache(2 * skew);
     this.desk =
@@ -817,6 +827,7 @@ export class LanternApp {
         response = problemResponse(request, new HttpProblem(500, "internal", "The server failed; try again later."));
       }
     }
+    if (this.hsts) response.headers.set("Strict-Transport-Security", HSTS);
     return this.withCors(request, response);
   }
 
@@ -1434,7 +1445,8 @@ export class LanternApp {
       throw notFound("No such file on this server, or not for this caller.");
     const raw = await (this.library.chunks as NonNullable<Library["chunks"]>)(sha);
     if (raw === undefined) throw notFound("This file has no chunk index: read it whole.");
-    return jsonResponse(request, undefined, 200, raw);
+    // Private when the caller's grants decide who may read it (L-14-5).
+    return jsonResponse(request, undefined, 200, raw, true);
   }
 
   // Sync (SPEC.md § 20).
