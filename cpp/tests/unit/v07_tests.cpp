@@ -59,6 +59,11 @@ std::uint64_t number_of(const json::Value& value, std::string_view key)
 
 using Bytes = std::vector<std::byte>;
 
+constexpr std::size_t sz(std::uint64_t value)
+{
+    return static_cast<std::size_t>(value);
+}
+
 std::string text_of_bytes(std::span<const std::byte> bytes)
 {
     return { reinterpret_cast<const char*>(bytes.data()), bytes.size() };
@@ -110,10 +115,10 @@ Bytes file_of(const json::Value& testcase, const Bytes& base)
 {
     const json::Value& file = *testcase.find("file");
     if (file.find("zeros") != nullptr)
-        return Bytes(number_of(file, "zeros"), std::byte { 0 });
+        return Bytes(sz(number_of(file, "zeros")), std::byte { 0 });
     if (file.find("edit") != nullptr)
         return edited_file(base);
-    return stream(text_of(file, "seed"), number_of(file, "size"));
+    return stream(text_of(file, "seed"), sz(number_of(file, "size")));
 }
 
 class Collect final : public DownloadSink
@@ -277,7 +282,7 @@ TEST_CASE("chunks: the vectors' files cut, indexed and read back")
             const auto& pair = chunks[i].items();
             CHECK((*cuts)[i].length == *pair[0].to_u64());
             CHECK((*cuts)[i].offset == *offsets[i].to_u64());
-            CHECK(hex_of(Sha256::of(std::span(data).subspan((*cuts)[i].offset, (*cuts)[i].length)))
+            CHECK(hex_of(Sha256::of(std::span(data).subspan(sz((*cuts)[i].offset), sz((*cuts)[i].length))))
                 == pair[1].text());
         }
         // The index, in the bytes whose size and SHA-256 the vector gives
@@ -443,7 +448,7 @@ TEST_CASE("chunks: the vectors' update, planned and put together")
     for (const ByteRange& range : ranges)
     {
         REQUIRE(assembler.begin_range(range));
-        const auto body = std::span(u.new_file).subspan(range.first, range.length());
+        const auto body = std::span(u.new_file).subspan(sz(range.first), sz(range.length()));
         for (std::size_t at = 0; at < body.size(); at += 4099)
             REQUIRE(assembler.feed(body.subspan(at, std::min<std::size_t>(4099, body.size() - at))));
         REQUIRE(assembler.end_range());
@@ -488,7 +493,7 @@ TEST_CASE("chunks: a chunk that does not match, a short range, more than asked (
     REQUIRE(plan);
     REQUIRE(!ranges.empty());
     const ByteRange first = ranges[0];
-    const auto good       = std::span(u.new_file).subspan(first.first, first.length());
+    const auto good       = std::span(u.new_file).subspan(sz(first.first), sz(first.length()));
 
     SUBCASE("one byte of a chunk changed: nothing of it is kept")
     {
@@ -522,7 +527,7 @@ TEST_CASE("chunks: a chunk that does not match, a short range, more than asked (
         CHECK(rest->first <= first.last);
         // Another source reads it
         REQUIRE(assembler.begin_range(*rest));
-        REQUIRE(assembler.feed(std::span(u.new_file).subspan(rest->first, rest->length())));
+        REQUIRE(assembler.feed(std::span(u.new_file).subspan(sz(rest->first), sz(rest->length()))));
         REQUIRE(assembler.end_range());
         CHECK_FALSE(assembler.remaining(first));
     }
@@ -532,7 +537,7 @@ TEST_CASE("chunks: a chunk that does not match, a short range, more than asked (
         DeltaAssembler assembler(u.parsed, *plan, seeds, sink);
         REQUIRE(assembler.start());
         REQUIRE(assembler.begin_range(first));
-        const auto more = std::span(u.new_file).subspan(first.first, first.length() + 1);
+        const auto more = std::span(u.new_file).subspan(sz(first.first), sz(first.length() + 1));
         const auto fed  = assembler.feed(more);
         REQUIRE_FALSE(fed);
         CHECK(fed.error().category() == Category::integrity);
@@ -556,7 +561,7 @@ TEST_CASE("chunks: a chunk that does not match, a short range, more than asked (
         for (const ByteRange& range : ranges)
         {
             REQUIRE(assembler.begin_range(range));
-            REQUIRE(assembler.feed(std::span(u.new_file).subspan(range.first, range.length())));
+            REQUIRE(assembler.feed(std::span(u.new_file).subspan(sz(range.first), sz(range.length()))));
             REQUIRE(assembler.end_range());
         }
         const auto done = assembler.finish();
@@ -659,9 +664,9 @@ struct Sources
         a.headers.emplace_back("Content-Range",
             "bytes " + std::to_string(first) + "-" + std::to_string(shown_last) + "/"
                 + std::to_string(whole.size()));
-        a.body = whole.substr(first, last - first + 1);
+        a.body = whole.substr(sz(first), sz(last - first + 1));
         if (lie && range_too_long)
-            a.body += whole.substr(last + 1, 5000);
+            a.body += whole.substr(sz(last + 1), 5000);
         if (flip)
             a.body[a.body.size() / 2] = static_cast<char>(a.body[a.body.size() / 2] ^ 1);
         if (lie && cut_short)

@@ -8,7 +8,6 @@
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 
 namespace lantern
 {
@@ -205,16 +204,10 @@ Result<void> Client::fetch_range(DeltaAssembler& assembler, const ByteRange& ran
 {
     if (auto begun = assembler.begin_range(range); !begun)
         return begun;
-    std::array<char, 64> text {};
-    const std::string_view prefix = "bytes=";
-    std::ranges::copy(prefix, text.begin());
-    char* at = text.data() + prefix.size();
-    at       = std::to_chars(at, text.data() + text.size(), range.first).ptr;
-    *at++    = '-';
-    at       = std::to_chars(at, text.data() + text.size() - 1, range.last).ptr;
+    const std::string text = "bytes=" + std::to_string(range.first) + '-' + std::to_string(range.last);
     std::array<Header, 2> extra {};
     std::size_t extras = 0;
-    extra[extras++] = { "Range", std::string_view(text.data(), static_cast<std::size_t>(at - text.data())) };
+    extra[extras++]    = { "Range", std::string_view(text) };
     if (!source.grant.empty())
         extra[extras++] = { "Lantern-Grant", source.grant };
 

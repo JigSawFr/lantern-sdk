@@ -129,7 +129,7 @@ def test_more_than_the_limit_of_bytes() -> None:
         b"null",
         b'{"schema": "1"}',
         b'{"schema": true}',
-        b"[" * 100_000,
+        pytest.param(b"[" * 100_000, id="deep-nesting"),
     ],
 )
 def test_not_a_document(raw: bytes) -> None:
