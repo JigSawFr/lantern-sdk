@@ -15,6 +15,8 @@ pub mod download;
 pub mod error;
 pub mod generated;
 pub mod http;
+#[cfg(feature = "http")]
+pub mod http_transport;
 pub mod limits;
 pub mod pairing;
 pub mod problem;

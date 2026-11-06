@@ -40,9 +40,18 @@ README says what is there.
   (`tests/client.rs`, against a scripted server). The `os-entropy` feature
   gives `OsEntropy`.
 
-What follows, a slice at a time, the same as the other languages: the HTTP
-adapters and discovery, the rest of the client (titles, homebrew, saves,
-deltas), then the server toolkit. The table of families in the repository's README says where each
+- **An HTTP transport** (feature `http`: `reqwest` blocking, `rustls` with
+  `ring`): the server's key pinned as the TLS handshake ends, so that a key
+  other than the pinned one fails with `PinMismatch` before a byte of the
+  request is written (SPEC.md § 5.3); a server no CA vouches for gives the key
+  it showed, to pin at pairing; no redirect is followed; plain HTTP only to
+  loopback. Tested against local TLS servers (`tests/http.rs`). The timeout
+  bounds connecting (and a TCP keep-alive); `reqwest`'s blocking client has no
+  timeout between two reads of a body.
+
+What follows, a slice at a time, the same as the other languages: discovery
+(datagram, DNS-SD), the rest of the client (titles, homebrew, saves, deltas),
+then the server toolkit. The table of families in the repository's README says where each
 stands.
 
 ## Checks
