@@ -3442,7 +3442,7 @@ bool bind(BindContext& c, AdminUserUpdate& out)
         }
         else if (key == "scopes")
         {
-            if (!c.once(seen, 1, "AdminUserUpdate.scopes") || !c.strings(out.scopes, SIZE_MAX, 4096, "AdminUserUpdate.scopes"))
+            if (!c.once(seen, 1, "AdminUserUpdate.scopes") || !(out.scopes.emplace(c.allocator()), c.strings(*out.scopes, SIZE_MAX, 4096, "AdminUserUpdate.scopes")))
                 return false;
         }
         else if (!c.skip())
@@ -4389,11 +4389,11 @@ void write(json::Writer& w, const AdminUserUpdate& value)
         w.key("state");
         w.string(value.state);
     }
-    if (!value.scopes.empty())
+    if (value.scopes)
     {
         w.key("scopes");
         w.begin_array();
-        for (const auto& item : value.scopes)
+        for (const auto& item : *value.scopes)
         {
             w.string(item);
         }

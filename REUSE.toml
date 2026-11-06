@@ -17,8 +17,8 @@ SPDX-FileCopyrightText = "2026 JigSawFr"
 SPDX-License-Identifier = "MIT"
 
 # The C++ library's vendored code, under its own licences
-# (cpp/THIRD_PARTY_NOTICES.md): Monocypher, for ed25519, and doctest, for
-# the tests only.
+# (cpp/THIRD_PARTY_NOTICES.md): Monocypher, for ed25519, the AEAD of
+# encrypted saves and the wiping of secrets, and doctest, for the tests only.
 [[annotations]]
 path = ["cpp/third_party/monocypher/**"]
 precedence = "override"

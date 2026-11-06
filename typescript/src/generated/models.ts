@@ -1801,7 +1801,7 @@ export interface Sync {
   schema: number;
   generation: string;
   device?: string;
-  collections: Record<string, SyncCollectionState>;
+  collections: Record<string, SyncSummary>;
 }
 
 export function readSync(value: unknown, where = "Sync"): Sync {
@@ -1809,25 +1809,25 @@ export function readSync(value: unknown, where = "Sync"): Sync {
   m.req(o, "schema", where, m.int);
   m.req(o, "generation", where, m.str);
   m.opt(o, "device", where, m.str);
-  m.req(o, "collections", where, m.map(readSyncCollectionState));
+  m.req(o, "collections", where, m.map(readSyncSummary));
   return o as unknown as Sync;
 }
 
 /**
- * SyncCollectionState.
+ * SyncSummary.
  *
  * From sync/collections{}.
  */
-export interface SyncCollectionState {
+export interface SyncSummary {
   rev: number;
   items: number;
 }
 
-export function readSyncCollectionState(value: unknown, where = "SyncCollectionState"): SyncCollectionState {
+export function readSyncSummary(value: unknown, where = "SyncSummary"): SyncSummary {
   const o = m.obj(value, where);
   m.req(o, "rev", where, m.int);
   m.req(o, "items", where, m.int);
-  return o as unknown as SyncCollectionState;
+  return o as unknown as SyncSummary;
 }
 
 /**

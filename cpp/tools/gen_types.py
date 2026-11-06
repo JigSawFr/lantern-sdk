@@ -144,7 +144,7 @@ RAW_VALUES = {"EventData"}
 
 KEEP_MEMBERS = {"Requires"}
 # Arrays whose absence differs from an empty array: std::optional<Vector<…>>.
-PRESENT_ARRAYS = {"MissingRequest.formats", "MissingRequest.satisfies"}
+PRESENT_ARRAYS = {"AdminUserUpdate.scopes", "MissingRequest.formats", "MissingRequest.satisfies"}
 RAW_OBJECTS = {"RequiresMin"}
 DEFAULT_MAX_STRING = 4096
 SHA256 = "^[0-9a-f]{64}$"

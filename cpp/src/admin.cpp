@@ -46,7 +46,7 @@ Read<AdminUser> Client::admin_update_user(std::string_view name, const AdminUser
 {
     if (auto ok = ready(Family::admin); !ok)
         return std::unexpected(ok.error());
-    if (change.state.empty() && change.scopes.empty())
+    if (change.state.empty() && !change.scopes)
         return fail(
             Category::usage, "an account's change gives its state, its scopes, or both (SPEC.md 5.7)");
     auto url = api_url("/admin/users/");
