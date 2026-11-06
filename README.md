@@ -144,7 +144,7 @@ Each family of the specification (SPEC.md § 4.2), read as a client and served (
 | `titles` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | ✓ / – | – / – |
 | `changes` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | ✓ / – | – / – |
 | `sections` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
-| `homebrew` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
+| `homebrew` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | ✓ / – | – / – |
 | `saves` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
 | `cheats` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
 | `requests` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
