@@ -6,9 +6,9 @@ client library: a thin, stable C ABI over the C++23 library of
 through JNI) and any language with a C FFI. One header,
 `include/lantern/lantern.h` (C11 or later, and C++), and one library,
 `Lantern::c` (shared) or `Lantern::c_static`. It follows the
-specification's **draft 0.7** (C API version 6).
+specification's **draft 0.9** (C API version 7).
 
-**Status: draft 0.7, the C++ client whole.** The handshake, pairing with a
+**Status: draft 0.9, the C++ client whole.** The handshake, pairing with a
 device key, signed requests, invitations, the library and its cursors,
 `missing`, `changes`, titles, homebrew (manifest and path checks, install
 plans, signatures and pins, ports' data, requirements), cheat sets, verified
@@ -19,7 +19,10 @@ grants, mirrors and peers (a peer's gate included), sync with its consent,
 end-to-end encrypted saves, and static libraries; and since draft 0.7,
 differential updates (a chunk index, a file put together from seeds and
 ranges), a library found at an address, the upload's HEAD with its chunk
-size, and canonical JSON as RFC 8785 writes it: each a C function.
+size, and canonical JSON as RFC 8785 writes it; and since draft 0.9,
+packages a device cannot use (an app's `requires` and `includes`, the
+format filter, `formats` and `satisfies` of what is missing, the install
+decision, the preferred variant): each a C function.
 
 ## Building
 
@@ -373,6 +376,26 @@ Each family maps onto the C++ client's, with the rules above:
   length and `Lantern-Chunk-Size`; the resumable upload uses the last when
   the app kept the upload's address alone.
 
+- **Variants and packages a device cannot use (§ 6.1, § 6.2, § 6.3).** An
+  app carries `format`, `requires` (`lantern_app_get_requires_*`) and
+  `includes` (`lantern_app_get_includes_*`). `lantern_apps_query.format`
+  keeps one format; `lantern_missing_request.formats` and `.satisfies` say
+  what the device reads and provides (NULL: not sent; not NULL with a count
+  of 0: an empty array, which leaves out every app).
+  `lantern_app_install_decision()` says whether to install an app (and why
+  not: its format or a token it lacks, an update an installed app already
+  `lantern_app_included()`), `lantern_prefer_variant()` picks among variants
+  of one version (Annex B.15). `lantern_static_library_missing()` applies the
+  same filters and the versions an installed app includes.
+
+Version 7 of the API (draft 0.9) only added to version 6: the variant
+functions above (`lantern_app_install_decision()`, `lantern_app_included()`,
+`lantern_prefer_variant()`, `lantern_install_decision_*`, `lantern_install`)
+and members appended at the end of `lantern_apps_query` (`format`) and
+`lantern_missing_request` (`formats`, `formats_count`, `satisfies`,
+`satisfies_count`); a program built for version 6 sends neither, as before
+(`abi/lantern.abi` shows each).
+
 Version 6 of the API (draft 0.7) only added to version 5: `LANTERN_FAMILY_DELTAS`
 (15), `lantern_upload_head`, the differential-update and library-discovery
 functions and structs above, and `lantern_canonical_number()`; no existing
@@ -567,7 +590,7 @@ the reference server.
   (absent, newer, an unknown member); `spec/vectors` (signatures byte for
   byte, refused requests with their codes, SPKI fingerprints, paths, and
   draft 0.5's grants, sync-merge, static-layout and encrypted-saves, and
-  draft 0.7's canonical-json and chunks) written
+  draft 0.7's canonical-json and chunks, draft 0.9's app-requires) written
   as a C header by `tests/support/vectors.py`; an allocator that counts,
   back to zero; structs of an older header. Linked once against the shared
   library (what it exports is enough) and once against the static one.
@@ -582,7 +605,9 @@ the reference server.
   account deleted, and the library as a static library over HTTP and from
   its folder; and draft 0.7's differential update of the reference library
   (an older package as the seed, the ranges read from the server) and the
-  library found at an address.
+  library found at an address; and draft 0.9's variants of one game (the
+  format filter, `formats` and `satisfies`, the install decision) against
+  the same server and the library as files.
 - **The header** compiled alone as C11, C17 and C++23 with every warning,
   and **the ABI** (`tools/abi_dump.py --check`, with the library's exports).
 - ASan and UBSan builds (`asan`, `ubsan` presets), and clang-tidy with

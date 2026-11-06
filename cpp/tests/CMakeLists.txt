@@ -47,7 +47,8 @@ if (LANTERN_BUILD_TESTS)
         unit/v04_client_tests.cpp
         unit/v05_client_tests.cpp
         unit/v05_vectors_tests.cpp
-        unit/v07_tests.cpp)
+        unit/v07_tests.cpp
+        unit/v09_tests.cpp)
     target_link_libraries(lantern_unit_tests PRIVATE Lantern::lantern lantern_doctest)
     target_compile_definitions(lantern_unit_tests PRIVATE LANTERN_SPEC_DIR="${LANTERN_SPEC_DIR}"
         $<$<BOOL:${WIN32}>:_CRT_SECURE_NO_WARNINGS>)
@@ -62,7 +63,7 @@ if (LANTERN_BUILD_TESTS)
     find_package(Python3 COMPONENTS Interpreter)
     if (Python3_FOUND AND TARGET lantern_posix_http)
         add_executable(lantern_integration_tests integration/main.cpp integration/client_tests.cpp
-            integration/v04_tests.cpp integration/v05_tests.cpp integration/v07_tests.cpp integration/hostile_tests.cpp)
+            integration/v04_tests.cpp integration/v05_tests.cpp integration/v07_tests.cpp integration/v09_tests.cpp integration/hostile_tests.cpp)
         target_link_libraries(lantern_integration_tests PRIVATE Lantern::lantern Lantern::posix_http lantern_doctest)
         lantern_warnings(lantern_integration_tests)
         if (LANTERN_NO_EXCEPTIONS)

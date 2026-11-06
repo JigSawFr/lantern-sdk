@@ -186,8 +186,8 @@ static void apps_by_their_cursors(void)
         lantern_apps_page_free(page);
         ++pages;
     } while (cursor[0] != '\0' && pages < 20);
-    CHECK(seen == 10);
-    CHECK(total == 10);
+    CHECK(seen == 12);
+    CHECK(total == 12);
     CHECK(pages == 4);
 
     lantern_apps_query bogus = LANTERN_INIT(lantern_apps_query);
@@ -1910,6 +1910,179 @@ static void v07_differential_update(void)
     device_close(&d);
 }
 
+/* Draft 0.9: the variants of one game, the format filter, formats and
+ * satisfies of what is missing, the install decision and the preferred
+ * variant, as the reference server lists them. */
+static size_t v09_missing(device* d, const lantern_installed_app* installed, size_t installed_count,
+    const char* want, const char* const* formats, size_t formats_count, const char* const* satisfies,
+    size_t satisfies_count, char ids[8][64])
+{
+    lantern_error error             = LANTERN_INIT(lantern_error);
+    const char* const wanted[]      = { want };
+    lantern_missing_request request = LANTERN_INIT(lantern_missing_request);
+    request.installed               = installed;
+    request.installed_count         = installed_count;
+    request.want                    = wanted;
+    request.want_count              = 1;
+    request.formats                 = formats;
+    request.formats_count           = formats_count;
+    request.satisfies               = satisfies;
+    request.satisfies_count         = satisfies_count;
+    lantern_apps_page* page         = NULL;
+    if (!CHECK_CALL(
+            lantern_client_missing(d->client, &request, NULL, NULL, &page, &error), LANTERN_OK, &error))
+        return 99;
+    const size_t count = lantern_apps_page_get_items_count(page);
+    for (size_t i = 0; i < count && i < 8; ++i)
+    {
+        const lantern_app* app = lantern_apps_page_get_items_at(page, i);
+        uint64_t version       = 0;
+        (void)lantern_app_get_version_code(app, &version);
+        snprintf(ids[i], 64, "%s/%llu/%s", lantern_app_get_app_id(app).data, (unsigned long long)version,
+            lantern_app_get_format(app).data);
+    }
+    lantern_apps_page_free(page);
+    return count;
+}
+
+static bool v09_has(char ids[8][64], size_t count, const char* id)
+{
+    for (size_t i = 0; i < count && i < 8; ++i)
+    {
+        if (strcmp(ids[i], id) == 0)
+            return true;
+    }
+    return false;
+}
+
+static void v09_variants(void)
+{
+    device d;
+    OPEN(d, "LANTERN_TEST_PUBLIC", "switch", false);
+    lantern_error error = LANTERN_INIT(lantern_error);
+
+    /* The listing, whole, and by format */
+    size_t formats_seen = 0, nsz = 0;
+    const lantern_app* lz4 = NULL;
+    lantern_apps_page* pages[8];
+    size_t page_count = 0;
+    char cursor[256]  = "";
+    do
+    {
+        lantern_apps_query query = LANTERN_INIT(lantern_apps_query);
+        query.cursor             = cursor;
+        REQUIRE_CALL(lantern_client_apps(d.client, &query, &pages[page_count], &error), LANTERN_OK, &error);
+        lantern_apps_page* page = pages[page_count++];
+        for (size_t i = 0; i < lantern_apps_page_get_items_count(page); ++i)
+        {
+            const lantern_app* app = lantern_apps_page_get_items_at(page, i);
+            uint64_t version       = 0;
+            ++formats_seen;
+            nsz += STR_EQ(lantern_app_get_format(app), "nsz") ? 1U : 0U;
+            if (STR_EQ(lantern_app_get_app_id(app), "0100EFEF00020000")
+                && lantern_app_get_version_code(app, &version) && version == 65536)
+                lz4 = app;
+        }
+        snprintf(cursor, sizeof(cursor), "%s", lantern_apps_page_get_next(page).data);
+    } while (cursor[0] != '\0' && page_count < 8);
+    CHECK(formats_seen == 12);
+    REQUIRE(lz4 != NULL);
+    CHECK(lantern_app_get_requires_count(lz4) == 2);
+    CHECK(STR_EQ(lantern_app_get_requires_at(lz4, 1), "sigpatch"));
+    CHECK(lantern_app_get_includes_count(lz4) == 1);
+
+    lantern_apps_query only_nsz = LANTERN_INIT(lantern_apps_query);
+    only_nsz.format             = "nsz";
+    lantern_apps_page* filtered = NULL;
+    REQUIRE_CALL(lantern_client_apps(d.client, &only_nsz, &filtered, &error), LANTERN_OK, &error);
+    CHECK(lantern_apps_page_get_items_count(filtered) == nsz);
+    for (size_t i = 0; i < lantern_apps_page_get_items_count(filtered); ++i)
+        CHECK(STR_EQ(lantern_app_get_format(lantern_apps_page_get_items_at(filtered, i)), "nsz"));
+    lantern_apps_page_free(filtered);
+    only_nsz.format = "zzlantern";
+    REQUIRE_CALL(lantern_client_apps(d.client, &only_nsz, &filtered, &error), LANTERN_OK, &error);
+    CHECK(lantern_apps_page_get_items_count(filtered) == 0);
+    lantern_apps_page_free(filtered);
+
+    /* The install decision of what the server lists: the [LZ4] .nsp needs sigpatch */
+    const char* const known[]          = { "nsp", "nsz", "xci", "xcz" };
+    const char* const tokens[]         = { "fs-compression", "ncz-lz4" };
+    lantern_install_decision* decision = NULL;
+    REQUIRE_CALL(lantern_app_install_decision(lz4, known, 4, tokens, 2, NULL, 0, NULL, &decision, &error),
+        LANTERN_OK, &error);
+    CHECK(lantern_install_decision_get_verdict(decision) == LANTERN_UNAVAILABLE);
+    REQUIRE(lantern_install_decision_get_reason_count(decision) == 1);
+    CHECK(STR_EQ(lantern_install_decision_get_reason_at(decision, 0), "requires 'sigpatch'"));
+    lantern_install_decision_free(decision);
+
+    /* Moss and Ember 1.0 installed: the update, in each variant; formats and tokens narrow it */
+    const lantern_installed_app moss[]   = { { "0100EFEF00020000", 0 } };
+    const lantern_installed_app lz4_in[] = { { "0100EFEF00020000", 65536 } };
+    char ids[8][64];
+    CHECK(v09_missing(&d, moss, 1, "update", NULL, 0, NULL, 0, ids) == 2);
+    const char* const nsp_only[] = { "nsp" };
+    size_t count                 = v09_missing(&d, moss, 1, "update", nsp_only, 1, NULL, 0, ids);
+    CHECK(count == 1 && v09_has(ids, count, "0100EFEF00020800/131072/nsp"));
+    CHECK(v09_missing(&d, moss, 1, "update", nsp_only, 0, NULL, 0, ids) == 0); /* present and empty */
+    count = v09_missing(&d, moss, 1, "update", NULL, 0, nsp_only, 0, ids);
+    CHECK(count == 1 && v09_has(ids, count, "0100EFEF00020800/131072/nsp"));
+    CHECK(v09_missing(&d, lz4_in, 1, "update", NULL, 0, NULL, 0, ids) == 0); /* the update is inside */
+
+    /* The variants of the update: the plain .nsp is preferred over the smaller one that needs a token */
+    lantern_apps_page* update_page      = NULL;
+    const lantern_installed_app none[1] = { { "0100EFEF00020000", 0 } };
+    const char* const wanted[]          = { "update" };
+    lantern_missing_request request     = LANTERN_INIT(lantern_missing_request);
+    request.installed                   = none;
+    request.installed_count             = 1;
+    request.want                        = wanted;
+    request.want_count                  = 1;
+    REQUIRE_CALL(
+        lantern_client_missing(d.client, &request, NULL, NULL, &update_page, &error), LANTERN_OK, &error);
+    const lantern_app* variants[8];
+    const size_t variant_count = lantern_apps_page_get_items_count(update_page);
+    REQUIRE(variant_count == 2);
+    for (size_t i = 0; i < variant_count; ++i)
+        variants[i] = lantern_apps_page_get_items_at(update_page, i);
+    const lantern_app* best = lantern_prefer_variant(variants, variant_count);
+    REQUIRE(best != NULL);
+    CHECK(STR_EQ(lantern_app_get_format(best), "nsp"));
+    /* An installed LZ4 base holds the update */
+    CHECK(lantern_app_included(best, &lz4, 1));
+    lantern_apps_page_free(update_page);
+
+    /* The static library says the same as the server */
+    lantern_transport* transport = test_loopback_transport(0);
+    REQUIRE(transport != NULL);
+    lantern_static_files* http = NULL;
+    REQUIRE_CALL(lantern_static_files_create_http(
+                     transport, env("LANTERN_TEST_STATIC"), "LanternCTests/0.9", NULL, &http, &error),
+        LANTERN_OK, &error);
+    lantern_static_library* library = NULL;
+    REQUIRE_CALL(lantern_static_library_open(http, NULL, NULL, &library, &error), LANTERN_OK, &error);
+    request.formats            = nsp_only;
+    request.formats_count      = 1;
+    lantern_app_list* computed = NULL;
+    REQUIRE_CALL(
+        lantern_static_library_missing(library, "switch", &request, &computed, &error), LANTERN_OK, &error);
+    REQUIRE(lantern_app_list_count(computed) == 1);
+    CHECK(STR_EQ(lantern_app_get_format(lantern_app_list_at(computed, 0)), "nsp"));
+    lantern_app_list_free(computed);
+    request.installed     = lz4_in;
+    request.formats       = NULL;
+    request.formats_count = 0;
+    REQUIRE_CALL(
+        lantern_static_library_missing(library, "switch", &request, &computed, &error), LANTERN_OK, &error);
+    CHECK(lantern_app_list_count(computed) == 0);
+    lantern_app_list_free(computed);
+    lantern_static_library_free(library);
+    lantern_static_files_free(http);
+    lantern_transport_free(transport);
+    for (size_t i = 0; i < page_count; ++i)
+        lantern_apps_page_free(pages[i]);
+    device_close(&d);
+}
+
 int main(int argc, char** argv)
 {
     static const test_case tests[] = {
@@ -1936,6 +2109,7 @@ int main(int argc, char** argv)
         { "integration v05: an account deleted, its name typed again", v05_account_deletion },
         { "integration v05: the static library, over HTTP and from its folder", v05_static_library },
         { "integration v07: a differential update, and an address's library", v07_differential_update },
+        { "integration v09: variants, the format filter, formats and satisfies", v09_variants },
     };
     const test_case* const lists[] = { tests };
     const size_t counts[]          = { sizeof(tests) / sizeof(tests[0]) };

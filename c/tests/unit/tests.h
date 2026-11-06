@@ -22,5 +22,7 @@ extern const test_case v05_tests[];
 extern const size_t v05_test_count;
 extern const test_case v07_tests[];
 extern const size_t v07_test_count;
+extern const test_case v09_tests[];
+extern const size_t v09_test_count;
 
 #endif

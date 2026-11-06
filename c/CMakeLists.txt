@@ -110,7 +110,8 @@ set(LANTERN_C_SOURCES
     src/state.cpp
     src/static_library.cpp
     src/sync.cpp
-    src/transports.cpp)
+    src/transports.cpp
+    src/variants.cpp)
 
 # Compiled once, for both libraries
 add_library(lantern_c_objects OBJECT ${LANTERN_C_SOURCES})

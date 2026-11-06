@@ -45,10 +45,10 @@
  * adds to the API (functions, members appended to a struct, constants);
  * nothing is ever removed or changed while LANTERN_C_ABI_VERSION, the
  * shared library's SONAME version, stays the same. */
-#define LANTERN_C_API_VERSION 6
+#define LANTERN_C_API_VERSION 7
 #define LANTERN_C_ABI_VERSION 1
 #define LANTERN_VERSION_STRING "0.5.0"
-#define LANTERN_SPEC_DRAFT "0.7"
+#define LANTERN_SPEC_DRAFT "0.9"
 
 /* x-release-please-end */
 
@@ -862,6 +862,8 @@ typedef struct lantern_apps_query
     const char* sort; /* "name", "added" or "release" */
     uint32_t page_size; /* 0: the server's */
     const char* cursor; /* a page's `next` */
+    const char* format; /* since version 7: keeps the apps of one format (§ 6.2); an unknown one gives an
+                           empty list */
 } lantern_apps_query;
 /* § 6.2: a page; pass its `next` as the next query's cursor. A 410
  * (LANTERN_CODE_GONE): the cursor expired, read from the start. */
@@ -880,6 +882,13 @@ typedef struct lantern_missing_request
     size_t installed_count;
     const char* const* want; /* "update", "dlc" */
     size_t want_count;
+    /* Since version 7 (§ 6.3): what the device can install. NULL: not sent,
+     * the filter is not applied. Not NULL with a count of 0: an empty array,
+     * which leaves out every app. */
+    const char* const* formats; /* the package formats it reads */
+    size_t formats_count;
+    const char* const* satisfies; /* the `requires` tokens it provides */
+    size_t satisfies_count;
 } lantern_missing_request;
 /* § 6.3: needs a platform (the configuration's, or `platform`). */
 LANTERN_API lantern_status lantern_client_missing(lantern_client* client,
@@ -1123,6 +1132,40 @@ LANTERN_API lantern_offer lantern_requires_check_get_offer(const lantern_require
 LANTERN_API size_t lantern_requires_check_get_condition_count(const lantern_requires_check* check);
 LANTERN_API bool lantern_requires_check_get_condition(
     const lantern_requires_check* check, size_t index, lantern_condition* out);
+
+/* § 6.1, Annex B.15 (since version 7): packages a device cannot use, and
+ * variants of one game. The apps are those of a page or a list; an
+ * `installed` array holds the apps the device has installed. */
+typedef int32_t lantern_install;
+enum
+{
+    LANTERN_INSTALL     = 0, /* the client knows the format and every token, and no update is inside */
+    LANTERN_UNAVAILABLE = 1 /* listed, not installed, with reasons */
+};
+typedef struct lantern_install_decision lantern_install_decision;
+/* Whether a client installs `app`. `formats`: the package formats it knows;
+ * `satisfies`: the `requires` tokens it knows and the device provides;
+ * `installed` (may be NULL with a count of 0): the apps the device has
+ * installed. A format or a token it does not know is refused (L-6.1-3,
+ * L-6.1-4), and so is an update that an installed app includes (L-6.1-5). */
+LANTERN_API lantern_status lantern_app_install_decision(const lantern_app* app, const char* const* formats,
+    size_t formats_count, const char* const* satisfies, size_t satisfies_count,
+    const lantern_app* const* installed, size_t installed_count, const lantern_allocator* allocator,
+    lantern_install_decision** out, lantern_error* error);
+LANTERN_API void lantern_install_decision_free(lantern_install_decision* decision);
+LANTERN_API lantern_install lantern_install_decision_get_verdict(const lantern_install_decision* decision);
+/* "format 'xcz'", "requires 'sigpatch'", "already included by an installed app". */
+LANTERN_API size_t lantern_install_decision_get_reason_count(const lantern_install_decision* decision);
+LANTERN_API lantern_str lantern_install_decision_get_reason_at(
+    const lantern_install_decision* decision, size_t index);
+/* L-6.1-5: whether `app` is an update that an installed app includes at its
+ * `version_code` or above. */
+LANTERN_API bool lantern_app_included(
+    const lantern_app* app, const lantern_app* const* installed, size_t installed_count);
+/* Annex B.15: the variant to install by default among apps that share an
+ * `app_id` and a `version_code`: the fewest `requires`, then the smallest
+ * `size`, then the smaller `id`. One of `variants`, NULL for none. */
+LANTERN_API const lantern_app* lantern_prefer_variant(const lantern_app* const* variants, size_t count);
 
 /* Paths on the device (§ 8.2, § 8.6). */
 typedef int32_t lantern_path_problem;

@@ -33,7 +33,7 @@ import type {
 import * as models from "./generated/models.ts";
 import { plainHttpAllowed } from "./http.ts";
 import { CHEAT_SET, JSON_DOCUMENT, loadJson } from "./limits.ts";
-import { missing } from "./missing.ts";
+import { type MissingFilters, missing } from "./missing.ts";
 import type { Check } from "./model.ts";
 import { type HasherFactory, sha256Factory } from "./sha256.ts";
 import { isPlatform } from "./vocabulary.ts";
@@ -407,10 +407,11 @@ export class StaticLibrary {
     platform: string,
     installed: Iterable<[string, number]>,
     want: Iterable<string> = ["update", "dlc"],
+    filters: MissingFilters = {},
   ): Promise<App[]> {
     const apps: App[] = [];
     for await (const app of this.apps(platform)) apps.push(app);
-    const found = missing(apps, platform, [...installed], new Set(want));
+    const found = missing(apps, platform, [...installed], new Set(want), filters);
     const byName = (a: App, b: App): number => {
       const x = (a.name ?? "").toLowerCase();
       const y = (b.name ?? "").toLowerCase();

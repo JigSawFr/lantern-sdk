@@ -326,6 +326,28 @@ lantern::Error from_callback(
     return lantern::Error::make(category, detail);
 }
 
+void fill_missing_request(lantern::MissingRequest& out, const lantern_missing_request& request)
+{
+    out.installed.reserve(request.installed_count);
+    for (std::size_t i = 0; i < request.installed_count; ++i)
+    {
+        out.installed.emplace_back();
+        out.installed.back().app_id       = text(request.installed[i].app_id);
+        out.installed.back().version_code = request.installed[i].version_code;
+    }
+    const auto words
+        = [&](lantern::Vector<lantern::String>& to, const char* const* items, std::size_t count) {
+              to.reserve(count);
+              for (std::size_t i = 0; i < count; ++i)
+                  to.emplace_back(text(items[i]));
+          };
+    words(out.want, request.want, request.want_count);
+    if (request.formats != nullptr)
+        words(out.formats.emplace(out.want.get_allocator()), request.formats, request.formats_count);
+    if (request.satisfies != nullptr)
+        words(out.satisfies.emplace(out.want.get_allocator()), request.satisfies, request.satisfies_count);
+}
+
 } // namespace lantern_c
 
 using namespace lantern_c;

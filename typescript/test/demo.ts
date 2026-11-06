@@ -115,7 +115,49 @@ export function addDeltaApps(lib: MemoryLibrary): void {
   });
 }
 
-export async function buildLibrary(extras: { deltas?: boolean } = {}): Promise<MemoryLibrary> {
+/**
+ * A game in variants (SPEC.md § 6.1): its base in three packages of the same app_id and version_code (plain, stored
+ * with the firmware's compression layer, in .nsz), the stored one including the newest update, and updates in
+ * several formats, one of which takes a token. Not in the default library, whose counts many tests rely on; the
+ * conformance runs and `node test/demo.ts` add them.
+ */
+export function addVariantApps(lib: MemoryLibrary): void {
+  const game = "0100AB7800040000";
+  const update = "0100AB7800040800";
+  const variants: [
+    string,
+    number,
+    string,
+    number,
+    string[] | undefined,
+    { app_id: string; version_code: number }[] | undefined,
+  ][] = [
+    [game, 0, "nsp", 3000, undefined, undefined],
+    [game, 0, "nsz", 1800, ["ncz-sparse"], undefined],
+    [game, 65536, "nsp", 3000, ["fs-compression", "sigpatch"], [{ app_id: update, version_code: 131072 }]],
+    [update, 65536, "nsp", 800, undefined, undefined],
+    [update, 131072, "nsz", 700, undefined, undefined],
+    [update, 131072, "xcz", 600, ["ncz-lz4"], undefined],
+  ];
+  variants.forEach(([appId, version, format, size, requires, includes], i) => {
+    lib.addAppFile({
+      data: blob(`kite-${appId}-${version}-${format}`, size),
+      platform: "switch",
+      title_id: game,
+      app_id: appId,
+      type: appId === game ? "base" : "update",
+      version_code: version,
+      name: "Paper Kite",
+      format,
+      ...(requires !== undefined ? { requires } : {}),
+      ...(includes !== undefined ? { includes } : {}),
+      added: `2026-10-${String(22 + i).padStart(2, "0")}T12:00:00Z`,
+    });
+  });
+  lib.addTitle({ platform: "switch", title_id: game, name: "Paper Kite", release: "2026-10-22", genres: ["racing"] });
+}
+
+export async function buildLibrary(extras: { deltas?: boolean; variants?: boolean } = {}): Promise<MemoryLibrary> {
   const lib = new MemoryLibrary({ base: BASE });
   // Switch games: a base, two updates and an add-on; a second game; an Android app.
   const games: [string, string, string, string, number, string | undefined, string, number][] = [
@@ -200,6 +242,7 @@ export async function buildLibrary(extras: { deltas?: boolean } = {}): Promise<M
   lib.addSection({ id: "together", title: "Play together", apps: [appIds[0] ?? ""] });
   await addHomebrew(lib);
   if (extras.deltas) addDeltaApps(lib);
+  if (extras.variants) addVariantApps(lib);
   lib.addCheat({
     platform: "switch",
     title_id: "0100AB1200010000",
@@ -435,7 +478,7 @@ export async function demoAccounts(): Promise<MemoryAccounts> {
 
 export async function makeLantern(
   options: Partial<LanternAppOptions> = {},
-  extras: { deltas?: boolean } = {},
+  extras: { deltas?: boolean; variants?: boolean } = {},
 ): Promise<LanternApp> {
   return new LanternApp(await buildLibrary(extras), {
     uid: UID,
@@ -459,7 +502,7 @@ async function main(): Promise<void> {
     options: { port: { type: "string", default: "8080" }, "key-file": { type: "string" } },
   });
   if (values["key-file"] !== undefined) writeFileSync(values["key-file"], `${bytes.toBase64(DEMO_SEED)}\n`);
-  const app = await makeLantern({}, { deltas: true });
+  const app = await makeLantern({}, { deltas: true, variants: true });
   const served = await listen(app, { port: Number(values.port) });
   console.warn(`demo: ${served.url}; token ${DEMO_TOKEN}, bound to its key`);
   process.stdout.write(`${JSON.stringify({ url: served.url, token: DEMO_TOKEN })}\n`);

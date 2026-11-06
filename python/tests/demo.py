@@ -158,6 +158,35 @@ def build_library(delta: bool = False) -> MemoryLibrary:
             format=fmt,
             added=f"2026-10-{10 + i:02d}T12:00:00Z",
         )
+    # Variants of one game (SPEC.md § 6.1): the same app_id and version_code in another format, one needing
+    # the firmware's compression layer; and a package that includes the update it was built from.
+    lib.add_app_file(
+        data=blob("0100EF5600030000v0z", 0),
+        platform="switch",
+        title_id="0100EF5600030000",
+        app_id="0100EF5600030000",
+        type="base",
+        version_code=0,
+        version_name="1.0.0",
+        name="Quiet Tide",
+        format="nsz",
+        added="2026-10-16T12:00:00Z",
+        requires=["fs-compression"],
+    )
+    lib.add_app_file(
+        data=blob("0100CD3400020000v0xcz", 3000),
+        platform="switch",
+        title_id="0100CD3400020000",
+        app_id="0100CD3400020000",
+        type="base",
+        version_code=0,
+        version_name="1.3.0",
+        name="Copper Moth",
+        format="xcz",
+        added="2026-10-17T12:00:00Z",
+        requires=["fs-compression", "sigpatch"],
+        includes=[("0100CD3400020800", 196608)],
+    )
     if delta:
         for version, data, name in zip((65536, 196608), delta_pair(), ("1.1.0", "1.3.0"), strict=True):
             lib.add_app_file(

@@ -258,6 +258,7 @@ class AsyncLanternClient:
         *,
         platform: str | None = None,
         type: str | None = None,
+        format: str | None = None,
         title_id: str | None = None,
         q: str | None = None,
         sort: str | None = None,
@@ -266,7 +267,14 @@ class AsyncLanternClient:
     ) -> AppsPage:
         return await self._send(
             self.core.apps(
-                platform=platform, type=type, title_id=title_id, q=q, sort=sort, page_size=page_size, cursor=cursor
+                platform=platform,
+                type=type,
+                format=format,
+                title_id=title_id,
+                q=q,
+                sort=sort,
+                page_size=page_size,
+                cursor=cursor,
             )
         )
 
@@ -275,13 +283,21 @@ class AsyncLanternClient:
         *,
         platform: str | None = None,
         type: str | None = None,
+        format: str | None = None,
         title_id: str | None = None,
         q: str | None = None,
         sort: str | None = None,
         page_size: int | None = None,
     ) -> AsyncIterator[App]:
         call = self.core.apps(
-            platform=platform, type=type, title_id=title_id, q=q, sort=sort, page_size=page_size, cursor=None
+            platform=platform,
+            type=type,
+            format=format,
+            title_id=title_id,
+            q=q,
+            sort=sort,
+            page_size=page_size,
+            cursor=None,
         )
         return self._pages(call, lambda p: p.items, lambda p: p.next)
 
@@ -291,11 +307,21 @@ class AsyncLanternClient:
         want: Iterable[str] = ("update", "dlc"),
         *,
         platform: str | None = None,
+        formats: Iterable[str] | None = None,
+        satisfies: Iterable[str] | None = None,
         page_size: int | None = None,
         cursor: str | None = None,
     ) -> AppsPage:
         return await self._send(
-            self.core.missing(installed, want, platform=platform, page_size=page_size, cursor=cursor)
+            self.core.missing(
+                installed,
+                want,
+                platform=platform,
+                page_size=page_size,
+                cursor=cursor,
+                formats=formats,
+                satisfies=satisfies,
+            )
         )
 
     def iter_missing(
@@ -304,9 +330,19 @@ class AsyncLanternClient:
         want: Iterable[str] = ("update", "dlc"),
         *,
         platform: str | None = None,
+        formats: Iterable[str] | None = None,
+        satisfies: Iterable[str] | None = None,
         page_size: int | None = None,
     ) -> AsyncIterator[App]:
-        call = self.core.missing(list(installed), want, platform=platform, page_size=page_size, cursor=None)
+        call = self.core.missing(
+            list(installed),
+            want,
+            platform=platform,
+            page_size=page_size,
+            cursor=None,
+            formats=formats,
+            satisfies=satisfies,
+        )
         return self._pages(call, lambda p: p.items, lambda p: p.next)
 
     async def changes(self, since: str | None = None, *, platform: str | None = None) -> Changes:

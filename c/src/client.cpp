@@ -352,6 +352,7 @@ LANTERN_API lantern_status lantern_client_apps(
     settings.type      = text(q.type);
     settings.title_id  = text(q.title_id);
     settings.q         = text(q.q);
+    settings.format    = text(q.format);
     settings.sort      = text(q.sort);
     settings.page_size = page_size(q.page_size);
     settings.cursor    = text(q.cursor);
@@ -366,17 +367,12 @@ LANTERN_API lantern_status lantern_client_missing(lantern_client* client,
         return usage(error, "a NULL argument");
     *out                            = nullptr;
     const lantern_missing_request r = copy_struct(request);
-    if ((r.installed == nullptr && r.installed_count != 0) || (r.want == nullptr && r.want_count != 0))
+    if ((r.installed == nullptr && r.installed_count != 0) || (r.want == nullptr && r.want_count != 0)
+        || (r.formats == nullptr && r.formats_count != 0)
+        || (r.satisfies == nullptr && r.satisfies_count != 0))
         return usage(error, "a NULL array with items");
     lantern::MissingRequest settings(lantern::Allocator(resource_of(client)));
-    settings.installed.reserve(r.installed_count);
-    for (std::size_t i = 0; i < r.installed_count; ++i)
-    {
-        settings.installed.emplace_back();
-        settings.installed.back().app_id       = text(r.installed[i].app_id);
-        settings.installed.back().version_code = r.installed[i].version_code;
-    }
-    strings(settings.want, r.want, r.want_count);
+    fill_missing_request(settings, r);
     return give(client, client->client.missing(settings, text(cursor), text(platform)), out, error);
 }
 

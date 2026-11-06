@@ -437,6 +437,8 @@ export interface App {
   name?: string;
   size: number;
   format: string;
+  requires?: string[];
+  includes?: AppIncludes[];
   sha256: string;
   added?: string;
   file: string;
@@ -458,6 +460,8 @@ export function readApp(value: unknown, where = "App"): App {
   m.opt(o, "name", where, m.str);
   m.req(o, "size", where, m.int);
   m.req(o, "format", where, m.str);
+  m.opt(o, "requires", where, m.list(m.str));
+  m.opt(o, "includes", where, m.list(readAppIncludes));
   m.req(o, "sha256", where, m.str);
   m.opt(o, "added", where, m.str);
   m.req(o, "file", where, m.str);
@@ -466,6 +470,23 @@ export function readApp(value: unknown, where = "App"): App {
   m.opt(o, "mirrors", where, m.list(readMirror));
   m.opt(o, "chunks", where, readChunksRef);
   return o as unknown as App;
+}
+
+/**
+ * AppIncludes.
+ *
+ * From common.json#/$defs/app_includes[].
+ */
+export interface AppIncludes {
+  app_id: string;
+  version_code: number;
+}
+
+export function readAppIncludes(value: unknown, where = "AppIncludes"): AppIncludes {
+  const o = m.obj(value, where);
+  m.req(o, "app_id", where, m.str);
+  m.req(o, "version_code", where, m.int);
+  return o as unknown as AppIncludes;
 }
 
 /**
@@ -1474,6 +1495,8 @@ export interface MissingRequest {
   schema: number;
   installed: InstalledApp[];
   want: string[];
+  formats?: string[];
+  satisfies?: string[];
 }
 
 export function readMissingRequest(value: unknown, where = "MissingRequest"): MissingRequest {
@@ -1481,6 +1504,8 @@ export function readMissingRequest(value: unknown, where = "MissingRequest"): Mi
   m.req(o, "schema", where, m.int);
   m.req(o, "installed", where, m.list(readInstalledApp));
   m.req(o, "want", where, m.list(m.str));
+  m.opt(o, "formats", where, m.list(m.str));
+  m.opt(o, "satisfies", where, m.list(m.str));
   return o as unknown as MissingRequest;
 }
 

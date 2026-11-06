@@ -4,7 +4,7 @@
  * through fetchHandler() (web Requests, as Hono hands them over), anonymously
  * and with a token bound to its key, with `--admin-writes` (an account made,
  * then deleted) and `--peer` (a PeerServer of the toolkit's, holding the
- * demo's files). The demo offers every family of draft 0.7: sections, save
+ * demo's files). The demo offers every family of draft 0.9: sections, save
  * backups (encrypted ones too), cheat writes and requests among them, which
  * the suite writes then deletes. With its token, which holds every scope, the
  * demo reaches every level LEVELS says. Then lantern-static writes
@@ -64,6 +64,12 @@ const REQUIRED = [
   "missing.up-to-date",
   "missing.base",
   "missing.malformed",
+  // Draft 0.9.
+  "apps.format",
+  "missing.formats",
+  "missing.satisfies",
+  "missing.arrays",
+  "missing.includes",
   "files.whole",
   "files.ranges",
   "files.unsatisfiable",
@@ -272,7 +278,7 @@ for (const adapter of ["node:http", "fetchHandler"]) {
   describe(`the conformance suite against the demo, through ${adapter}`, () => {
     for (const token of [false, true]) {
       test(token ? "with a token bound to its key" : "anonymously", async () => {
-        const app = await makeLantern({}, { deltas: true });
+        const app = await makeLantern({}, { deltas: true, variants: true });
         const served = adapter === "node:http" ? await listen(app) : await overFetch(app);
         const peer = token ? await demoPeer(app) : undefined;
         let result: { code: number; report: string };
@@ -304,7 +310,7 @@ for (const adapter of ["node:http", "fetchHandler"]) {
           ["transport.https"],
           report,
         );
-        if (token) assert.ok(report.includes(`Levels reached (SPEC.md § 17, draft 0.7): ${LEVELS}`), report);
+        if (token) assert.ok(report.includes(`Levels reached (SPEC.md § 17, draft 0.9): ${LEVELS}`), report);
       });
     }
   });
@@ -312,7 +318,7 @@ for (const adapter of ["node:http", "fetchHandler"]) {
 
 describe("lantern-static: the demo as a static library, checked by the suite's --static", () => {
   test("Lantern Static reached, nothing failed", async () => {
-    const app = await makeLantern({}, { deltas: true });
+    const app = await makeLantern({}, { deltas: true, variants: true });
     const served = await listen(app);
     const out = join(folder, "static");
     try {

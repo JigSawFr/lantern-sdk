@@ -6,10 +6,10 @@ servers people run at home for their own games
 ([lantern.boreale.dev](https://lantern.boreale.dev/?utm_source=github&utm_medium=readme)):
 a client for the browser and Node, a toolkit to add Lantern to a Node
 server, and the checks both sides share. It follows the specification's
-**draft 0.7**, as the [Python library](../python/README.md) does, whose
+**draft 0.9**, as the [Python library](../python/README.md) does, whose
 scope and names it mirrors.
 
-**Status: early, complete for draft 0.7's client.** The client speaks every
+**Status: early, complete for draft 0.9, client and server toolkit.** The client speaks every
 route of the protocol: pairing with a device key, requests signed by it
 (RFC 9421), the writes, LAN discovery (Node), events (a stream over fetch
 and long polls), grants, mirrors and peers, sync, end-to-end encrypted
@@ -19,7 +19,7 @@ requests, and serves the read routes, sections, save backups (encrypted ones
 kept as sent), cheat writes, requests, invitations, rating caps, the
 administration API (deleting accounts included), events, grants and sync,
 chunk indexes and the answers a browser's page needs (CORS), with a peer server and a static library generator beside it; it reaches
-every level of draft 0.7, **Lantern Core +titles +homebrew +saves +cheats
+every level of draft 0.9, **Lantern Core +titles +homebrew +saves +cheats
 +requests +admin +events +peers +sync +encrypted_saves +deltas**, in the
 specification's conformance suite, through `node:http` and through web
 Requests, and its static libraries reach **Lantern Static**. See
@@ -270,6 +270,35 @@ await lib.downloadApp(missing[0], sink); // checked by its size and SHA-256
   root (a scheme, a leading `/`, `..`, `\`, a query) is refused, and a
   folder is never read outside itself (no link out).
 - Over HTTP, § 2 holds: HTTPS, plain HTTP on loopback only.
+
+### Packages a device cannot use, and variants
+
+An app says its package `format`, the device features it `requires`
+(tokens such as `fs-compression`, `sigpatch`, `ncz-sparse`, `ncz-lz4`) and the
+updates it `includes` (SPEC.md § 6.1). One game may be listed in several
+variants: the same `app_id` and `version_code` in other formats or with other
+`requires`. The client keeps to the rules, with no network involved:
+
+```ts
+const formats = ["nsp", "nsz", "xci", "xcz"]; // what this client installs
+const satisfies = ["fs-compression"]; // what it knows and the device provides
+const { decision, reasons } = installDecision(app, formats, satisfies, installedApps);
+// "install", or "unavailable" with why: an unknown format or token (L-6.1-3, L-6.1-4),
+// or an update an installed app already includes (L-6.1-5, see included())
+const pick = preferVariant(variantsOfOneGame); // Annex B.15: fewest requires, smallest, smaller id
+await client.apps({ format: "nsz" }); // L-6.2-7
+await client.missing(installed, ["update"], { formats, satisfies }); // L-6.3-3
+```
+
+The toolkit's server lists every variant, filters `GET /v1/apps?format=` (an
+unknown format gives an empty list), reads `formats` and `satisfies` in a
+missing request (400 unless an array of at most 16 words), counts what an
+installed app `includes` as installed (L-6.3-4), and keeps both filters in
+its cursors. `MemoryLibrary` drops duplicate `requires` and refuses more than 8
+tokens or 16 `includes`; a static export keeps both fields, and
+`StaticLibrary.missing()` takes the same filters. `requiresOfName()` gives what
+a Switch `.nsp` named with `[LZ4]` takes (`fs-compression`, `sigpatch`, Annex A.1)
+for a library that scans files.
 
 ### Differential updates
 

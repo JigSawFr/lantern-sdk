@@ -291,19 +291,13 @@ LANTERN_API lantern_status lantern_static_library_missing(lantern_static_library
         return usage(error, "a NULL argument");
     *out                            = nullptr;
     const lantern_missing_request r = copy_struct(request);
-    if ((r.installed == nullptr && r.installed_count != 0) || (r.want == nullptr && r.want_count != 0))
+    if ((r.installed == nullptr && r.installed_count != 0) || (r.want == nullptr && r.want_count != 0)
+        || (r.formats == nullptr && r.formats_count != 0)
+        || (r.satisfies == nullptr && r.satisfies_count != 0))
         return usage(error, "a NULL array with items");
     Resource* resource = resource_of(library);
     lantern::MissingRequest settings { lantern::Allocator(resource) };
-    settings.installed.reserve(r.installed_count);
-    for (std::size_t i = 0; i < r.installed_count; ++i)
-    {
-        settings.installed.emplace_back();
-        settings.installed.back().app_id       = text(r.installed[i].app_id);
-        settings.installed.back().version_code = r.installed[i].version_code;
-    }
-    for (std::size_t i = 0; i < r.want_count; ++i)
-        settings.want.emplace_back(text(r.want[i]));
+    fill_missing_request(settings, r);
     auto apps = as_library(library)->missing(text(platform), settings);
     if (!apps)
         return fail(error, apps.error());

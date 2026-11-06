@@ -37,6 +37,22 @@
       },
       "minItems": 1,
       "uniqueItems": true
+    },
+    "formats": {
+      "description": "The formats the device can install (SPEC.md § 6.3): when present, the server leaves out the apps of any other.",
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "$ref": "common.json#/$defs/format"
+      }
+    },
+    "satisfies": {
+      "description": "The requires tokens the device provides (SPEC.md § 6.3): when present, the server leaves out the apps that require another.",
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "$ref": "common.json#/$defs/app_requires_token"
+      }
     }
   },
   "required": [

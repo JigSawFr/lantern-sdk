@@ -726,10 +726,24 @@ Result<Vector<App>> StaticLibrary::missing(std::string_view platform, const Miss
         const auto found = std::ranges::find_if(apps, [&](const App& app) { return app.app_id == app_id; });
         return found == apps.end() ? nullptr : &*found;
     };
-    const auto installed = [&](std::string_view app_id) {
-        return std::ranges::any_of(
-            request.installed, [&](const InstalledApp& i) { return i.app_id == app_id; });
-    };
+    // An installed app that is one of ours also installs what it includes, whatever its variant (L-6.3-4)
+    Vector<InstalledApp> held(request.installed, allocator_);
+    for (const InstalledApp& item : request.installed)
+    {
+        for (const App& app : apps)
+        {
+            if (app.app_id != item.app_id || app.version_code != item.version_code)
+                continue;
+            for (const AppInclude& inner : app.includes)
+            {
+                held.emplace_back();
+                held.back().app_id       = inner.app_id;
+                held.back().version_code = inner.version_code;
+            }
+        }
+    }
+    const auto installed = [&](std::string_view app_id)
+    { return std::ranges::any_of(held, [&](const InstalledApp& i) { return i.app_id == app_id; }); };
     // The installed games, each with its highest version (§ 6.3)
     struct Game
     {
@@ -737,7 +751,7 @@ Result<Vector<App>> StaticLibrary::missing(std::string_view platform, const Miss
         std::uint64_t version;
     };
     Vector<Game> have(allocator_);
-    for (const InstalledApp& item : request.installed)
+    for (const InstalledApp& item : held)
     {
         String title(allocator_);
         std::string_view kind;
@@ -818,6 +832,18 @@ Result<Vector<App>> StaticLibrary::missing(std::string_view platform, const Miss
                 out.emplace_back(app);
         }
     }
+    // What the device can install (L-6.3-3): a filter that is absent is not applied
+    const auto words = [](const std::optional<Vector<String>>& list, const String& word)
+    { return list.has_value() && std::ranges::find(*list, word) != list->end(); };
+    std::erase_if(out,
+        [&](const App& app)
+        {
+            if (request.formats && !words(request.formats, app.format))
+                return true;
+            return request.satisfies
+                && !std::ranges::all_of(
+                    app.requires_, [&](const String& token) { return words(request.satisfies, token); });
+        });
     return out;
 }
 

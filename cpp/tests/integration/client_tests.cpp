@@ -192,8 +192,8 @@ TEST_CASE("apps: every page, by its cursors, each app of the Switch's profile")
         cursor = std::string((*page)->next);
         ++pages;
     } while (!cursor.empty() && pages < 20);
-    CHECK(seen.size() == 10); // library.py's SWITCH
-    CHECK(total == 10);
+    CHECK(seen.size() == 12); // library.py's SWITCH
+    CHECK(total == 12);
     CHECK(pages == 4);
     // A cursor the server never gave: 400, or 410 when the server cannot
     // tell it from an expired one (SPEC.md 6.2)

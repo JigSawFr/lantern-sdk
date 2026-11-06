@@ -136,6 +136,9 @@ template <class T> void unbox(T* value) noexcept
 // NULL is the empty string.
 [[nodiscard]] std::string_view text(const char* value) noexcept;
 [[nodiscard]] lantern::String to_string(lantern_str value, lantern::Allocator allocator);
+// A missing request of the app's (§ 6.3), its arrays as strings; `formats`
+// and `satisfies` stay absent when NULL, and are present when empty otherwise.
+void fill_missing_request(lantern::MissingRequest& out, const lantern_missing_request& request);
 void copy_digest(const lantern::Digest& digest, std::uint8_t* out) noexcept;
 [[nodiscard]] lantern::Digest digest_of(const std::uint8_t* bytes) noexcept;
 // Copies `text` into a char array of `size` bytes, cut at a UTF-8 boundary.

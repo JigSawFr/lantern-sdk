@@ -125,7 +125,7 @@ def test_private_and_frozen_accounts() -> None:
 
 def test_apps_pages_and_filters(app: LanternApp) -> None:
     every = body(call(app, "GET", BASE + "/apps", query={"page_size": "1000"}))
-    assert len(every["items"]) == every["total"] == 8 and every["next"] is None
+    assert len(every["items"]) == every["total"] == 10 and every["next"] is None
     for sort in ("name", "added", "release"):
         seen: list[str] = []
         cursor: str | None = None
@@ -141,14 +141,14 @@ def test_apps_pages_and_filters(app: LanternApp) -> None:
     added = body(call(app, "GET", BASE + "/apps", query={"sort": "added"}))["items"]
     assert [a["added"] for a in added] == sorted((a["added"] for a in added), reverse=True)
     switch = body(call(app, "GET", BASE + "/apps", Lantern_Platform="switch"))["items"]
-    assert {a["platform"] for a in switch} == {"switch"} and len(switch) == 7
+    assert {a["platform"] for a in switch} == {"switch"} and len(switch) == 9
     android = body(call(app, "GET", BASE + "/apps", query={"platform": "android"}, Lantern_Platform="switch"))
     assert [a["platform"] for a in android["items"]] == ["android"]
     assert body(call(app, "GET", BASE + "/apps", Lantern_Platform="x-nothing"))["items"] == []
     assert {a["type"] for a in body(call(app, "GET", BASE + "/apps", query={"type": "dlc"}))["items"]} == {"dlc"}
-    assert len(body(call(app, "GET", BASE + "/apps", query={"q": "COPPER"}))["items"]) == 2
+    assert len(body(call(app, "GET", BASE + "/apps", query={"q": "COPPER"}))["items"]) == 3
     small = body(call(app, "GET", BASE + "/apps", query={"page_size": "5000"}))
-    assert len(small["items"]) == 8
+    assert len(small["items"]) == 10
     for q in (
         {"type": "Base"},
         {"sort": "random"},
