@@ -27,7 +27,7 @@ console homebrews and the game library servers people run at home.
 - lantern.schema, lantern.limits, lantern.store: validation, SPEC.md § 13's
   limits, and files kept by the `schema` rule.
 
-Follows the specification's draft 0.7 (SPEC_DRAFT).
+Follows the specification's draft 0.9 (SPEC_DRAFT).
 """
 
 from lantern._base import SCHEMA, DocumentError, JSONObject, JSONValue, LanternError

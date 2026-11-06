@@ -1,4 +1,4 @@
-// The client of draft 0.7: the handshake, pairing (with a device key, an
+// The client of draft 0.9: the handshake, pairing (with a device key, an
 // invitation, a QR code), signed requests, the apps' listing with its
 // cursors, what the device is missing, changes, titles, homebrew (the
 // listing, an entry, the updates), save backups (listed, downloaded, sent

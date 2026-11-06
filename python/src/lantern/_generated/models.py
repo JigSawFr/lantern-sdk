@@ -710,6 +710,8 @@ class App:
     name: str | None = None
     size: int
     format: str
+    requires: list[str] | None = None
+    includes: list[AppIncludes] | None = None
     sha256: str
     added: str | None = None
     file: str
@@ -719,7 +721,7 @@ class App:
     chunks: ChunksRef | None = None
     extra: JSONObject = field(default_factory=dict)
 
-    KEYS: ClassVar[frozenset[str]] = frozenset({"id", "platform", "title_id", "app_id", "type", "version_code", "version_name", "name", "size", "format", "sha256", "added", "file", "atlas", "installed_size", "mirrors", "chunks"})
+    KEYS: ClassVar[frozenset[str]] = frozenset({"id", "platform", "title_id", "app_id", "type", "version_code", "version_name", "name", "size", "format", "requires", "includes", "sha256", "added", "file", "atlas", "installed_size", "mirrors", "chunks"})
 
     @classmethod
     def from_json(cls, data: JSONValue, where: str = "App") -> App:
@@ -735,6 +737,8 @@ class App:
             name=_m.opt(o, "name", where, _m.as_str),
             size=_m.req(o, "size", where, _m.as_int),
             format=_m.req(o, "format", where, _m.as_str),
+            requires=_m.opt(o, "requires", where, lambda v, w: _m.as_list(v, w, _m.as_str)),
+            includes=_m.opt(o, "includes", where, lambda v, w: _m.as_list(v, w, AppIncludes.from_json)),
             sha256=_m.req(o, "sha256", where, _m.as_str),
             added=_m.opt(o, "added", where, _m.as_str),
             file=_m.req(o, "file", where, _m.as_str),
@@ -759,6 +763,10 @@ class App:
             out["name"] = self.name
         out["size"] = self.size
         out["format"] = self.format
+        if self.requires is not None:
+            out["requires"] = _m.json_list(self.requires)
+        if self.includes is not None:
+            out["includes"] = _m.json_list(x.to_json() for x in self.includes)
         out["sha256"] = self.sha256
         if self.added is not None:
             out["added"] = self.added
@@ -771,6 +779,36 @@ class App:
             out["mirrors"] = _m.json_list(x.to_json() for x in self.mirrors)
         if self.chunks is not None:
             out["chunks"] = self.chunks.to_json()
+        out.update(self.extra)
+        return out
+
+
+@dataclass(kw_only=True, slots=True)
+class AppIncludes:
+    """AppIncludes..
+
+    From common.json#/$defs/app_includes[].
+    """
+
+    app_id: str
+    version_code: int
+    extra: JSONObject = field(default_factory=dict)
+
+    KEYS: ClassVar[frozenset[str]] = frozenset({"app_id", "version_code"})
+
+    @classmethod
+    def from_json(cls, data: JSONValue, where: str = "AppIncludes") -> AppIncludes:
+        o = _m.obj(data, where)
+        return cls(
+            app_id=_m.req(o, "app_id", where, _m.as_str),
+            version_code=_m.req(o, "version_code", where, _m.as_int),
+            extra=_m.extras(o, cls.KEYS),
+        )
+
+    def to_json(self) -> JSONObject:
+        out: JSONObject = {}
+        out["app_id"] = self.app_id
+        out["version_code"] = self.version_code
         out.update(self.extra)
         return out
 
@@ -2580,9 +2618,11 @@ class MissingRequest:
     schema: int
     installed: list[InstalledApp]
     want: list[str]
+    formats: list[str] | None = None
+    satisfies: list[str] | None = None
     extra: JSONObject = field(default_factory=dict)
 
-    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "installed", "want"})
+    KEYS: ClassVar[frozenset[str]] = frozenset({"schema", "installed", "want", "formats", "satisfies"})
 
     @classmethod
     def from_json(cls, data: JSONValue, where: str = "MissingRequest") -> MissingRequest:
@@ -2591,6 +2631,8 @@ class MissingRequest:
             schema=_m.req(o, "schema", where, _m.as_int),
             installed=_m.req(o, "installed", where, lambda v, w: _m.as_list(v, w, InstalledApp.from_json)),
             want=_m.req(o, "want", where, lambda v, w: _m.as_list(v, w, _m.as_str)),
+            formats=_m.opt(o, "formats", where, lambda v, w: _m.as_list(v, w, _m.as_str)),
+            satisfies=_m.opt(o, "satisfies", where, lambda v, w: _m.as_list(v, w, _m.as_str)),
             extra=_m.extras(o, cls.KEYS),
         )
 
@@ -2599,6 +2641,10 @@ class MissingRequest:
         out["schema"] = self.schema
         out["installed"] = _m.json_list(x.to_json() for x in self.installed)
         out["want"] = _m.json_list(self.want)
+        if self.formats is not None:
+            out["formats"] = _m.json_list(self.formats)
+        if self.satisfies is not None:
+            out["satisfies"] = _m.json_list(self.satisfies)
         out.update(self.extra)
         return out
 
@@ -3751,6 +3797,7 @@ __all__ = [
     "AdminUserUpdate",
     "AdminUsers",
     "App",
+    "AppIncludes",
     "AppsPage",
     "Changes",
     "CheatSet",

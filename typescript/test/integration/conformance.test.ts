@@ -4,7 +4,7 @@
  * through fetchHandler() (web Requests, as Hono hands them over), anonymously
  * and with a token bound to its key, with `--admin-writes` (an account made,
  * then deleted) and `--peer` (a PeerServer of the toolkit's, holding the
- * demo's files). The demo offers every family of draft 0.7: sections, save
+ * demo's files). The demo offers every family of draft 0.9: sections, save
  * backups (encrypted ones too), cheat writes and requests among them, which
  * the suite writes then deletes. With its token, which holds every scope, the
  * demo reaches every level LEVELS says. Then lantern-static writes
@@ -304,7 +304,7 @@ for (const adapter of ["node:http", "fetchHandler"]) {
           ["transport.https"],
           report,
         );
-        if (token) assert.ok(report.includes(`Levels reached (SPEC.md § 17, draft 0.7): ${LEVELS}`), report);
+        if (token) assert.ok(report.includes(`Levels reached (SPEC.md § 17, draft 0.9): ${LEVELS}`), report);
       });
     }
   });

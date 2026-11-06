@@ -50,6 +50,39 @@
       "type": "string",
       "pattern": "^[a-z0-9]{1,16}$"
     },
+    "app_requires": {
+      "description": "What the device must provide to install and run an app (SPEC.md § 6.1): lower-case tokens the platform's profile defines (Annex A). Not a homebrew's requires (§ 8.7), which is an object.",
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "$ref": "common.json#/$defs/app_requires_token"
+      }
+    },
+    "app_requires_token": {
+      "description": "One token of an app's requires (SPEC.md § 6.1).",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+    },
+    "app_includes": {
+      "description": "The versions of the same game that an app's package already contains (SPEC.md § 6.1): a device that installed the app has them.",
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "properties": {
+          "app_id": {
+            "$ref": "common.json#/$defs/id"
+          },
+          "version_code": {
+            "$ref": "common.json#/$defs/uint53"
+          }
+        },
+        "required": [
+          "app_id",
+          "version_code"
+        ]
+      }
+    },
     "sha256": {
       "description": "A SHA-256, lower-case hex.",
       "type": "string",
@@ -155,6 +188,12 @@
         },
         "format": {
           "$ref": "common.json#/$defs/format"
+        },
+        "requires": {
+          "$ref": "common.json#/$defs/app_requires"
+        },
+        "includes": {
+          "$ref": "common.json#/$defs/app_includes"
         },
         "sha256": {
           "$ref": "common.json#/$defs/sha256",
