@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="{{lang}}"{{first_visit}}>
+<head>
+<meta charset="utf-8">
+<meta name="referrer" content="no-referrer">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self' https://gateway.umami.is; manifest-src 'self'; base-uri 'none'; form-action 'none'">
+<title>{{title}}</title>
+<meta name="description" content="{{description}}">
+<meta name="theme-color" content="#0b1424">
+{{indexing}}
+<link rel="icon" href="{{root}}assets/marks/sdk.svg" type="image/svg+xml">
+<link rel="preload" href="{{root}}assets/fonts/sora.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="{{root}}assets/fonts/figtree.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="{{root}}assets/boreale.css">
+<link rel="stylesheet" href="{{root}}assets/chrome.css">
+<link rel="stylesheet" href="{{root}}assets/site.css">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Lantern SDK">
+<meta property="og:title" content="{{title}}">
+<meta property="og:description" content="{{description}}">
+<meta property="og:url" content="{{url}}">
+<meta property="og:image" content="{{site}}assets/social-preview.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta property="og:locale" content="{{og_locale}}">
+<meta name="twitter:card" content="summary_large_image">
+<script src="{{root}}assets/lang-key.js"></script>
+<script src="{{root}}assets/lang.js"></script>
+<script src="{{root}}assets/boreale.js" defer></script>
+<script src="{{root}}assets/chrome.js" defer></script>
+{{scripts}}
+{{audience}}
+</head>
+<body id="top" class="{{page}} reset-margins" data-root="{{root}}" data-lang="{{lang}}">
+{{skip}}
+{{sky}}
+  {{header}}
+  {{crumbs}}
+  {{hero}}
+</div>
+<main id="main"{{main_class}}>
+{{body}}
+</main>
+{{footer}}
+</body>
+</html>
