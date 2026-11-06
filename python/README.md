@@ -187,11 +187,12 @@ has the same, `async for event in client.events()`.
 from lantern.discovery import PeerFinder, discover_peers
 
 peers = PeerFinder().peers(client.hello.uid)  # discovery with "peers": true, once a minute at most
-client.download_from(app, "frostline.nsz", peers=peers)  # mirrors, then peers, then the server (awaited on AsyncLanternClient)
+client.download_from(app, "frostline.nsz", peers=peers)  # mirrors, then peers, then the server
 ```
 
-Whatever gave the bytes, they are checked by the size and SHA-256 of the
-server's document before they are kept; a source that gives more than the
+`AsyncLanternClient.download_from()` is the same, awaited. Whatever gave the
+bytes, they are checked by the size and SHA-256 of the server's document
+before they are kept; a source that gives more than the
 size or bytes that fail is left for the next, and the server's file comes
 last (§ 19.1). No token, signature or cookie goes to a mirror or a peer: a
 peer gets a grant, asked for once (`client.grant()`, checked against the
