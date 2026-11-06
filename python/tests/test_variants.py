@@ -433,6 +433,8 @@ def test_client_core_builds_the_requests() -> None:
 
 
 def test_sync_client_against_the_demo() -> None:
+    pytest.importorskip("flask")
+    pytest.importorskip("httpx")
     with serve("flask") as url, LanternClient(url, token=DEMO_TOKEN, platform="switch") as c:
         nsz = list(c.iter_apps(format="nsz"))
         assert nsz and {a.format for a in nsz} == {"nsz"}
@@ -448,6 +450,9 @@ def test_sync_client_against_the_demo() -> None:
 
 
 def test_async_client_against_the_demo() -> None:
+    pytest.importorskip("flask")
+    pytest.importorskip("httpx")
+
     async def run(url: str) -> None:
         async with AsyncLanternClient(url, token=DEMO_TOKEN, platform="switch") as c:
             assert {a.format async for a in c.iter_apps(format="xcz")} == {"xcz"}
