@@ -4,7 +4,8 @@ their signatures, and answer the administration API.
 
 `Accounts` is the interface a server implements over its own store (a
 database, a file…); `MemoryAccounts` is a complete one, held in memory, for
-tests, demos and as a reference to read. A server that keeps its own tokens
+tests, demos and as a reference to read, and `SqliteAccounts` (sqlite_accounts.py)
+the same in a file, for a server that must remember its pairings. A server that keeps its own tokens
 can skip all this and give LanternApp an `authenticate` hook instead.
 
 What is kept follows SPEC.md § 5: a token's hash only (never the token), the
