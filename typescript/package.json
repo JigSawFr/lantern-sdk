@@ -32,14 +32,17 @@
   "sideEffects": false,
   "exports": {
     ".": {
+      "source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
     "./node": {
+      "source": "./src/node/index.ts",
       "types": "./dist/node/index.d.ts",
       "default": "./dist/node/index.js"
     },
     "./server": {
+      "source": "./src/server/index.ts",
       "types": "./dist/server/index.d.ts",
       "default": "./dist/server/index.js"
     },

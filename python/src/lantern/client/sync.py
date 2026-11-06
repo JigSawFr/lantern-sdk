@@ -1378,6 +1378,8 @@ class LanternClient:
                 offset = 0
             hasher = sha256_file(part, offset) if offset else Sha256()
             if offset == size:
+                if not part.exists():  # an empty file: nothing was ever written, nothing to resume
+                    part.touch()
                 try:
                     verifier.finish(hasher)
                 except IntegrityError:

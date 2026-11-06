@@ -116,6 +116,8 @@ A complete example, with paging and a verified download: [`cpp/examples/read_lib
 
 </details>
 
+More: [`python/examples/`](python/examples/), [`typescript/examples/`](typescript/examples/), [`cpp/examples/`](cpp/examples/), [`c/examples/`](c/examples/).
+
 <details>
 <summary><b>Add Lantern to a Flask app</b></summary>
 

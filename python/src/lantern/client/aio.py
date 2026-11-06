@@ -976,6 +976,8 @@ class AsyncLanternClient:
                 offset = 0
             hasher = await asyncio.to_thread(sha256_file, part, offset) if offset else Sha256()
             if offset == size:
+                if not await asyncio.to_thread(part.exists):  # an empty file: nothing was ever written
+                    await asyncio.to_thread(part.touch)
                 try:
                     verifier.finish(hasher)
                 except IntegrityError:
