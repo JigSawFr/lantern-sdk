@@ -6,7 +6,14 @@
 //! Schemas ([`generated`]); each keeps the fields it does not know and writes
 //! them back (SPEC.md § 3.2).
 
+pub mod bytes;
+pub mod canonical;
+pub mod digest;
+pub mod error;
 pub mod generated;
+pub mod spki;
+
+pub use error::{Error, Result};
 
 /// The specification draft this version follows.
 pub const SPEC_DRAFT: &str = "0.11";
