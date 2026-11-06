@@ -526,6 +526,11 @@ inline Result<void> fill(MemoryLibrary& library)
 {
     if (auto kept = library.keep_journal(); !kept)
         return kept;
+    // Files of 128 KiB or more carry a chunk index (§ 22): the two updates of Lumen Drift below
+    ChunkingOptions chunking;
+    chunking.min_file_size = std::uint64_t { 128 } << 10U;
+    if (auto offered = library.offer_deltas(chunking); !offered)
+        return offered;
     std::vector<App> listed;
     static constexpr std::array<std::string_view, 1> compression { "fs-compression" };
     static constexpr std::array<std::string_view, 2> compression_and_patch { "fs-compression", "sigpatch" };
@@ -541,9 +546,9 @@ inline Result<void> fill(MemoryLibrary& library)
         { "Lumen Drift", "switch", "0100AB1200010000", "0100AB1200010000", "base", 0, "1.0.0", "nsp", 5000,
             "2026-10-10T12:00:00Z" },
         { "Lumen Drift", "switch", "0100AB1200010000", "0100AB1200010800", "update", 65536, "1.1.0", "nsz",
-            1200, "2026-10-11T12:00:00Z" },
+            200000, "2026-10-11T12:00:00Z" },
         { "Lumen Drift", "switch", "0100AB1200010000", "0100AB1200010800", "update", 131072, "1.2.0", "nsz",
-            1500, "2026-10-12T12:00:00Z" },
+            260000, "2026-10-12T12:00:00Z" },
         { "Lumen Drift: Comet Pack", "switch", "0100AB1200010000", "0100AB1200011001", "dlc", 0, "", "nsp",
             600, "2026-10-13T12:00:00Z" },
         { "Copper Moth", "switch", "0100CD3400020000", "0100CD3400020000", "base", 0, "1.0.0", "xci", 4000,
@@ -577,10 +582,19 @@ inline Result<void> fill(MemoryLibrary& library)
         draft.includes     = app.includes;
         draft.mirrors      = app.mirrors;
         // Each package's bytes come from what identifies it
-        const std::string label
-            = std::string(app.app_id) + "v" + std::to_string(app.version_code) + std::string(app.format);
-        const auto content = blob(label, app.size);
-        auto added         = library.add_app(draft, content);
+        // (the two updates of Lumen Drift are one payload, the second grown and changed in the middle: what
+        // a chunk index lets a client keep, § 22)
+        const bool update_chain = app.app_id == "0100AB1200010800";
+        const std::string label = update_chain
+            ? std::string(app.app_id)
+            : std::string(app.app_id) + "v" + std::to_string(app.version_code) + std::string(app.format);
+        auto content            = blob(label, app.size);
+        if (update_chain && app.version_code == 131072)
+        {
+            for (std::size_t i = 100000; i < 100200; ++i)
+                content[i] = static_cast<std::byte>(~static_cast<unsigned>(content[i]));
+        }
+        auto added = library.add_app(draft, content);
         if (!added)
             return std::unexpected(added.error());
         listed.push_back(std::move(*added));

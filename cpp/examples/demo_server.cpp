@@ -12,7 +12,8 @@
 // requests for games of the accounts with the scope requests, keeps their
 // sync data (wishes and what a console has installed, § 20) in memory for the
 // scopes sync.read and sync.write, gives grants for peers (§ 19.3), tells what
-// changes as events (a stream and the long poll of `changes`, § 18), and pairs
+// changes as events (a stream and the long poll of `changes`, § 18), gives the
+// chunk indexes of its large files (differential updates, § 22), and pairs
 // devices: the accounts of demo_accounts.hpp, a token bound to a key, signed
 // requests, invitations. An account with the scope admin runs the
 // administration API: accounts, devices, pairings, invitations, requests.
@@ -110,6 +111,7 @@ int main(int argc, char** argv)
     options.sync             = &sync;
     options.grant_seed       = lantern::demo::grant_seed();
     options.encrypted_saves  = encrypted;
+    options.deltas           = true;
     // Events: a line on a stream every 5 seconds at least, which keeps the conformance run short
     options.events     = true;
     options.heartbeat  = 5;

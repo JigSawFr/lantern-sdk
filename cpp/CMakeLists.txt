@@ -93,6 +93,7 @@ add_library(lantern
     src/server_caps.cpp
     src/server_catalog.cpp
     src/server_cursor.cpp
+    src/server_deltas.cpp
     src/server_events.cpp
     src/server_homebrew.cpp
     src/server_http.cpp

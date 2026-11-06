@@ -209,6 +209,8 @@ struct ServerState final : LibraryObserver, std::enable_shared_from_this<ServerS
     std::array<std::uint8_t, 32> grant_seed {};
     std::array<std::uint8_t, 32> grant_public {};
     std::uint32_t grant_lifetime = 0;
+    // Differential updates (§ 22): the chunk indexes are served.
+    bool deltas = false;
     // The administration API (§ 5.7) and the invitations (§ 5.5): the account store keeps what they need.
     bool admin = false;
     // Events (§ 18): offered, the limits, and the journal.
@@ -609,6 +611,11 @@ void write_app_changes(json::Writer& w, const AppChanges& changes);
 
 // Grants for peers (§ 19.3), for a caller with the scope `library`: 404 when the server offers none.
 [[nodiscard]] Answer grant_route(
+    const ServerState& state, const ServerRequest& request, const Caller& caller, std::string_view hex);
+
+// The chunk index of a file (§ 22.1), for a caller with the scope `library`: 404 when the caller may not read
+// the file or the library gives it no `chunks`. `hex` is the file's SHA-256.
+[[nodiscard]] Answer chunks_route(
     const ServerState& state, const ServerRequest& request, const Caller& caller, std::string_view hex);
 
 // The admin's side of the requests (§ 11): every account's, and deciding an open one.

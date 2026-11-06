@@ -5,8 +5,10 @@
 #include <charconv>
 #include <chrono>
 
+#include <lantern/chunks.hpp>
 #include <lantern/ed25519.hpp>
 #include <lantern/homebrew.hpp>
+#include <lantern/json.hpp>
 #include <lantern/paths.hpp>
 #include <lantern/peers.hpp>
 #include <lantern/profiles.hpp>
@@ -382,6 +384,7 @@ MemoryLibrary::MemoryLibrary(std::string_view base, const Allocator& allocator)
     , homebrew_(allocator)
     , cheats_(allocator)
     , cheat_files_(allocator)
+    , indexes_(allocator)
     , epoch_(allocator)
     , entries_(allocator)
 {
@@ -447,6 +450,10 @@ Result<App> MemoryLibrary::add_app(const AppDraft& draft, std::span<const std::b
         app.mirrors.emplace_back();
         app.mirrors.back().url.assign(mirror);
     }
+    auto chunks = chunks_of(content, sha256);
+    if (!chunks)
+        return std::unexpected(chunks.error());
+    app.chunks = std::move(*chunks);
 
     if (std::ranges::none_of(files_, [&](const Stored& stored) { return stored.name == file_name; }))
     {
@@ -480,6 +487,7 @@ bool MemoryLibrary::remove_app(std::string_view id)
         const std::string_view name = std::string_view(gone.file).substr(gone.file.rfind('/') + 1);
         if (!uses_file(name))
             std::erase_if(files_, [&](const Stored& stored) { return stored.name == name; });
+        prune_indexes();
         record(Entry::Kind::app_removed, gone.platform, gone.id);
         notify("apps", gone.platform, gone.title_id);
         return true;
@@ -691,6 +699,7 @@ void MemoryLibrary::drop_unused_files(const Homebrew& gone)
     drop(gone.package);
     for (const Package& package : gone.packages)
         drop(package);
+    prune_indexes();
 }
 
 Result<Homebrew> MemoryLibrary::add_homebrew(
@@ -730,6 +739,11 @@ Result<Homebrew> MemoryLibrary::add_homebrew(
     {
         Package& package = i == 0 ? result.package : result.packages[i - 1];
         package.file     = keep_file(contents[i], package.sha256);
+        auto chunks      = chunks_of(contents[i], package.sha256);
+        if (!chunks)
+            return std::unexpected(chunks.error());
+        if (deltas_offered_)
+            package.chunks = std::move(*chunks);
     }
     for (Homebrew& other : homebrew_)
     {
@@ -1051,6 +1065,134 @@ Result<Vector<App>> MemoryLibrary::apps(const AppsFilter& filter, const Allocato
             out.emplace_back(app);
     }
     return out;
+}
+
+Result<void> MemoryLibrary::offer_deltas(const ChunkingOptions& options)
+{
+    if (options.chunker_size != 0 && !is_cdc_size(options.chunker_size))
+        return fail(
+            Category::usage, "a chunker's size is a power of two from 65536 to 4194304 (SPEC.md 22.1)");
+    deltas_         = options;
+    deltas_offered_ = true;
+    return {};
+}
+
+Result<std::optional<AppChunks>> MemoryLibrary::chunks_of(
+    std::span<const std::byte> content, const Digest& sha256)
+{
+    if (!deltas_offered_ || content.size() < deltas_.min_file_size)
+        return std::optional<AppChunks> {};
+    const auto file_hex = to_hex(sha256);
+    const std::string_view name(file_hex.data(), file_hex.size());
+    const Stored* kept = nullptr;
+    for (const Stored& stored : indexes_)
+    {
+        if (stored.name == name)
+            kept = &stored;
+    }
+    if (kept == nullptr)
+    {
+        const std::optional<std::uint64_t> size = deltas_.chunker_size != 0
+            ? std::optional<std::uint64_t>(deltas_.chunker_size)
+            : cdc_size_for(content.size());
+        // A file too large for any chunker gets no index
+        if (!size)
+            return std::optional<AppChunks> {};
+        const auto cuts = cdc_cut(content, *size, allocator_);
+        if (!cuts)
+            return std::unexpected(cuts.error());
+        // Canonical JSON (§ 2.3): the names in order, no space
+        String text(allocator_);
+        json::Writer w(text);
+        w.begin_object();
+        w.key("chunker");
+        w.begin_object();
+        w.key("alg");
+        w.string(cdc_algorithm);
+        w.key("size");
+        w.number(*size);
+        w.end_object();
+        w.key("chunks");
+        w.begin_array();
+        for (const Cut& cut : *cuts)
+        {
+            const auto chunk_hex = to_hex(Sha256::of(content.subspan(cut.offset, cut.length)));
+            w.begin_array();
+            w.number(static_cast<std::uint64_t>(cut.length));
+            w.string(std::string_view(chunk_hex.data(), chunk_hex.size()));
+            w.end_array();
+        }
+        w.end_array();
+        w.key("schema");
+        w.number(known_schema);
+        w.key("sha256");
+        w.string(name);
+        w.key("size");
+        w.number(static_cast<std::uint64_t>(content.size()));
+        w.end_object();
+        Stored stored;
+        stored.name   = String(name, allocator_);
+        stored.sha256 = Sha256::of(std::string_view(text));
+        stored.reader = std::allocate_shared<MemoryFileReader>(
+            std::pmr::polymorphic_allocator<MemoryFileReader>(allocator_),
+            std::as_bytes(std::span(text.data(), text.size())), allocator_);
+        indexes_.push_back(std::move(stored));
+        kept = &indexes_.back();
+    }
+    AppChunks chunks(allocator_);
+    chunks.url.assign(base_);
+    chunks.url.append("/v1/chunks/sha256/");
+    chunks.url.append(name);
+    chunks.size   = kept->reader->bytes().size();
+    chunks.sha256 = kept->sha256;
+    return std::optional<AppChunks>(std::move(chunks));
+}
+
+void MemoryLibrary::prune_indexes()
+{
+    const auto used = [&](const Stored& index)
+    {
+        const auto uses = [&](const Digest& sha256)
+        {
+            const auto hex = to_hex(sha256);
+            return index.name == std::string_view(hex.data(), hex.size());
+        };
+        for (const App& app : apps_)
+        {
+            if (app.chunks && uses(app.sha256))
+                return true;
+        }
+        for (const Homebrew& entry : homebrew_)
+        {
+            if (entry.package.chunks && uses(entry.package.sha256))
+                return true;
+            for (const Package& package : entry.packages)
+            {
+                if (package.chunks && uses(package.sha256))
+                    return true;
+            }
+        }
+        return false;
+    };
+    std::erase_if(indexes_, [&](const Stored& index) { return !used(index); });
+}
+
+Result<std::optional<LibraryFile>> MemoryLibrary::chunk_index(
+    const Digest& file_sha256, const Allocator& allocator)
+{
+    const auto hex = to_hex(file_sha256);
+    for (const Stored& stored : indexes_)
+    {
+        if (stored.name != std::string_view(hex.data(), hex.size()))
+            continue;
+        LibraryFile out(allocator);
+        out.size   = stored.reader->bytes().size();
+        out.sha256 = stored.sha256;
+        out.content_type.assign("application/json");
+        out.reader = stored.reader;
+        return std::optional<LibraryFile>(std::move(out));
+    }
+    return std::optional<LibraryFile> {};
 }
 
 Result<std::optional<LibraryFile>> MemoryLibrary::file(std::string_view name, const Allocator& allocator)
