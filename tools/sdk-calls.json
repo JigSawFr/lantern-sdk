@@ -1,0 +1,17 @@
+{
+  "about": "The same gesture of the protocol in each language, by the name of its call (what the site's SDK page shows as a table). tools/site_data.py checks every name against the language's sources, so a renamed call fails the check. null: the language has no such call (yet).",
+  "schema": 1,
+  "gestures": [
+    { "id": "handshake", "spec": "4.2", "calls": { "cpp": "handshake", "c": "lantern_client_handshake", "python": "handshake", "typescript": "handshake" } },
+    { "id": "apps", "spec": "6.1", "calls": { "cpp": "apps", "c": "lantern_client_apps", "python": "iter_apps", "typescript": "iterApps" } },
+    { "id": "missing", "spec": "6.3", "calls": { "cpp": "missing", "c": "lantern_client_missing", "python": "missing", "typescript": "missing" } },
+    { "id": "download", "spec": "6.6", "calls": { "cpp": "download", "c": "lantern_client_download", "python": "download_app", "typescript": "downloadAppTo" } },
+    { "id": "pair", "spec": "5.2", "calls": { "cpp": "start_pairing", "c": "lantern_client_start_pairing", "python": "pair", "typescript": "pair" } },
+    { "id": "await_pairing", "spec": "5.4", "calls": { "cpp": "poll_pairing", "c": "lantern_client_poll_pairing", "python": "wait_for_pairing", "typescript": "waitForPairing" } },
+    { "id": "upload_save", "spec": "9.3", "calls": { "cpp": "upload_save", "c": "lantern_client_upload_save", "python": "upload_save", "typescript": "uploadSave" } },
+    { "id": "events", "spec": "18", "calls": { "cpp": "events", "c": "lantern_client_events", "python": "events", "typescript": "events" } },
+    { "id": "serve", "spec": "17", "calls": { "cpp": "Server", "c": null, "python": "LanternApp", "typescript": "LanternApp" } },
+    { "id": "static_write", "spec": "21", "calls": { "cpp": null, "c": null, "python": "export", "typescript": "writeStatic" } },
+    { "id": "static_read", "spec": "21", "calls": { "cpp": "StaticLibrary", "c": null, "python": "StaticLibrary", "typescript": "StaticLibrary" } }
+  ]
+}

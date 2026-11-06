@@ -1,0 +1,825 @@
+{
+  "schema": 1,
+  "sdk": {
+    "version": "0.5.0",
+    "spec_draft": "0.11",
+    "c_api_version": 7,
+    "c_abi_version": 1,
+    "release": null,
+    "repository": "https://github.com/JigSawFr/lantern-sdk",
+    "releases": "https://github.com/JigSawFr/lantern-sdk/releases"
+  },
+  "languages": [
+    {
+      "id": "cpp",
+      "name": "C++23",
+      "folder": "cpp",
+      "status": "complete",
+      "role": "both",
+      "package": "lantern",
+      "install": null,
+      "adapters": [
+        "libcurl",
+        "mbedTLS",
+        "POSIX sockets"
+      ],
+      "requires": "C++23 (CMake 3.28)",
+      "readme": "cpp/README.md"
+    },
+    {
+      "id": "c",
+      "name": "C",
+      "folder": "c",
+      "status": "complete",
+      "role": "client",
+      "package": "lantern (C ABI)",
+      "install": null,
+      "adapters": [
+        "Swift",
+        "Kotlin (JNI)"
+      ],
+      "requires": "C11, over the C++ library",
+      "readme": "c/README.md"
+    },
+    {
+      "id": "python",
+      "name": "Python",
+      "folder": "python",
+      "status": "complete",
+      "role": "both",
+      "package": "lantern-protocol",
+      "install": "pip install lantern-protocol",
+      "adapters": [
+        "Flask",
+        "FastAPI",
+        "httpx"
+      ],
+      "requires": "Python 3.11+",
+      "readme": "python/README.md"
+    },
+    {
+      "id": "typescript",
+      "name": "TypeScript",
+      "folder": "typescript",
+      "status": "complete",
+      "role": "both",
+      "package": "lantern-protocol",
+      "install": "npm install lantern-protocol",
+      "adapters": [
+        "node:http",
+        "Hono (web Requests)"
+      ],
+      "requires": "Node 22.18+ or a browser",
+      "readme": "typescript/README.md"
+    },
+    {
+      "id": "go",
+      "name": "Go",
+      "folder": "go",
+      "status": "building",
+      "role": "both",
+      "package": "github.com/JigSawFr/lantern-sdk/go",
+      "install": "go get github.com/JigSawFr/lantern-sdk/go",
+      "adapters": [
+        "net/http"
+      ],
+      "requires": "Go 1.24+",
+      "readme": "go/README.md"
+    },
+    {
+      "id": "rust",
+      "name": "Rust",
+      "folder": "rust",
+      "status": "building",
+      "role": "both",
+      "package": "lantern-protocol",
+      "install": null,
+      "adapters": [],
+      "requires": "Rust 1.90+",
+      "readme": "rust/README.md"
+    }
+  ],
+  "families": [
+    {
+      "family": "library",
+      "support": {
+        "cpp": {
+          "client": "yes",
+          "server": "partial"
+        },
+        "c": {
+          "client": "yes",
+          "server": "no"
+        },
+        "python": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "typescript": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "go": {
+          "client": "yes",
+          "server": "no"
+        },
+        "rust": {
+          "client": "no",
+          "server": "no"
+        }
+      }
+    },
+    {
+      "family": "titles",
+      "support": {
+        "cpp": {
+          "client": "yes",
+          "server": "partial"
+        },
+        "c": {
+          "client": "yes",
+          "server": "no"
+        },
+        "python": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "typescript": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "go": {
+          "client": "yes",
+          "server": "no"
+        },
+        "rust": {
+          "client": "no",
+          "server": "no"
+        }
+      }
+    },
+    {
+      "family": "changes",
+      "support": {
+        "cpp": {
+          "client": "yes",
+          "server": "partial"
+        },
+        "c": {
+          "client": "yes",
+          "server": "no"
+        },
+        "python": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "typescript": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "go": {
+          "client": "yes",
+          "server": "no"
+        },
+        "rust": {
+          "client": "no",
+          "server": "no"
+        }
+      }
+    },
+    {
+      "family": "sections",
+      "support": {
+        "cpp": {
+          "client": "yes",
+          "server": "partial"
+        },
+        "c": {
+          "client": "yes",
+          "server": "no"
+        },
+        "python": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "typescript": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "go": {
+          "client": "no",
+          "server": "no"
+        },
+        "rust": {
+          "client": "no",
+          "server": "no"
+        }
+      }
+    },
+    {
+      "family": "homebrew",
+      "support": {
+        "cpp": {
+          "client": "yes",
+          "server": "partial"
+        },
+        "c": {
+          "client": "yes",
+          "server": "no"
+        },
+        "python": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "typescript": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "go": {
+          "client": "no",
+          "server": "no"
+        },
+        "rust": {
+          "client": "no",
+          "server": "no"
+        }
+      }
+    },
+    {
+      "family": "saves",
+      "support": {
+        "cpp": {
+          "client": "yes",
+          "server": "partial"
+        },
+        "c": {
+          "client": "yes",
+          "server": "no"
+        },
+        "python": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "typescript": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "go": {
+          "client": "no",
+          "server": "no"
+        },
+        "rust": {
+          "client": "no",
+          "server": "no"
+        }
+      }
+    },
+    {
+      "family": "cheats",
+      "support": {
+        "cpp": {
+          "client": "yes",
+          "server": "partial"
+        },
+        "c": {
+          "client": "yes",
+          "server": "no"
+        },
+        "python": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "typescript": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "go": {
+          "client": "no",
+          "server": "no"
+        },
+        "rust": {
+          "client": "no",
+          "server": "no"
+        }
+      }
+    },
+    {
+      "family": "requests",
+      "support": {
+        "cpp": {
+          "client": "yes",
+          "server": "partial"
+        },
+        "c": {
+          "client": "yes",
+          "server": "no"
+        },
+        "python": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "typescript": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "go": {
+          "client": "no",
+          "server": "no"
+        },
+        "rust": {
+          "client": "no",
+          "server": "no"
+        }
+      }
+    },
+    {
+      "family": "pairing",
+      "support": {
+        "cpp": {
+          "client": "yes",
+          "server": "partial"
+        },
+        "c": {
+          "client": "yes",
+          "server": "no"
+        },
+        "python": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "typescript": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "go": {
+          "client": "yes",
+          "server": "no"
+        },
+        "rust": {
+          "client": "no",
+          "server": "no"
+        }
+      }
+    },
+    {
+      "family": "signatures",
+      "support": {
+        "cpp": {
+          "client": "yes",
+          "server": "partial"
+        },
+        "c": {
+          "client": "yes",
+          "server": "no"
+        },
+        "python": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "typescript": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "go": {
+          "client": "yes",
+          "server": "no"
+        },
+        "rust": {
+          "client": "no",
+          "server": "no"
+        }
+      }
+    },
+    {
+      "family": "admin",
+      "support": {
+        "cpp": {
+          "client": "yes",
+          "server": "partial"
+        },
+        "c": {
+          "client": "yes",
+          "server": "no"
+        },
+        "python": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "typescript": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "go": {
+          "client": "no",
+          "server": "no"
+        },
+        "rust": {
+          "client": "no",
+          "server": "no"
+        }
+      }
+    },
+    {
+      "family": "events",
+      "support": {
+        "cpp": {
+          "client": "yes",
+          "server": "partial"
+        },
+        "c": {
+          "client": "yes",
+          "server": "no"
+        },
+        "python": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "typescript": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "go": {
+          "client": "no",
+          "server": "no"
+        },
+        "rust": {
+          "client": "no",
+          "server": "no"
+        }
+      }
+    },
+    {
+      "family": "peers",
+      "support": {
+        "cpp": {
+          "client": "yes",
+          "server": "partial"
+        },
+        "c": {
+          "client": "yes",
+          "server": "no"
+        },
+        "python": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "typescript": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "go": {
+          "client": "no",
+          "server": "no"
+        },
+        "rust": {
+          "client": "no",
+          "server": "no"
+        }
+      }
+    },
+    {
+      "family": "sync",
+      "support": {
+        "cpp": {
+          "client": "yes",
+          "server": "no"
+        },
+        "c": {
+          "client": "yes",
+          "server": "no"
+        },
+        "python": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "typescript": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "go": {
+          "client": "no",
+          "server": "no"
+        },
+        "rust": {
+          "client": "no",
+          "server": "no"
+        }
+      }
+    },
+    {
+      "family": "encrypted_saves",
+      "support": {
+        "cpp": {
+          "client": "yes",
+          "server": "partial"
+        },
+        "c": {
+          "client": "yes",
+          "server": "no"
+        },
+        "python": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "typescript": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "go": {
+          "client": "no",
+          "server": "no"
+        },
+        "rust": {
+          "client": "no",
+          "server": "no"
+        }
+      }
+    },
+    {
+      "family": "deltas",
+      "support": {
+        "cpp": {
+          "client": "yes",
+          "server": "no"
+        },
+        "c": {
+          "client": "yes",
+          "server": "no"
+        },
+        "python": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "typescript": {
+          "client": "yes",
+          "server": "yes"
+        },
+        "go": {
+          "client": "no",
+          "server": "no"
+        },
+        "rust": {
+          "client": "no",
+          "server": "no"
+        }
+      }
+    }
+  ],
+  "levels": {
+    "python": "Lantern Core +titles +homebrew +saves +cheats +requests +admin +events +peers +sync +encrypted_saves +deltas",
+    "typescript": "Lantern Core +titles +homebrew +saves +cheats +requests +admin +events +peers +sync +encrypted_saves +deltas"
+  },
+  "calls": [
+    {
+      "id": "handshake",
+      "spec": "4.2",
+      "calls": {
+        "cpp": "handshake",
+        "c": "lantern_client_handshake",
+        "python": "handshake",
+        "typescript": "handshake"
+      },
+      "where": {
+        "cpp": "cpp/include/lantern/accounts.hpp",
+        "c": "c/include/lantern/lantern.h",
+        "python": "python/src/lantern/_generated/models.py",
+        "typescript": "typescript/src/client/client.ts"
+      }
+    },
+    {
+      "id": "apps",
+      "spec": "6.1",
+      "calls": {
+        "cpp": "apps",
+        "c": "lantern_client_apps",
+        "python": "iter_apps",
+        "typescript": "iterApps"
+      },
+      "where": {
+        "cpp": "cpp/include/lantern/client.hpp",
+        "c": "c/include/lantern/lantern.h",
+        "python": "python/src/lantern/__init__.py",
+        "typescript": "typescript/src/client/client.ts"
+      }
+    },
+    {
+      "id": "missing",
+      "spec": "6.3",
+      "calls": {
+        "cpp": "missing",
+        "c": "lantern_client_missing",
+        "python": "missing",
+        "typescript": "missing"
+      },
+      "where": {
+        "cpp": "cpp/include/lantern/client.hpp",
+        "c": "c/include/lantern/lantern.h",
+        "python": "python/src/lantern/_base.py",
+        "typescript": "typescript/src/base.ts"
+      }
+    },
+    {
+      "id": "download",
+      "spec": "6.6",
+      "calls": {
+        "cpp": "download",
+        "c": "lantern_client_download",
+        "python": "download_app",
+        "typescript": "downloadAppTo"
+      },
+      "where": {
+        "cpp": "cpp/include/lantern/chunks.hpp",
+        "c": "c/include/lantern/lantern.h",
+        "python": "python/src/lantern/client/aio.py",
+        "typescript": "typescript/src/node/index.ts"
+      }
+    },
+    {
+      "id": "pair",
+      "spec": "5.2",
+      "calls": {
+        "cpp": "start_pairing",
+        "c": "lantern_client_start_pairing",
+        "python": "pair",
+        "typescript": "pair"
+      },
+      "where": {
+        "cpp": "cpp/include/lantern/client.hpp",
+        "c": "c/include/lantern/lantern.h",
+        "python": "python/src/lantern/client/aio.py",
+        "typescript": "typescript/src/client/client.ts"
+      }
+    },
+    {
+      "id": "await_pairing",
+      "spec": "5.4",
+      "calls": {
+        "cpp": "poll_pairing",
+        "c": "lantern_client_poll_pairing",
+        "python": "wait_for_pairing",
+        "typescript": "waitForPairing"
+      },
+      "where": {
+        "cpp": "cpp/include/lantern/accounts.hpp",
+        "c": "c/include/lantern/lantern.h",
+        "python": "python/src/lantern/client/aio.py",
+        "typescript": "typescript/src/client/client.ts"
+      }
+    },
+    {
+      "id": "upload_save",
+      "spec": "9.3",
+      "calls": {
+        "cpp": "upload_save",
+        "c": "lantern_client_upload_save",
+        "python": "upload_save",
+        "typescript": "uploadSave"
+      },
+      "where": {
+        "cpp": "cpp/include/lantern/client.hpp",
+        "c": "c/include/lantern/lantern.h",
+        "python": "python/src/lantern/client/aio.py",
+        "typescript": "typescript/src/client/client.ts"
+      }
+    },
+    {
+      "id": "events",
+      "spec": "18",
+      "calls": {
+        "cpp": "events",
+        "c": "lantern_client_events",
+        "python": "events",
+        "typescript": "events"
+      },
+      "where": {
+        "cpp": "cpp/include/lantern/client.hpp",
+        "c": "c/include/lantern/lantern.h",
+        "python": "python/src/lantern/__init__.py",
+        "typescript": "typescript/src/client/client.ts"
+      }
+    },
+    {
+      "id": "serve",
+      "spec": "17",
+      "calls": {
+        "cpp": "Server",
+        "c": null,
+        "python": "LanternApp",
+        "typescript": "LanternApp"
+      },
+      "where": {
+        "cpp": "cpp/include/lantern/events.hpp",
+        "python": "python/src/lantern/server/__init__.py",
+        "typescript": "typescript/src/server/accounts.ts"
+      }
+    },
+    {
+      "id": "static_write",
+      "spec": "21",
+      "calls": {
+        "cpp": null,
+        "c": null,
+        "python": "export",
+        "typescript": "writeStatic"
+      },
+      "where": {
+        "python": "python/src/lantern/static.py",
+        "typescript": "typescript/src/node/index.ts"
+      }
+    },
+    {
+      "id": "static_read",
+      "spec": "21",
+      "calls": {
+        "cpp": "StaticLibrary",
+        "c": null,
+        "python": "StaticLibrary",
+        "typescript": "StaticLibrary"
+      },
+      "where": {
+        "cpp": "cpp/include/lantern/static_library.hpp",
+        "python": "python/src/lantern/static.py",
+        "typescript": "typescript/src/client/delta.ts"
+      }
+    }
+  ],
+  "examples": [
+    {
+      "id": "demo-server",
+      "language": "cpp",
+      "path": "cpp/examples/demo_server.cpp",
+      "title": "The server core over a small fictional library, for a look and for the conformance run",
+      "source": "// The server core over a small fictional library, for a look and for the\n// conformance run:\n//\n//     lantern_demo_server [port] [--private] [--no-encrypted-saves]\n//     python3 spec/conformance/run.py http://127.0.0.1:PORT/ --origin https://app.example.org\n//\n// It serves the library (Lantern Core: the handshake, the apps, what a\n// device is missing, the files, with its changes and sections, its titles\n// with their images, its homebrew and its cheat sets) to anyone, takes cheat\n// sets from a token with the scope cheats.write, keeps save backups (also\n// encrypted ones) in memory for the accounts with the scope saves, keeps the\n// requests for games of the accounts with the scope requests, tells what\n// changes as events (a stream and the long poll of `changes`, § 18), and pairs\n// devices: the accounts of demo_accounts.hpp, a token bound to a key, signed\n// requests, invitations. An account with the scope admin runs the\n// administration API: accounts, devices, pairings, invitations, requests.\n// `--private` asks for a token on the library; `--no-encrypted-saves` keeps\n// no backup encrypted on the device (a 400, § 9.4). Plain HTTP on 127.0.0.1; it\n// prints its URL and serves until it is stopped. No port, or 0: a free one.\n#include <atomic>\n#include <chrono>\n#include <csignal>\n#include <cstdio>\n#include <cstdlib>\n#include <string>\n#include <string_view>\n#include <thread>\n\n#include <lantern/lantern.hpp>\n\n#include \"demo_accounts.hpp\"\n#include \"demo_library.hpp\"\n#include \"posix_system.hpp\"\n#include \"server_posix.hpp\"\n\nnamespace\n{\n\nstd::atomic<bool> stop { false };\n\nextern \"C\" void on_signal(int /*signal*/)\n{\n    stop.store(true);\n}\n\nint report(const lantern::Error& error)\n{\n    std::fprintf(\n        stderr, \"demo server: %.*s\\n\", static_cast<int>(error.detail().size()), error.detail().data());\n    return 1;\n}\n\n} // namespace\n\nint main(int argc, char** argv)\n{\n    unsigned port   = 0;\n    bool is_private = false;\n    bool encrypted  = true;\n    for (int i = 1; i < argc; ++i)\n    {\n        if (std::string_view(argv[i]) == \"--private\")\n        {\n            is_private = true;\n            continue;\n        }\n        if (std::string_view(argv[i]) == \"--no-encrypted-saves\")\n        {\n            encrypted = false;\n            continue;\n        }\n        char* end    = nullptr;\n        const long n = std::strtol(argv[i], &end, 10);\n        if (end == argv[i] || *end != '\\0' || n < 0 || n > 65535)\n        {\n            std::fprintf(stderr, \"usage: lantern_demo_server [port] [--private] [--no-encrypted-saves]\\n\");\n            return 2;\n        }\n        port = static_cast<unsigned>(n);\n    }\n\n    lantern::MemoryLibrary library(lantern::demo::base);\n    if (auto filled = lantern::demo::fill(library); !filled)\n        return report(filled.error());\n\n    lantern::SystemClock clock;\n    lantern::MemoryAccountStore accounts;\n    if (auto filled = lantern::demo::fill_accounts(accounts, clock.unix_seconds()); !filled)\n        return report(filled.error());\n\n    lantern::MemorySaveStore saves;\n    lantern::MemoryRequestStore requests;\n    const std::array<std::string_view, 1> origins { lantern::demo::origin };\n    lantern::ServerOptions options;\n    options.uid              = lantern::demo::uid;\n    options.name             = \"Demo shelf\";\n    options.base             = lantern::demo::base;\n    options.scheme           = \"http\";\n    options.cors_origins     = origins;\n    options.software_name    = \"lantern-sdk C++ demo\";\n    options.software_version = \"0.1\";\n    options.accounts         = &accounts;\n    options.require_auth     = is_private;\n    options.saves            = &saves;\n    options.requests         = &requests;\n    options.encrypted_saves  = encrypted;\n    // Events: a line on a stream every 5 seconds at least, which keeps the conformance run short\n    options.events     = true;\n    options.heartbeat  = 5;\n    options.wait_limit = 30;\n    lantern::posix::SystemRandom random;\n    auto server = lantern::Server::create(library, options, random, clock);\n    if (!server)\n        return report(server.error());\n\n    lantern::posix::ListenOptions listen;\n    listen.port = static_cast<std::uint16_t>(port);\n    // A cheat set is 1 MiB of text at most (§ 13), escaped in its JSON body\n    listen.max_body = std::size_t { 3 } << 20U;\n    // A save of up to save_limits.size is streamed to the store, never buffered\n    listen.max_stream = options.save_limits.size;\n    auto listener     = lantern::posix::HttpListener::listen(*server, listen);\n    if (!listener)\n        return report(listener.error());\n\n    std::signal(SIGINT, on_signal);\n    std::signal(SIGTERM, on_signal);\n    std::printf(\"http://127.0.0.1:%u/\\n\", static_cast<unsigned>(listener->port()));\n    std::fflush(stdout);\n    listener->serve(stop);\n    // The streams still open are told, then the listener ends them\n    server->shutdown();\n    std::this_thread::sleep_for(std::chrono::milliseconds(200));\n    return 0;\n}\n"
+    },
+    {
+      "id": "pair-device",
+      "language": "cpp",
+      "path": "cpp/examples/pair_device.cpp",
+      "title": "The README's pairing example: a device key, the code and the QR code's address shown, the polls signed, the token kept",
+      "source": "// The README's pairing example: a device key, the code and the QR code's\n// address shown, the polls signed, the token kept.\n//\n//     pair_device http://127.0.0.1:8080 \"Lea's Switch\"\n//\n// Over the loopback adapter (plain HTTP on 127.0.0.1 only); an app gives\n// its own Transport, with TLS and a ServerTrust (adapters/curl,\n// adapters/mbedtls), and keeps the credentials where its system keeps\n// secrets.\n#include <array>\n#include <chrono>\n#include <cstdio>\n#include <optional>\n#include <string>\n#include <string_view>\n#include <thread>\n\n#include <lantern/lantern.hpp>\n\n#include \"posix_http.hpp\"\n#include \"posix_system.hpp\"\n\nnamespace\n{\n\n// Kept in memory here; an app writes them where its system protects secrets.\nclass Kept final : public lantern::CredentialStore\n{\n  public:\n    lantern::Result<std::optional<lantern::Credentials>> load(std::string_view, lantern::Allocator) override\n    {\n        return std::optional<lantern::Credentials> {};\n    }\n    lantern::Result<void> store(std::string_view uid, const lantern::Credentials& credentials) override\n    {\n        std::printf(\"kept for %.*s: a token%s\\n\", static_cast<int>(uid.size()), uid.data(),\n            credentials.key ? \" and its device key\" : \"\");\n        return {};\n    }\n    lantern::Result<void> erase(std::string_view) override { return {}; }\n};\n\nint report(const lantern::Error& error)\n{\n    std::fprintf(stderr, \"error (%u): %.*s\\n\", static_cast<unsigned>(error.status()),\n        static_cast<int>(error.detail().size()), error.detail().data());\n    return 1;\n}\n\n} // namespace\n\nint main(int argc, char** argv)\n{\n    if (argc < 3)\n    {\n        std::fprintf(stderr, \"usage: pair_device ORIGIN DEVICE-NAME\\n\");\n        return 2;\n    }\n    lantern::posix::LoopbackTransport transport;\n    lantern::posix::SystemRandom random;\n    lantern::ClientConfig config;\n    config.origin     = argv[1];\n    config.user_agent = \"PairDevice/0.5\";\n    config.platform   = \"switch\";\n    config.random     = &random;\n    auto client       = lantern::Client::create(transport, config);\n    if (!client)\n        return report(client.error());\n    if (const auto server = client->handshake(); !server || !*server)\n        return server ? 1 : report(server.error());\n\n    const std::array<std::string_view, 2> scopes { \"library\", \"saves\" };\n    lantern::PairingOptions options;\n    options.device = argv[2];\n    options.scopes = scopes;\n    auto pairing   = client->start_pairing(options); // with a new device key\n    if (!pairing)\n        return report(pairing.error());\n    // The code, and the address a QR code holds (the app draws it): the\n    // user approves on the server's page, or an admin's device\n    std::printf(\"code %s\\nopen %s\\n\", pairing->code.code.c_str(), pairing->code.verify_complete.c_str());\n\n    Kept store;\n    for (;;)\n    {\n        std::this_thread::sleep_for(std::chrono::seconds(pairing->wait));\n        const auto polled = client->poll_pairing(*pairing, &store); // signed by the device key\n        if (!polled)\n            return report(polled.error());\n        if (*polled == lantern::PollState::paired)\n            break;\n    }\n    const auto server = client->handshake(); // signed from now on\n    if (!server || !*server)\n        return server ? 1 : report(server.error());\n    std::printf(\"paired as %s\\n\", (*server)->account.name.c_str());\n    return 0;\n}\n"
+    },
+    {
+      "id": "read-library",
+      "language": "cpp",
+      "path": "cpp/examples/read_library.cpp",
+      "title": "The README's example: the handshake, a listing, a verified download",
+      "source": "// The README's example: the handshake, a listing, a verified download.\n//\n//     read_library http://127.0.0.1:8080 [platform]\n//\n// Over the loopback adapter (plain HTTP on 127.0.0.1 only); an app gives\n// its own Transport, with TLS.\n#include <cstdio>\n#include <string>\n\n#include <lantern/lantern.hpp>\n\n#include \"posix_http.hpp\"\n\nnamespace\n{\n\n// Bytes kept in memory; an app writes them to its storage.\nclass Counting final : public lantern::DownloadSink\n{\n  public:\n    std::uint64_t bytes = 0;\n    lantern::Result<void> write(std::span<const std::byte> chunk) override\n    {\n        bytes += chunk.size();\n        return {};\n    }\n    lantern::Result<void> restart() override\n    {\n        bytes = 0;\n        return {};\n    }\n};\n\nint report(const lantern::Error& error)\n{\n    const std::string_view category = lantern::category_name(error.category());\n    const std::string_view code     = lantern::code_name(error.effective_code());\n    std::fprintf(stderr, \"error (%.*s, %u %.*s): %.*s\\n\", static_cast<int>(category.size()), category.data(),\n        static_cast<unsigned>(error.status()), static_cast<int>(code.size()), code.data(),\n        static_cast<int>(error.detail().size()), error.detail().data());\n    return 1;\n}\n\n} // namespace\n\nint main(int argc, char** argv)\n{\n    if (argc < 2)\n    {\n        std::fprintf(stderr, \"usage: read_library ORIGIN [platform]\\n\");\n        return 2;\n    }\n    lantern::posix::LoopbackTransport transport;\n    lantern::ClientConfig config;\n    config.origin     = argv[1];\n    config.user_agent = \"ReadLibrary/0.3\";\n    config.platform   = argc > 2 ? argv[2] : \"switch\";\n    auto client       = lantern::Client::create(transport, config);\n    if (!client)\n        return report(client.error());\n\n    // 1. The handshake: the server's name, its base path, what it offers\n    const auto server = client->handshake();\n    if (!server)\n        return report(server.error());\n    if (!*server)\n    {\n        std::fprintf(stderr, \"the server speaks a newer schema than this client reads\\n\");\n        return 1;\n    }\n    std::printf(\"%s (%s)\\n\", (*server)->name.c_str(), (*server)->uid.c_str());\n\n    // 2. The listing, page by page\n    lantern::AppsQuery query;\n    query.page_size = 50;\n    std::string cursor;\n    std::optional<lantern::App> first;\n    do\n    {\n        query.cursor    = cursor;\n        const auto page = client->apps(query);\n        if (!page)\n            return report(page.error());\n        if (!*page)\n            break; // a newer schema: the listing is unavailable to this client\n        for (const lantern::App& app : (*page)->items)\n        {\n            std::printf(\"  %-24s %-6s v%-10llu %s\\n\", app.name.c_str(), app.type.c_str(),\n                static_cast<unsigned long long>(app.version_code), app.app_id.c_str());\n            if (!first)\n                first.emplace(app, client->allocator());\n        }\n        cursor.assign((*page)->next);\n    } while (!cursor.empty());\n\n    // 3. A download, checked against the listing's size and SHA-256: success\n    // only when the whole file's digest matches\n    if (first)\n    {\n        Counting sink;\n        lantern::DownloadState state;\n        const auto done = client->download({ first->file, first->size, first->sha256 }, state, sink);\n        if (!done)\n            return report(done.error());\n        std::printf(\"downloaded %s: %llu bytes, SHA-256 verified\\n\", first->name.c_str(),\n            static_cast<unsigned long long>(sink.bytes));\n    }\n    return 0;\n}\n"
+    },
+    {
+      "id": "read-library",
+      "language": "c",
+      "path": "c/examples/read_library.c",
+      "title": "Reads a Lantern server's library, page by page, and downloads its first app, checked, over libcurl: c/README.md's example",
+      "source": "/* Reads a Lantern server's library, page by page, and downloads its first\n * app, checked, over libcurl: c/README.md's example.\n *   read_library https://shelf.example.org [TOKEN SEED_HEX] */\n#include <lantern/lantern.h>\n\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\nstatic lantern_status write_file(void* user, const uint8_t* bytes, size_t size)\n{\n    return fwrite(bytes, 1, size, (FILE*)user) == size ? LANTERN_OK : LANTERN_ERROR_STORAGE;\n}\n\n/* The server sends the file from its start again */\nstatic lantern_status restart_file(void* user)\n{\n    return fseek((FILE*)user, 0, SEEK_SET) == 0 ? LANTERN_OK : LANTERN_ERROR_STORAGE;\n}\n\nstatic int report(const char* what, const lantern_error* error)\n{\n    fprintf(stderr, \"%s: %s (%s, HTTP %u, %s)\\n\", what, error->detail, lantern_status_name(error->status),\n        (unsigned)error->http_status, error->code_text);\n    return EXIT_FAILURE;\n}\n\nstatic bool seed_of(const char* hex, uint8_t seed[32])\n{\n    return lantern_digest_from_hex(hex, seed); /* 64 lower-case hex digits, as a digest */\n}\n\nint main(int argc, char** argv)\n{\n    if (argc != 2 && argc != 4)\n    {\n        fprintf(stderr, \"usage: %s ORIGIN [TOKEN SEED_HEX]\\n\", argv[0]);\n        return EXIT_FAILURE;\n    }\n    if (lantern_version() < LANTERN_C_API_VERSION)\n    {\n        fprintf(stderr, \"liblantern_c is older than its header\\n\");\n        return EXIT_FAILURE;\n    }\n    lantern_error error          = LANTERN_INIT(lantern_error);\n    lantern_trust* trust         = NULL;\n    lantern_transport* transport = NULL;\n    lantern_random* random       = NULL;\n    lantern_client* client       = NULL;\n    lantern_handshake* server    = NULL;\n    lantern_apps_page* first     = NULL;\n    int status                   = EXIT_FAILURE;\n\n    /* libcurl's TLS, the server's key checked by the trust (SPEC.md 5.3) */\n    lantern_curl_options options = LANTERN_INIT(lantern_curl_options);\n    if (lantern_trust_create(NULL, &trust, &error) != LANTERN_OK\n        || lantern_curl_global_init(&error) != LANTERN_OK)\n        goto done;\n    options.trust = trust;\n    if (lantern_transport_create_curl(&options, NULL, &transport, &error) != LANTERN_OK\n        || lantern_random_create_system(NULL, &random, &error) != LANTERN_OK)\n        goto done;\n\n    lantern_client_config config = LANTERN_INIT(lantern_client_config);\n    config.origin                = argv[1];\n    config.user_agent            = \"ReadLibrary/1.0\";\n    config.platform              = \"switch\";\n    config.transport             = transport;\n    config.random                = random;\n    config.trust                 = trust;\n    if (lantern_client_create(&config, &client, &error) != LANTERN_OK)\n        goto done;\n    if (argc == 4)\n    {\n        /* A token bound to a device key (SPEC.md 5.4): every request is signed */\n        uint8_t seed[32];\n        lantern_device_key* key = NULL;\n        if (!seed_of(argv[3], seed) || lantern_device_key_from_seed(seed, NULL, &key, &error) != LANTERN_OK)\n            goto done;\n        const lantern_status set = lantern_client_set_credentials(client, argv[2], key, &error);\n        lantern_device_key_free(key); /* the client keeps a copy */\n        if (set != LANTERN_OK)\n            goto done;\n    }\n\n    const lantern_status shake = lantern_client_handshake(client, &server, &error);\n    if (shake == LANTERN_ABSENT)\n    {\n        fprintf(stderr, \"a server of a newer protocol: update the app\\n\");\n        goto done;\n    }\n    if (shake != LANTERN_OK)\n        goto done;\n    printf(\"%s\\n\", lantern_handshake_get_name(server).data);\n\n    /* Every page, by its cursor; the first page is kept for its first app */\n    char cursor[512] = \"\";\n    do\n    {\n        lantern_apps_query query = LANTERN_INIT(lantern_apps_query);\n        query.cursor             = cursor;\n        lantern_apps_page* page  = NULL;\n        if (lantern_client_apps(client, &query, &page, &error) != LANTERN_OK)\n            goto done;\n        for (size_t i = 0; i < lantern_apps_page_get_items_count(page); ++i)\n        {\n            const lantern_app* app = lantern_apps_page_get_items_at(page, i);\n            printf(\"  %s (%s)\\n\", lantern_app_get_name(app).data, lantern_app_get_app_id(app).data);\n        }\n        snprintf(cursor, sizeof(cursor), \"%s\", lantern_apps_page_get_next(page).data);\n        if (first == NULL)\n            first = page;\n        else\n            lantern_apps_page_free(page);\n    } while (cursor[0] != '\\0');\n\n    const lantern_app* app = lantern_apps_page_get_items_at(first, 0);\n    if (app == NULL)\n    {\n        status = EXIT_SUCCESS;\n        goto done;\n    }\n    /* The file, its size and SHA-256 as the listing gave them */\n    lantern_download_target target = LANTERN_INIT(lantern_download_target);\n    target.url                     = lantern_app_get_file(app).data;\n    lantern_app_get_size(app, &target.size);\n    lantern_app_get_sha256(app, target.sha256);\n    FILE* file = fopen(\"first-app.part\", \"wb\");\n    if (file == NULL)\n        goto done;\n    lantern_download_callbacks callbacks = LANTERN_INIT(lantern_download_callbacks);\n    callbacks.user                       = file;\n    callbacks.write                      = write_file;\n    callbacks.restart                    = restart_file;\n    lantern_download_sink* sink          = NULL;\n    lantern_download_state* state        = NULL;\n    lantern_status got                   = lantern_download_sink_create(&callbacks, NULL, &sink, &error);\n    if (got == LANTERN_OK)\n        got = lantern_download_state_create(NULL, &state, &error);\n    if (got == LANTERN_OK)\n        got = lantern_client_download(client, &target, state, sink, &error);\n    lantern_download_sink_free(sink);\n    lantern_download_state_free(state);\n    fclose(file);\n    /* Only now, with the SHA-256 checked, is the file the app's */\n    if (got == LANTERN_OK && rename(\"first-app.part\", \"first-app.bin\") == 0)\n        status = EXIT_SUCCESS;\n\ndone:\n    if (status != EXIT_SUCCESS && error.status != LANTERN_OK)\n        report(\"lantern\", &error);\n    lantern_apps_page_free(first);\n    lantern_handshake_free(server);\n    lantern_client_free(client);\n    lantern_transport_free(transport);\n    lantern_random_free(random);\n    lantern_trust_free(trust);\n    return status;\n}\n"
+    },
+    {
+      "id": "read-library",
+      "language": "python",
+      "path": "python/examples/read_library.py",
+      "title": "Reads a Lantern library: who serves it, its apps, what a console is missing, and one verified download",
+      "source": "\"\"\"Reads a Lantern library: who serves it, its apps, what a console is missing, and one verified download.\n\n    python examples/read_library.py https://shelf.example.org/ [platform]\n\nThe download is checked against the SHA-256 the server lists and renamed only when it matches; a `.part`\nfile is resumed with a Range request after a cut (SPEC.md § 6.6).\n\"\"\"\n\nfrom __future__ import annotations\n\nimport sys\nimport tempfile\nfrom pathlib import Path\n\nimport lantern\n\n\ndef main(url: str, platform: str = \"switch\") -> None:\n    with lantern.LanternClient(url, platform=platform, user_agent=\"ReadLibrary/1.0\") as client:\n        hello = client.handshake()\n        print(f\"{hello.name}: {', '.join(sorted(hello.features))}\")\n\n        apps = list(client.iter_apps(page_size=5))  # every page, cursor by cursor\n        for app in apps:\n            print(f\"  {app.name} {app.version_name or app.version_code} ({app.size} bytes)\")\n\n        # What a console that holds the first app, at version 0, is missing.\n        if apps:\n            page = client.missing([(apps[0].app_id, 0)], want=(\"update\", \"dlc\"))\n            print(f\"missing: {len(page.items)} on the first page\")\n\n        # The smallest non-empty file, downloaded to a temporary folder and checked on the way.\n        if apps:\n            smallest = min((a for a in apps if a.size), key=lambda a: a.size)\n            with tempfile.TemporaryDirectory() as folder:\n                saved = client.download_app(smallest, Path(folder) / f\"{smallest.app_id}.pkg\")\n                print(\n                    f\"downloaded {smallest.name}: {saved.stat().st_size} bytes, sha256 {smallest.sha256[:12]}… matched\"\n                )\n\n\nif __name__ == \"__main__\":\n    if len(sys.argv) < 2:\n        sys.exit(__doc__)\n    main(*sys.argv[1:3])\n"
+    },
+    {
+      "id": "serve-fastapi",
+      "language": "python",
+      "path": "python/examples/serve_fastapi.py",
+      "title": "Adds Lantern to a FastAPI app: the same one-game library as serve_flask.py",
+      "source": "\"\"\"Adds Lantern to a FastAPI app: the same one-game library as serve_flask.py.\n\nuvicorn --factory examples.serve_fastapi:make_app --port 8080\npython examples/serve_fastapi.py 8080\n\"\"\"\n\nfrom __future__ import annotations\n\nimport sys\n\nfrom fastapi import FastAPI\n\nfrom lantern.server import LanternApp, MemoryLibrary\nfrom lantern.server.fastapi import include\n\n\ndef make_app() -> FastAPI:\n    library = MemoryLibrary(base=\"/api/lantern\")\n    library.add_app_file(\n        data=b\"a made-up game\",\n        platform=\"switch\",\n        title_id=\"0100ABCD00010000\",\n        app_id=\"0100ABCD00010000\",\n        type=\"base\",\n        version_code=0,\n        name=\"Frost Garden\",\n        format=\"nsp\",\n        version_name=\"1.0.0\",\n    )\n    app = FastAPI()\n    include(app, LanternApp(library, uid=\"3d5c7e1a-0b2f-4c6d-9e8a-1f2b3c4d5e6f\", name=\"Living room shelf\"))\n    return app\n\n\nif __name__ == \"__main__\":\n    import uvicorn\n\n    uvicorn.run(make_app(), host=\"127.0.0.1\", port=int(sys.argv[1]) if len(sys.argv) > 1 else 8080)\n"
+    },
+    {
+      "id": "serve-flask",
+      "language": "python",
+      "path": "python/examples/serve_flask.py",
+      "title": "Adds Lantern to a Flask app: a library of one made-up game, served anonymously",
+      "source": "\"\"\"Adds Lantern to a Flask app: a library of one made-up game, served anonymously.\n\n    python examples/serve_flask.py 8080        # then: curl http://127.0.0.1:8080/.well-known/lantern\n\n`MemoryLibrary` holds apps in memory; a real server implements `lantern.server.Library` over its own\nfiles and database. For tokens, pairing and signed requests, pass `accounts=MemoryAccounts(...)`\n(or an `authenticate` hook) to `LanternApp`.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport sys\n\nfrom flask import Flask\n\nfrom lantern.server import LanternApp, MemoryLibrary\nfrom lantern.server.flask import init_app\n\n\ndef make_app() -> Flask:\n    library = MemoryLibrary(base=\"/api/lantern\")\n    library.add_app_file(\n        data=b\"a made-up game\",\n        platform=\"switch\",\n        title_id=\"0100ABCD00010000\",\n        app_id=\"0100ABCD00010000\",\n        type=\"base\",\n        version_code=0,\n        name=\"Frost Garden\",\n        format=\"nsp\",\n        version_name=\"1.0.0\",\n    )\n    app = Flask(__name__)\n    init_app(app, LanternApp(library, uid=\"3d5c7e1a-0b2f-4c6d-9e8a-1f2b3c4d5e6f\", name=\"Living room shelf\"))\n    return app\n\n\nif __name__ == \"__main__\":\n    make_app().run(host=\"127.0.0.1\", port=int(sys.argv[1]) if len(sys.argv) > 1 else 8080)\n"
+    },
+    {
+      "id": "static-library",
+      "language": "python",
+      "path": "python/examples/static_library.py",
+      "title": "A static library: a library written as JSON files (GitHub Pages, a NAS, a USB stick), then read back",
+      "source": "\"\"\"A static library: a library written as JSON files (GitHub Pages, a NAS, a USB stick), then read back.\n\n    python examples/static_library.py out/        # serve out/ with any web server, or open it as a folder\n\nSPEC.md § 21. The files are the same documents a live server sends, with their SHA-256 and a handshake at\n`lantern.json`, so a client reads them with no server code behind them.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport sys\nimport tempfile\nfrom pathlib import Path\n\nfrom lantern.server import MemoryLibrary\nfrom lantern.static import StaticLibrary, export\n\n\ndef main(out: Path) -> None:\n    library = MemoryLibrary(base=\"/api/lantern\")\n    library.add_app_file(\n        data=b\"a made-up game\",\n        platform=\"switch\",\n        title_id=\"0100ABCD00010000\",\n        app_id=\"0100ABCD00010000\",\n        type=\"base\",\n        version_code=0,\n        name=\"Frost Garden\",\n        format=\"nsp\",\n        version_name=\"1.0.0\",\n    )\n    summary = export(library, out, uid=\"3d5c7e1a-0b2f-4c6d-9e8a-1f2b3c4d5e6f\", name=\"Shelf on a stick\")\n    print(f\"wrote {summary}\")\n    with StaticLibrary(out) as shelf:\n        print(shelf.handshake().name, [app.name for app in shelf.iter_apps(\"switch\")])\n\n\nif __name__ == \"__main__\":\n    if len(sys.argv) > 1:\n        main(Path(sys.argv[1]))\n    else:\n        with tempfile.TemporaryDirectory() as folder:\n            main(Path(folder) / \"shelf\")\n"
+    },
+    {
+      "id": "read-library",
+      "language": "typescript",
+      "path": "typescript/examples/read-library.ts",
+      "title": "Reads a Lantern library: who serves it, its apps, what a console is missing, and one verified download",
+      "source": "/**\n * Reads a Lantern library: who serves it, its apps, what a console is missing, and one verified download.\n *\n *     node --conditions=source examples/read-library.ts https://shelf.example.org/ [platform]\n *\n * (In your own project, `npm install lantern-protocol` and run it with plain `node`.) The download is checked\n * against the SHA-256 the server lists and renamed only when it matches; a `.part` file is resumed with a Range\n * request after a cut (SPEC.md § 6.6).\n */\n\nimport { mkdtempSync, rmSync, statSync } from \"node:fs\";\nimport { tmpdir } from \"node:os\";\nimport { join } from \"node:path\";\nimport { NodeLanternClient } from \"lantern-protocol/node\";\n\nconst [url, platform = \"switch\"] = process.argv.slice(2);\nif (url === undefined) {\n  console.error(\"usage: read-library.ts <url> [platform]\");\n  process.exit(2);\n}\n\nconst client = new NodeLanternClient(url, { platform, userAgent: \"ReadLibrary/1.0\" });\nconst hello = await client.handshake();\nconsole.log(`${hello.name}: ${Object.keys(hello.features).sort().join(\", \")}`);\n\nconst apps = [];\nfor await (const app of client.iterApps({ pageSize: 5 })) {\n  // every page, cursor by cursor\n  apps.push(app);\n  console.log(`  ${app.name} ${app.version_name ?? app.version_code} (${app.size} bytes)`);\n}\n\n// What a console that holds the first app, at version 0, is missing.\nconst first = apps[0];\nif (first !== undefined) {\n  const page = await client.missing([[first.app_id, 0]]);\n  console.log(`missing: ${page.items.length} on the first page`);\n}\n\n// The smallest non-empty file, downloaded to a temporary folder and checked on the way.\nconst smallest = apps.filter((a) => a.size > 0).sort((a, b) => a.size - b.size)[0];\nif (smallest !== undefined) {\n  const folder = mkdtempSync(join(tmpdir(), \"lantern-\"));\n  try {\n    const saved = await client.downloadAppTo(smallest, join(folder, `${smallest.app_id}.pkg`));\n    console.log(\n      `downloaded ${smallest.name}: ${statSync(saved).size} bytes, sha256 ${smallest.sha256.slice(0, 12)}… matched`,\n    );\n  } finally {\n    rmSync(folder, { recursive: true, force: true });\n  }\n}\n"
+    },
+    {
+      "id": "serve-node",
+      "language": "typescript",
+      "path": "typescript/examples/serve-node.ts",
+      "title": "Adds Lantern to a Node server: a library of one made-up game, served anonymously by node:http",
+      "source": "/**\n * Adds Lantern to a Node server: a library of one made-up game, served anonymously by node:http.\n *\n *     node --conditions=source examples/serve-node.ts 8080   # then: curl http://127.0.0.1:8080/.well-known/lantern\n *\n * `MemoryLibrary` holds apps in memory; a real server implements `Library` over its own files and database.\n * For tokens, pairing and signed requests, pass `accounts: new MemoryAccounts(...)` (or `authenticate`) to\n * `LanternApp`. Behind Hono or any framework of web Requests, use `fetchHandler(app)` instead of `listen()`:\n * `hono.all(\"/*\", (c) => handler(c.req.raw))`.\n */\n\nimport { LanternApp, listen, MemoryLibrary } from \"lantern-protocol/server\";\n\nexport function makeApp(): LanternApp {\n  const library = new MemoryLibrary({ base: \"/api/lantern\" });\n  library.addAppFile({\n    data: new TextEncoder().encode(\"a made-up game\"),\n    platform: \"switch\",\n    title_id: \"0100ABCD00010000\",\n    app_id: \"0100ABCD00010000\",\n    type: \"base\",\n    version_code: 0,\n    version_name: \"1.0.0\",\n    name: \"Frost Garden\",\n    format: \"nsp\",\n  });\n  return new LanternApp(library, { uid: \"3d5c7e1a-0b2f-4c6d-9e8a-1f2b3c4d5e6f\", name: \"Living room shelf\" });\n}\n\nconst served = await listen(makeApp(), { port: Number(process.argv[2] ?? 8080), host: \"127.0.0.1\" });\nconsole.log(`serving ${served.url}`);\nprocess.on(\"SIGTERM\", () => void served.close().then(() => process.exit(0)));\nprocess.on(\"SIGINT\", () => void served.close().then(() => process.exit(0)));\n"
+    },
+    {
+      "id": "static-library",
+      "language": "typescript",
+      "path": "typescript/examples/static-library.ts",
+      "title": "A static library: a library written as JSON files (GitHub Pages, a NAS, a USB stick), then read back (`StaticLibrary.open(\"https://…\")` reads one over HTTP)",
+      "source": "/**\n * A static library: a library written as JSON files (GitHub Pages, a NAS, a USB stick), then read back (`StaticLibrary.open(\"https://…\")` reads one over HTTP).\n *\n *     node --conditions=source examples/static-library.ts out/\n *\n * SPEC.md § 21. The files are the same documents a live server sends, with their SHA-256 and a handshake in\n * `lantern.json`, so a client reads them with no server code behind them.\n */\n\nimport { mkdtempSync, rmSync } from \"node:fs\";\nimport { tmpdir } from \"node:os\";\nimport { join } from \"node:path\";\nimport { StaticLibrary } from \"lantern-protocol\";\nimport { FileStaticSource, libraryInput, writeStatic } from \"lantern-protocol/node\";\nimport { MemoryLibrary } from \"lantern-protocol/server\";\n\nconst library = new MemoryLibrary({ base: \"/api/lantern\" });\nlibrary.addAppFile({\n  data: new TextEncoder().encode(\"a made-up game\"),\n  platform: \"switch\",\n  title_id: \"0100ABCD00010000\",\n  app_id: \"0100ABCD00010000\",\n  type: \"base\",\n  version_code: 0,\n  version_name: \"1.0.0\",\n  name: \"Frost Garden\",\n  format: \"nsp\",\n});\n\nconst given = process.argv[2];\nconst out = given ?? join(mkdtempSync(join(tmpdir(), \"lantern-static-\")), \"shelf\");\ntry {\n  const summary = await writeStatic(\n    await libraryInput(library, { uid: \"3d5c7e1a-0b2f-4c6d-9e8a-1f2b3c4d5e6f\", name: \"Shelf on a stick\" }),\n    out,\n  );\n  console.log(`wrote ${JSON.stringify(summary)}`);\n  const shelf = await StaticLibrary.open(new FileStaticSource(out));\n  const names: string[] = [];\n  for await (const app of shelf.apps(\"switch\")) names.push(app.name ?? app.app_id);\n  console.log(shelf.hello.name, JSON.stringify(names));\n} finally {\n  if (given === undefined) rmSync(join(out, \"..\"), { recursive: true, force: true });\n}\n"
+    }
+  ]
+}

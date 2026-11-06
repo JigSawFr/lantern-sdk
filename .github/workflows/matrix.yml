@@ -1,6 +1,8 @@
 # The README's table of families by language (tools/check_matrix.py): its rows
 # are the specification's families, and its Python and TypeScript servers are
-# those the libraries' demo servers offer.
+# those the libraries' demo servers offer. And sdk.json (tools/site_data.py),
+# what the SDK says about itself to lantern.boreale.dev's SDK page: it is what
+# the sources say, and the calls it names exist.
 name: matrix
 
 # Called by ci.yml on every run: the table is the README's, and the check reads
@@ -41,3 +43,7 @@ jobs:
           (cd typescript && npm ci)
       - name: The table agrees with the servers
         run: python3 tools/check_matrix.py
+      - name: sdk.json is what the sources say
+        run: |
+          python3 tools/site_data.py --check
+          python3 -m unittest discover -s tools -p "test_*.py" -v

@@ -160,6 +160,8 @@ Each family of the specification (SPEC.md § 4.2), read as a client and served (
 | `deltas` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
 <!-- families:end -->
 
+`sdk.json` says all this, and the versions, the levels each server reaches and the examples, to [the site's SDK page](https://lantern.boreale.dev/sdk/?utm_source=github&utm_medium=readme); [`tools/site_data.py`](tools/site_data.py) writes it from the sources and CI checks it.
+
 ## 📦 Releases
 
 Nothing is released yet. One version for the whole SDK, the same in every language, with notes by language: the C++ library and the C API as source and as CMake packages built for Linux x86_64, the Python package `lantern-protocol` on PyPI and the npm package `lantern-protocol`, all on [the releases page](https://github.com/JigSawFr/lantern-sdk/releases). Every file is built by this repository's CI from the tag, reproducibly, with its SBOM, and attested (SLSA build provenance, through Sigstore); the packages are published by trusted publishing, without any token. [SECURITY.md](SECURITY.md#verifying-a-release) says how to check a file, [RELEASING.md](RELEASING.md) how a release is made.
