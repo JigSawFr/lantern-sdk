@@ -6,7 +6,8 @@ file, and If-Range."""
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from lantern.digest import format_digest, sha256_file, sha256_hex
@@ -20,13 +21,16 @@ _RANGE = re.compile(r"\s*bytes\s*=\s*(\d*)\s*-\s*(\d*)\s*")
 class FileRef:
     """A file the server serves: where it is (`path`, or its bytes in `data`
     for a small one), its size and SHA-256, known beforehand (a server hashes
-    a file before it lists it, SPEC.md § 6.1)."""
+    a file before it lists it, SPEC.md § 6.1). `read` serves a file that is not on this disk (a gateway
+    relaying its upstream): called with (first, length), it gives the bytes of that range as pieces. A file
+    served this way is not cut into chunks (SPEC.md § 22): it has no `path` to read."""
 
     path: str
     size: int
     sha256: str
     content_type: str = "application/octet-stream"
     data: bytes | None = None
+    read: Callable[[int, int], Iterable[bytes]] | None = field(default=None, compare=False, repr=False)
 
     def __post_init__(self) -> None:
         if not SHA256.match(self.sha256):
@@ -101,4 +105,4 @@ def file_response(request: ServerRequest, file: FileRef) -> ServerResponse:
         return ServerResponse(status, headers)
     if file.data is not None:
         return ServerResponse(status, headers, file.data[first : last + 1])
-    return ServerResponse(status, headers, FileBody(file.path, first, length))
+    return ServerResponse(status, headers, FileBody(file.path, first, length, source=file.read))
