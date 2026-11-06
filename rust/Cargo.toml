@@ -17,6 +17,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 sha2 = "0.10"
 regex = "1"
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 
 [lints.rust]
 unsafe_code = "forbid"

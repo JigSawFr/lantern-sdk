@@ -15,6 +15,7 @@ pub mod generated;
 pub mod limits;
 pub mod problem;
 pub mod profiles;
+pub mod signatures;
 pub mod spki;
 pub mod uid;
 pub mod variants;
