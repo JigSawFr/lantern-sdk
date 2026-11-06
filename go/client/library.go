@@ -99,48 +99,56 @@ func (c *Client) AppsPage(ctx context.Context, opts ListOptions, cursor string) 
 //		if err != nil { … }
 //	}
 func (c *Client) Apps(ctx context.Context, opts ListOptions) iter.Seq2[*lantern.App, error] {
-	return pages(ctx, func(cursor string) (*lantern.AppsPage, error) { return c.AppsPage(ctx, opts, cursor) })
+	return pages(ctx, func(cursor string) ([]lantern.App, *string, error) {
+		p, err := c.AppsPage(ctx, opts, cursor)
+		if err != nil {
+			return nil, nil, err
+		}
+		return p.Items, p.Next, nil
+	})
 }
 
 // checkPage holds a server to what a page promises: no more than it was asked for is not enforced
 // (a server may choose), but a page that is empty and goes on would loop a client for ever.
-func checkPage(p *lantern.AppsPage) error {
-	if p.Next != nil && *p.Next == "" {
+func checkPage(p *lantern.AppsPage) error { return checkNext(p.Next, len(p.Items)) }
+
+func checkNext(next *string, items int) error {
+	if next != nil && *next == "" {
 		return &lantern.DocumentError{Where: "next", Reason: "an empty cursor"}
 	}
-	if p.Next != nil && len(p.Items) == 0 {
+	if next != nil && items == 0 {
 		return &lantern.DocumentError{Where: "items", Reason: "an empty page that is not the last"}
 	}
 	return nil
 }
 
-func pages(ctx context.Context, page func(cursor string) (*lantern.AppsPage, error)) iter.Seq2[*lantern.App, error] {
-	return func(yield func(*lantern.App, error) bool) {
+func pages[T any](ctx context.Context, page func(cursor string) ([]T, *string, error)) iter.Seq2[*T, error] {
+	return func(yield func(*T, error) bool) {
 		cursor, seen := "", map[string]bool{}
 		for {
 			if err := ctx.Err(); err != nil {
 				yield(nil, err)
 				return
 			}
-			p, err := page(cursor)
+			items, next, err := page(cursor)
 			if err != nil {
 				yield(nil, err)
 				return
 			}
-			for i := range p.Items {
-				if !yield(&p.Items[i], nil) {
+			for i := range items {
+				if !yield(&items[i], nil) {
 					return
 				}
 			}
-			if p.Next == nil {
+			if next == nil {
 				return
 			}
-			if seen[*p.Next] {
+			if seen[*next] {
 				yield(nil, &lantern.DocumentError{Where: "next", Reason: "a cursor given twice"})
 				return
 			}
-			seen[*p.Next] = true
-			cursor = *p.Next
+			seen[*next] = true
+			cursor = *next
 		}
 	}
 }
@@ -221,7 +229,13 @@ func (c *Client) MissingPage(ctx context.Context, opts MissingOptions, cursor st
 
 // Missing is what the device is missing, page after page.
 func (c *Client) Missing(ctx context.Context, opts MissingOptions) iter.Seq2[*lantern.App, error] {
-	return pages(ctx, func(cursor string) (*lantern.AppsPage, error) { return c.MissingPage(ctx, opts, cursor) })
+	return pages(ctx, func(cursor string) ([]lantern.App, *string, error) {
+		p, err := c.MissingPage(ctx, opts, cursor)
+		if err != nil {
+			return nil, nil, err
+		}
+		return p.Items, p.Next, nil
+	})
 }
 
 // Changes reads what changed in the library since a token (SPEC.md § 6.4). Without one it gives
