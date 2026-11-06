@@ -29,8 +29,12 @@ bool is_valid_server_uid(std::string_view uid) noexcept
             if (c != '-')
                 return false;
         }
-        else if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
-            return false;
+        else
+        {
+            const bool lower_hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+            if (!lower_hex)
+                return false;
+        }
     }
     const char version = uid[14];
     const char variant = uid[19];
