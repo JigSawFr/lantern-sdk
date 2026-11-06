@@ -45,7 +45,7 @@ Client and server libraries for the [Lantern protocol](https://github.com/JigSaw
 | [`python/`](python/README.md) | Python 3.11+ | `lantern-protocol`: the client (sync and async), a server toolkit with Flask and FastAPI adapters, the generator of static libraries, the malicious test server |
 | [`typescript/`](typescript/README.md) | TypeScript | `lantern-protocol`: the client for browsers and Node, with no runtime dependency, and a server toolkit for Node and web Requests (Hono) |
 | [`go/`](go/README.md) | Go 1.24+ | `github.com/JigSawFr/lantern-sdk/go`: being built, family by family. So far the documents of the specification as typed values, their validation against its schemas, canonical JSON, digests and errors; no client or server yet |
-| [`rust/`](rust/README.md) | Rust 1.90+ | `lantern-protocol`: the documents as typed structs generated from the schemas; the client and the server toolkit follow, in slices |
+| [`rust/`](rust/README.md) | Rust 1.90+ | `lantern-protocol`: the documents as typed structs generated from the schemas, and the core without input or output (canonical JSON, digests, key fingerprints, limits, problems, profiles); the client and the server toolkit follow, in slices |
 
 Each folder's README has the details: installing, every call, what is not there yet.
 
