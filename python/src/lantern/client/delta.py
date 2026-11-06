@@ -12,6 +12,7 @@ import hashlib
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 from lantern._base import LanternError
 from lantern._generated.models import App, Package
@@ -36,13 +37,15 @@ class NothingShared(LanternError):
 class DeltaReport:
     """What the last differential download did (`client.last_delta`): `used` false when the whole file was
     read, and `reason` why; otherwise `reused` bytes taken from the seeds, `read` bytes read as `ranges`
-    ranges of the file."""
+    ranges of the file. `resumed` is the part of `reused` that came from what an interrupted earlier call left
+    (`<dest>.part`, kept as `<dest>.seed` for this call)."""
 
     used: bool = False
     reason: str | None = None
     reused: int = 0
     read: int = 0
     ranges: int = 0
+    resumed: int = 0
 
 
 class Assembly:
@@ -50,7 +53,9 @@ class Assembly:
     one range holds) or (False, pieces a seed gives). Every piece goes through take(), in order; finish()
     checks the whole."""
 
-    def __init__(self, file: App | Package, index: Index, seeds: Sequence[Seed]) -> None:
+    def __init__(self, file: App | Package, index: Index, seeds: Sequence[Seed], *, resumed: int | None = None) -> None:
+        """`resumed` is the position in `seeds` of the leftover of an interrupted call, if there is one."""
+        self.resumed = resumed
         self.verifier = Verifier(file.sha256, file.size, file.file)
         self.hasher = Sha256()
         self.seeds = list(seeds)
@@ -74,6 +79,8 @@ class Assembly:
         if hashlib.sha256(body).hexdigest() != piece.sha256:
             raise Refused(f"the seed's chunk for {piece.offset} does not match its SHA-256")
         self.report.reused += piece.length
+        if piece.source[0] == self.resumed:
+            self.report.resumed += piece.length
         return body
 
     def take(self, piece: Piece, body: bytes) -> bytes:
@@ -87,6 +94,43 @@ class Assembly:
     def finish(self) -> None:
         """IntegrityError unless the file put together is whole and its document's (L-22.3-2)."""
         self.verifier.finish(self.hasher)
+
+
+def _suffixed(dest: str | Path, suffix: str) -> Path:
+    d = Path(dest)
+    return d.with_name(d.name + suffix)
+
+
+def has_leftover(dest: str | Path) -> bool:
+    """Whether an interrupted call left `<dest>.part` (not empty) or `<dest>.seed`, to be used as a seed."""
+    part, seed = _suffixed(dest, ".part"), _suffixed(dest, ".seed")
+    try:
+        return seed.is_file() or (part.is_file() and part.stat().st_size > 0)
+    except OSError:
+        return False
+
+
+def claim_leftover(dest: str | Path) -> Path | None:
+    """What an interrupted call left, as the path `<dest>.seed` (the larger of `.part` and `.seed` when both
+    exist, the other deleted), or None. The caller deletes it when its call ends. Its chunks are checked by
+    their SHA-256 like any seed's, so a stale or foreign file only shares nothing."""
+    part, seed = _suffixed(dest, ".part"), _suffixed(dest, ".seed")
+    try:
+        sizes = {p: p.stat().st_size for p in (part, seed) if p.is_file()}
+        if part in sizes and sizes[part] == 0:
+            part.unlink(missing_ok=True)
+            del sizes[part]
+        if not sizes:
+            return None
+        best = max(sizes, key=lambda p: (sizes[p], p == part))
+        for p in sizes:
+            if p != best:
+                p.unlink(missing_ok=True)
+        if best != seed:
+            best.replace(seed)
+    except OSError:
+        return None
+    return seed
 
 
 def range_headers(start: int, end: int) -> dict[str, str]:

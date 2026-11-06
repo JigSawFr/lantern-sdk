@@ -68,7 +68,15 @@ from lantern.client.core import (
     retry_signature,
     token_record,
 )
-from lantern.client.delta import Assembly, DeltaReport, NothingShared, check_range, range_headers
+from lantern.client.delta import (
+    Assembly,
+    DeltaReport,
+    NothingShared,
+    check_range,
+    claim_leftover,
+    has_leftover,
+    range_headers,
+)
 from lantern.client.download import Verifier
 from lantern.client.stdlib import StdlibTransport
 from lantern.client.streams import EventStream
@@ -500,12 +508,16 @@ class LanternClient:
         comes, then the whole file by the document's size and SHA-256 before `dest` exists. Never more
         written than the file's size, nor more read of a source than the range asked (L-22.3-3).
 
+        An interrupted call (a kill, a hard network drop) leaves `<dest>.part`, a verified prefix of the file:
+        the next call keeps it as `<dest>.seed`, one more seed (even with no `seeds` of the caller's), so the
+        chunks already there are not read again; `last_delta.resumed` counts them.
+
         When the file has no index or no seed shares a chunk with it, or an index, a chunk, a seed or every
         source fails, the whole file is read as download_from() does (L-22.3-4); `last_delta` says which
         happened and how many bytes each way."""
         report = self.last_delta = DeltaReport()
         part = Path(dest).with_name(Path(dest).name + ".part")
-        if file.chunks is None or not seeds:
+        if file.chunks is None or not (seeds or has_leftover(dest)):
             report.reason = "the file has no chunk index" if file.chunks is None else "no seed"
         else:
             try:
@@ -538,26 +550,32 @@ class LanternClient:
         progress: Progress | None,
         report: DeltaReport,
     ) -> Path:
-        assembly = Assembly(file, self.chunk_index(file), seeds)
-        assembly.report = report
-        if not assembly.shares:
-            raise NothingShared("no chunk of the seeds is in the file")
-        sources: list[tuple[str, Transport | None, dict[str, str]]] = [
-            *self._sources(file, mirrors, peers, platform),
-            (file.file, None, {}),
-        ]
-        with part.open("wb") as f:
-            for read, group in assembly.groups:
-                if read:
-                    self._read_group(
-                        file=file, assembly=assembly, group=group, sources=sources, out=f, progress=progress
-                    )
-                    continue
-                for piece in group:
-                    f.write(assembly.take(piece, assembly.seed(piece)))
-                    if progress is not None:
-                        progress(assembly.hasher.size, file.size)
-        assembly.finish()
+        index = self.chunk_index(file)
+        left = claim_leftover(dest)
+        try:
+            assembly = Assembly(file, index, [*seeds, left] if left else seeds, resumed=len(seeds) if left else None)
+            assembly.report = report
+            if not assembly.shares:
+                raise NothingShared("no chunk of the seeds is in the file")
+            sources: list[tuple[str, Transport | None, dict[str, str]]] = [
+                *self._sources(file, mirrors, peers, platform),
+                (file.file, None, {}),
+            ]
+            with part.open("wb") as f:
+                for read, group in assembly.groups:
+                    if read:
+                        self._read_group(
+                            file=file, assembly=assembly, group=group, sources=sources, out=f, progress=progress
+                        )
+                        continue
+                    for piece in group:
+                        f.write(assembly.take(piece, assembly.seed(piece)))
+                        if progress is not None:
+                            progress(assembly.hasher.size, file.size)
+            assembly.finish()
+        finally:
+            if left:
+                left.unlink(missing_ok=True)
         Path(part).replace(dest)
         report.used = True
         return Path(dest)
