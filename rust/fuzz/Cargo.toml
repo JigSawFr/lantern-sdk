@@ -1,0 +1,38 @@
+[package]
+name = "lantern-protocol-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+
+[dependencies.lantern-protocol]
+path = ".."
+
+[workspace]
+
+[[bin]]
+name = "documents"
+path = "fuzz_targets/documents.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "answers"
+path = "fuzz_targets/answers.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fields"
+path = "fuzz_targets/fields.rs"
+test = false
+doc = false
+bench = false
