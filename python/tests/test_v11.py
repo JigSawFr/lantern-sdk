@@ -15,12 +15,10 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-import httpx
 import pytest
 
 from demo import DEMO_KEY, DEMO_TOKEN, build_library, delta_pair, demo_accounts, make_lantern
 from lantern import static
-from lantern.client.httpx_transport import AsyncHttpxTransport, HttpxTransport
 from lantern.client.stdlib import StdlibTransport
 from lantern.client.tls import pinned_context, unverified_context, verified_context
 from lantern.errors import TransportError
@@ -61,10 +59,13 @@ def test_l_2_9_a_context_given_with_an_older_floor_is_raised() -> None:
 @pytest.mark.parametrize("kwargs", [{}, {"verify": False}, {"pin": "0" * 64}])
 def test_l_2_9_httpx_clients_floor_at_tls_12(kwargs: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     """[L-2-9] The httpx transports build their clients on a context of TLS 1.2 at least."""
+    httpx = pytest.importorskip("httpx")
+    from lantern.client.httpx_transport import AsyncHttpxTransport, HttpxTransport
+
     seen: list[ssl.SSLContext] = []
     real = httpx.Client
 
-    def spy(*a: Any, **k: Any) -> httpx.Client:
+    def spy(*a: Any, **k: Any) -> Any:
         if isinstance(k.get("verify"), ssl.SSLContext):
             seen.append(k["verify"])
         return real(*a, **k)
