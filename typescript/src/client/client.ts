@@ -1,5 +1,5 @@
 /**
- * The client of one Lantern server: every route of draft 0.9, in a browser and
+ * The client of one Lantern server: every route of draft 0.11, in a browser and
  * in Node, over a Transport (fetch() by default).
  *
  *     const client = new LanternClient("https://shelf.example.org/", { platform: "switch", userAgent: "MyShelf/1.0" });

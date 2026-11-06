@@ -1,7 +1,7 @@
 """The specification's conformance suite (spec/conformance/run.py) against
 the demo server built from the toolkit (tests/demo.py), served by Flask and
 by FastAPI, anonymously and with a token. The demo offers every family of
-the draft 0.9: it curates sections, pairs devices, checks signed requests,
+the draft 0.11: it curates sections, pairs devices, checks signed requests,
 takes cheat sets written, keeps save backups (encrypted ones among them)
 and requests, cuts two versions of an update into chunks (§ 22), allows one page's origin (§ 2.5),
 answers the administration API (an account of the suite's
@@ -202,7 +202,7 @@ WITH_TOKEN = [
     "invitations.rate-limit",
     "pairing.rate-limit",
 ]
-#: The levels the demo reaches with its token (SPEC.md § 17): every one of the draft 0.9.
+#: The levels the demo reaches with its token (SPEC.md § 17): every one of the draft 0.11.
 LEVELS = "Lantern Core +titles +homebrew +saves +cheats +requests +admin +events +peers +sync +encrypted_saves +deltas"
 
 
@@ -288,7 +288,7 @@ def test_the_suite_passes(framework: str, token: bool, tmp_path: Path) -> None:
     expected = ["transport.https"] + ([] if zstd_available() else ["compression.json"])
     assert warnings == expected, report
     if token:
-        assert f"Levels reached (SPEC.md § 17, draft 0.9): {LEVELS}" in report, report
+        assert f"Levels reached (SPEC.md § 17, draft 0.11): {LEVELS}" in report, report
 
 
 def test_the_generators_static_library(tmp_path: Path) -> None:
@@ -312,7 +312,7 @@ def test_the_generators_static_library(tmp_path: Path) -> None:
         "chunks",
     ):
         assert re.search(rf"^PASS\s+§ \S+\s+static\.{re.escape(check)}\s", report, re.M), f"{check}\n{report}"
-    assert "Levels reached (SPEC.md § 17, draft 0.9): Lantern Static" in report
+    assert "Levels reached (SPEC.md § 17, draft 0.11): Lantern Static" in report
 
 
 def zstd_available() -> bool:
