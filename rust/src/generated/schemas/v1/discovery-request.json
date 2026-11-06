@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/discovery-request.json",
+  "title": "LAN discovery request",
+  "description": "The datagram a client sends to UDP 47115, as a directed broadcast (SPEC.md § 4.1).",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "$ref": "common.json#/$defs/schema1"
+    },
+    "lantern": {
+      "const": "discover"
+    },
+    "peers": {
+      "type": "boolean",
+      "description": "Also ask the peers of the network (SPEC.md § 19.5)."
+    }
+  },
+  "required": [
+    "schema",
+    "lantern"
+  ]
+}

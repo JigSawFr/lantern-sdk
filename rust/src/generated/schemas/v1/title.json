@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/title.json",
+  "title": "Title",
+  "description": "GET <base>/v1/titles/{title_id} (SPEC.md § 7.1).",
+  "allOf": [
+    {
+      "$ref": "common.json#/$defs/title"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "$ref": "common.json#/$defs/schema1"
+        }
+      },
+      "required": [
+        "schema"
+      ]
+    }
+  ]
+}

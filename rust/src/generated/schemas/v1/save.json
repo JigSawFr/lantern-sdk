@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/save.json",
+  "title": "A save backup",
+  "description": "The answer to POST <base>/v1/saves/{title_id} and to an upload's last chunk (SPEC.md § 9).",
+  "allOf": [
+    {
+      "$ref": "common.json#/$defs/save"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "$ref": "common.json#/$defs/schema1"
+        }
+      },
+      "required": [
+        "schema"
+      ]
+    }
+  ]
+}

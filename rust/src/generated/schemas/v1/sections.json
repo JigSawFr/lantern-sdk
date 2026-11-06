@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lantern.boreale.dev/schemas/v1/sections.json",
+  "title": "Sections",
+  "description": "GET <base>/v1/sections (SPEC.md § 6.5).",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "$ref": "common.json#/$defs/schema1"
+    },
+    "sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "common.json#/$defs/opaque"
+          },
+          "title": {
+            "$ref": "common.json#/$defs/name"
+          },
+          "apps": {
+            "type": "array",
+            "items": {
+              "$ref": "common.json#/$defs/opaque"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "apps"
+        ]
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "sections"
+  ]
+}

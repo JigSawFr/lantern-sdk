@@ -4,7 +4,7 @@
 
 ### One protocol between your console homebrews and your own library server
 
-**C++23 · C · Python · TypeScript · Go**
+**C++23 · C · Python · TypeScript · Go · Rust**
 
 [![ci](https://github.com/JigSawFr/lantern-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/JigSawFr/lantern-sdk/actions/workflows/ci.yml)
 [![Lantern draft 0.11](https://img.shields.io/badge/Lantern-draft%200.11-blue.svg)](https://lantern.boreale.dev/?utm_source=github&utm_medium=readme)
@@ -45,6 +45,7 @@ Client and server libraries for the [Lantern protocol](https://github.com/JigSaw
 | [`python/`](python/README.md) | Python 3.11+ | `lantern-protocol`: the client (sync and async), a server toolkit with Flask and FastAPI adapters, the generator of static libraries, the malicious test server |
 | [`typescript/`](typescript/README.md) | TypeScript | `lantern-protocol`: the client for browsers and Node, with no runtime dependency, and a server toolkit for Node and web Requests (Hono) |
 | [`go/`](go/README.md) | Go 1.24+ | `github.com/JigSawFr/lantern-sdk/go`: being built, family by family. So far the documents of the specification as typed values, their validation against its schemas, canonical JSON, digests and errors; no client or server yet |
+| [`rust/`](rust/README.md) | Rust 1.90+ | `lantern-protocol`: the documents as typed structs generated from the schemas; the client and the server toolkit follow, in slices |
 
 Each folder's README has the details: installing, every call, what is not there yet.
 
@@ -134,27 +135,27 @@ FastAPI is `lantern.server.fastapi.include(app, lantern_app)`; in Node, `Lantern
 
 ## 🧩 Families by language
 
-Each family of the specification (SPEC.md § 4.2), read as a client and served (client / server): ✓ yes, – no, ◐ part of it. C++ has a peer's side (`PeerGate`, § 19.4) and the first slices of a server core (the library family with its `titles`, `changes`, `sections` and `homebrew`, and the `cheats` sets, written with the scope `cheats.write`, read anonymously or with a token; the `saves` backups, `requests` for games, `pairing` with invitations and `signatures`, and the `admin` API (accounts, devices, pairings, invitations, rating caps, deleting an account, deciding requests); the `events`, a stream and the long poll of `changes`; all with their conformance run in CI, so ◐ until `tools/check_matrix.py` knows that run; the other families follow), and the C API wraps the C++ client. CI checks the rows against the Python and TypeScript libraries' families and against what their demo servers offer ([`tools/check_matrix.py`](tools/check_matrix.py)); a server marked ✓ is one whose conformance suite runs in CI.
+Each family of the specification (SPEC.md § 4.2), read as a client and served (client / server): ✓ yes, – no, ◐ part of it. C++ has a peer's side (`PeerGate`, § 19.4) and the first slices of a server core (the library family with its `titles`, `changes`, `sections` and `homebrew`, and the `cheats` sets, written with the scope `cheats.write`, read anonymously or with a token; the `saves` backups, `requests` for games, `pairing` with invitations and `signatures`, and the `admin` API (accounts, devices, pairings, invitations, rating caps, deleting an account, deciding requests); the `events`, a stream and the long poll of `changes`; all with their conformance run in CI, so ◐ until `tools/check_matrix.py` knows that run; the other families follow), and the C API wraps the C++ client. Rust is being built, a slice at a time ([`rust/`](rust/README.md)): its column is – until a family is read and served, with its conformance run in CI. CI checks the rows against the Python and TypeScript libraries' families and against what their demo servers offer ([`tools/check_matrix.py`](tools/check_matrix.py)); a server marked ✓ is one whose conformance suite runs in CI.
 
 <!-- families:start -->
-| Family | C++ | C | Python | TypeScript | Go |
-|---|---|---|---|---|---|
-| `library` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – |
-| `titles` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – |
-| `changes` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – |
-| `sections` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – |
-| `homebrew` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – |
-| `saves` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – |
-| `cheats` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – |
-| `requests` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – |
-| `pairing` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – |
-| `signatures` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – |
-| `admin` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – |
-| `events` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – |
-| `peers` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – |
-| `sync` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – |
-| `encrypted_saves` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – |
-| `deltas` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – |
+| Family | C++ | C | Python | TypeScript | Go | Rust |
+|---|---|---|---|---|---|---|
+| `library` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
+| `titles` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
+| `changes` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
+| `sections` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
+| `homebrew` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
+| `saves` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
+| `cheats` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
+| `requests` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
+| `pairing` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
+| `signatures` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
+| `admin` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
+| `events` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
+| `peers` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
+| `sync` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
+| `encrypted_saves` | ✓ / ◐ | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
+| `deltas` | ✓ / – | ✓ / – | ✓ / ✓ | ✓ / ✓ | – / – | – / – |
 <!-- families:end -->
 
 ## 📦 Releases
