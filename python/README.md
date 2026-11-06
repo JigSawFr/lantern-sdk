@@ -187,7 +187,7 @@ has the same, `async for event in client.events()`.
 from lantern.discovery import PeerFinder, discover_peers
 
 peers = PeerFinder().peers(client.hello.uid)  # discovery with "peers": true, once a minute at most
-client.download_from(app, "frostline.nsz", peers=peers)  # mirrors, then peers, then the server
+client.download_from(app, "frostline.nsz", peers=peers)  # mirrors, then peers, then the server (awaited on AsyncLanternClient)
 ```
 
 Whatever gave the bytes, they are checked by the size and SHA-256 of the
@@ -609,8 +609,6 @@ that a harness checks what its client sent. The TLS scenarios need the
   gives its own `RequestStore`). Its event streams, and its locks of saves
   and requests, live in one process: a server of several processes gives
   each its own, or shares stores and a hub of its own making.
-- In `AsyncLanternClient`: `download_from()`, the mirrors' and peers', which
-  `LanternClient` alone has.
 - Drawing the QR code of `verify_complete`: the client gives its text; an
   app draws it with its own toolkit (SPEC.md § 5.2 wants no image from the
   server).
