@@ -24,6 +24,7 @@
 #include <lantern/error.hpp>
 #include <lantern/memory.hpp>
 #include <lantern/sha256.hpp>
+#include <lantern/types.hpp>
 
 namespace lantern
 {
@@ -53,7 +54,8 @@ struct StoredAccount
 
     String name;
     Vector<String> scopes;
-    bool frozen = false;
+    bool frozen          = false;
+    std::int64_t created = 0; // Unix seconds
 
     StoredAccount()
         : StoredAccount(allocator_type {})
@@ -68,12 +70,14 @@ struct StoredAccount
         : name(other.name, allocator)
         , scopes(other.scopes, allocator)
         , frozen(other.frozen)
+        , created(other.created)
     {
     }
     StoredAccount(StoredAccount&& other, const allocator_type& allocator)
         : name(std::move(other.name), allocator)
         , scopes(std::move(other.scopes), allocator)
         , frozen(other.frozen)
+        , created(other.created)
     {
     }
     StoredAccount(const StoredAccount&)            = default;
@@ -95,6 +99,8 @@ struct PairedDevice
     std::optional<PublicKey> key; // the token is bound to it (§ 5.4)
     std::int64_t created = 0; // Unix seconds
     std::optional<std::int64_t> expires; // Unix seconds; none: until revoked
+    std::optional<RatingCap> rating_cap; // the token's parental control (§ 5.6)
+    String invitation; // the invitation (`i_…`) it came by, if it did
 
     PairedDevice()
         : PairedDevice(allocator_type {})
@@ -105,6 +111,7 @@ struct PairedDevice
         , user(allocator)
         , name(allocator)
         , scopes(allocator)
+        , invitation(allocator)
     {
     }
     PairedDevice(const PairedDevice& other, const allocator_type& allocator)
@@ -115,6 +122,8 @@ struct PairedDevice
         , key(other.key)
         , created(other.created)
         , expires(other.expires)
+        , rating_cap(with_allocator(other.rating_cap, allocator))
+        , invitation(other.invitation, allocator)
     {
     }
     PairedDevice(PairedDevice&& other, const allocator_type& allocator)
@@ -125,6 +134,8 @@ struct PairedDevice
         , key(other.key)
         , created(other.created)
         , expires(other.expires)
+        , rating_cap(with_allocator(std::move(other.rating_cap), allocator))
+        , invitation(std::move(other.invitation), allocator)
     {
     }
     PairedDevice(const PairedDevice&)            = default;
@@ -222,6 +233,69 @@ struct PendingPairing
     PendingPairing& operator=(PendingPairing&&)      = default;
     // Wipes the token it may hold.
     ~PendingPairing();
+};
+
+// An invitation (§ 5.5), as kept: the code is a secret while it can be
+// redeemed, and the administration API shows it (§ 5.7).
+struct StoredInvitation
+{
+    using allocator_type = Allocator;
+
+    String id; // `i_` and letters, digits, `_` and `-`
+    String code; // "MZ7Q-4KHP-XW2N-8TRD"
+    String user; // the account the devices join
+    Vector<String> scopes; // a subset of the account's
+    std::int64_t expires  = 0; // Unix seconds
+    std::uint32_t devices = 1; // how many devices may redeem it
+    std::uint32_t used    = 0; // how many did
+    std::optional<RatingCap> rating_cap;
+    String note;
+    std::int64_t created = 0; // Unix seconds
+
+    StoredInvitation()
+        : StoredInvitation(allocator_type {})
+    {
+    }
+    explicit StoredInvitation(const allocator_type& allocator)
+        : id(allocator)
+        , code(allocator)
+        , user(allocator)
+        , scopes(allocator)
+        , note(allocator)
+    {
+    }
+    StoredInvitation(const StoredInvitation& other, const allocator_type& allocator)
+        : id(other.id, allocator)
+        , code(other.code, allocator)
+        , user(other.user, allocator)
+        , scopes(other.scopes, allocator)
+        , expires(other.expires)
+        , devices(other.devices)
+        , used(other.used)
+        , rating_cap(with_allocator(other.rating_cap, allocator))
+        , note(other.note, allocator)
+        , created(other.created)
+    {
+    }
+    StoredInvitation(StoredInvitation&& other, const allocator_type& allocator)
+        : id(std::move(other.id), allocator)
+        , code(std::move(other.code), allocator)
+        , user(std::move(other.user), allocator)
+        , scopes(std::move(other.scopes), allocator)
+        , expires(other.expires)
+        , devices(other.devices)
+        , used(other.used)
+        , rating_cap(with_allocator(std::move(other.rating_cap), allocator))
+        , note(std::move(other.note), allocator)
+        , created(other.created)
+    {
+    }
+    StoredInvitation(const StoredInvitation&)            = default;
+    StoredInvitation(StoredInvitation&&)                 = default;
+    StoredInvitation& operator=(const StoredInvitation&) = default;
+    StoredInvitation& operator=(StoredInvitation&&)      = default;
+    // Wipes the code.
+    ~StoredInvitation();
 };
 
 // What a poll of a pairing finds (§ 5.2).
@@ -327,6 +401,77 @@ class AccountStore
         = 0;
     // Forgets the pairings approved for an account that was deleted, before they were collected.
     [[nodiscard]] virtual Result<void> forget_user(std::string_view user) = 0;
+
+    // The administration API (§ 5.7) and the invitations (§ 5.5). A store
+    // that keeps none leaves `administers()` false: the server then offers
+    // neither `admin` nor invitations, and does not call the rest.
+    [[nodiscard]] virtual bool administers() const noexcept { return false; }
+    // Every account, by name.
+    [[nodiscard]] virtual Result<Vector<StoredAccount>> accounts(const Allocator& /*allocator*/)
+    {
+        return fail(Category::unsupported, "this store keeps no list of accounts");
+    }
+    // Keeps a new account; false when the name is taken.
+    [[nodiscard]] virtual Result<bool> create_account(const StoredAccount& /*account*/)
+    {
+        return fail(Category::unsupported, "this store takes no new account");
+    }
+    // Changes an account's state and its scopes (the devices' are cut back at
+    // every request); false when there is no such account.
+    [[nodiscard]] virtual Result<bool> change_account(
+        std::string_view /*name*/, std::optional<bool> /*frozen*/, const Vector<String>* /*scopes*/)
+    {
+        return fail(Category::unsupported, "this store changes no account");
+    }
+    // Forgets an account at once and whole (§ 5.7): its devices, its
+    // invitations and the pairings approved for it. False when there is none.
+    [[nodiscard]] virtual Result<bool> delete_account(std::string_view /*name*/)
+    {
+        return fail(Category::unsupported, "this store deletes no account");
+    }
+    // The live devices, oldest first; of one account, or of all when `user` is empty.
+    [[nodiscard]] virtual Result<Vector<PairedDevice>> all_devices(
+        std::string_view /*user*/, std::int64_t /*now*/, const Allocator& /*allocator*/)
+    {
+        return fail(Category::unsupported, "this store lists no devices");
+    }
+    // The pairings still waiting for a decision, oldest first.
+    [[nodiscard]] virtual Result<Vector<PendingPairing>> waiting_pairings(
+        std::int64_t /*now*/, const Allocator& /*allocator*/)
+    {
+        return fail(Category::unsupported, "this store lists no pairings");
+    }
+    // The pairing waiting under that administrator's id (`pr_…`).
+    [[nodiscard]] virtual Result<std::optional<PendingPairing>> pairing_by_id(
+        std::string_view /*id*/, std::int64_t /*now*/, const Allocator& /*allocator*/)
+    {
+        return fail(Category::unsupported, "this store lists no pairings");
+    }
+    // Keeps an invitation.
+    [[nodiscard]] virtual Result<void> add_invitation(const StoredInvitation& /*invitation*/)
+    {
+        return fail(Category::unsupported, "this store keeps no invitation");
+    }
+    // The invitations that can still be redeemed at `now`, oldest first.
+    [[nodiscard]] virtual Result<Vector<StoredInvitation>> invitations(
+        std::int64_t /*now*/, const Allocator& /*allocator*/)
+    {
+        return fail(Category::unsupported, "this store keeps no invitation");
+    }
+    // Revokes an invitation; false when there is none.
+    [[nodiscard]] virtual Result<bool> revoke_invitation(std::string_view /*id*/)
+    {
+        return fail(Category::unsupported, "this store keeps no invitation");
+    }
+    // Counts one more device on the invitation of that code (as a user typed
+    // it: case, spaces and dashes ignored) and gives it as it is then; nothing
+    // when it is unknown, expired, revoked or used up. Atomic: devices
+    // redeeming at once never get past `devices` (L-5.5-2).
+    [[nodiscard]] virtual Result<std::optional<StoredInvitation>> redeem_invitation(
+        std::string_view /*code*/, std::int64_t /*now*/, const Allocator& /*allocator*/)
+    {
+        return fail(Category::unsupported, "this store keeps no invitation");
+    }
 };
 
 // Accounts, devices and pairings held in memory, behind a mutex. The
@@ -339,9 +484,10 @@ class MemoryAccountStore final : public AccountStore
     explicit MemoryAccountStore(const Allocator& allocator = {}, std::size_t max_pairings = 1000);
 
     // A new account; Category::usage for a name that is not § 5.7's, for a
-    // scope that is not § 4.2's, and for a name already taken.
-    [[nodiscard]] Result<void> add_account(
-        std::string_view name, std::span<const std::string_view> scopes, bool frozen = false);
+    // scope that is not § 4.2's, and for a name already taken. `created`:
+    // Unix seconds, shown by the administration API.
+    [[nodiscard]] Result<void> add_account(std::string_view name, std::span<const std::string_view> scopes,
+        bool frozen = false, std::int64_t created = 0);
     // false: no such account.
     [[nodiscard]] Result<bool> set_frozen(std::string_view name, bool frozen);
     // Replaces the account's scopes; the scopes of its devices are cut back at every request.
@@ -352,9 +498,6 @@ class MemoryAccountStore final : public AccountStore
         std::string_view name, std::span<const std::string_view> scopes,
         const std::optional<PublicKey>& key = std::nullopt, std::int64_t created = 0,
         std::optional<std::int64_t> expires = std::nullopt);
-    // Forgets an account, its devices and its pairings at once (§ 5.7).
-    [[nodiscard]] Result<bool> delete_account(std::string_view name);
-
     [[nodiscard]] Result<std::optional<StoredAccount>> account(
         std::string_view name, const Allocator& allocator) override;
     [[nodiscard]] Result<std::optional<PairedDevice>> device_of(
@@ -375,6 +518,24 @@ class MemoryAccountStore final : public AccountStore
     [[nodiscard]] Result<PairingPoll> poll_pairing(
         std::string_view poll, std::int64_t now, const Allocator& allocator) override;
     [[nodiscard]] Result<void> forget_user(std::string_view user) override;
+    [[nodiscard]] bool administers() const noexcept override { return true; }
+    [[nodiscard]] Result<Vector<StoredAccount>> accounts(const Allocator& allocator) override;
+    [[nodiscard]] Result<bool> create_account(const StoredAccount& account) override;
+    [[nodiscard]] Result<bool> change_account(
+        std::string_view name, std::optional<bool> frozen, const Vector<String>* scopes) override;
+    [[nodiscard]] Result<bool> delete_account(std::string_view name) override;
+    [[nodiscard]] Result<Vector<PairedDevice>> all_devices(
+        std::string_view user, std::int64_t now, const Allocator& allocator) override;
+    [[nodiscard]] Result<Vector<PendingPairing>> waiting_pairings(
+        std::int64_t now, const Allocator& allocator) override;
+    [[nodiscard]] Result<std::optional<PendingPairing>> pairing_by_id(
+        std::string_view id, std::int64_t now, const Allocator& allocator) override;
+    [[nodiscard]] Result<void> add_invitation(const StoredInvitation& invitation) override;
+    [[nodiscard]] Result<Vector<StoredInvitation>> invitations(
+        std::int64_t now, const Allocator& allocator) override;
+    [[nodiscard]] Result<bool> revoke_invitation(std::string_view id) override;
+    [[nodiscard]] Result<std::optional<StoredInvitation>> redeem_invitation(
+        std::string_view code, std::int64_t now, const Allocator& allocator) override;
 
   private:
     struct StoredDevice
@@ -392,6 +553,7 @@ class MemoryAccountStore final : public AccountStore
     Vector<StoredAccount> accounts_;
     Vector<StoredDevice> devices_;
     Vector<PendingPairing> pairings_;
+    Vector<StoredInvitation> invitations_;
 };
 
 } // namespace lantern

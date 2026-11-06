@@ -367,6 +367,8 @@ std::expected<Caller, ProblemError> identify(const ServerState& state, const Ser
             caller.scopes.emplace_back(known);
     }
     caller.key = (*device)->key;
+    if ((*device)->rating_cap)
+        caller.rating_cap.emplace(*(*device)->rating_cap, state.allocator);
     return caller;
 }
 
@@ -458,13 +460,16 @@ Answer pairing_start(const ServerState& state, const ServerRequest& request)
     }
 
     const std::int64_t now = state.clock->unix_seconds();
+    std::optional<StoredInvitation> invitation;
+    std::optional<StoredAccount> account;
     {
         const std::scoped_lock lock(state.runtime.mutex);
         const std::int64_t wait = limit(state.runtime.pairing_hits, request.remote, state.pairing_requests,
             state.pairing_window, now, true, state.allocator);
         if (wait != 0)
             return std::unexpected(slow_down(state, wait, "Too many pairing requests from this address."));
-        // Invitations (§ 5.5) are not offered here yet: every code is unknown, and counted
+        // An invitation (§ 5.5) is counted when it is redeemed, even when devices redeem it at once; the
+        // attempts that fail are limited per address, as pairing codes are
         if (!doc.invitation.empty())
         {
             const std::int64_t attempts = limit(state.runtime.invitation_hits, request.remote,
@@ -472,10 +477,27 @@ Answer pairing_start(const ServerState& state, const ServerRequest& request)
             if (attempts != 0)
                 return std::unexpected(
                     slow_down(state, attempts, "Too many attempts at invitations from this address."));
-            std::ignore = limit(state.runtime.invitation_hits, request.remote, state.invitation_attempts,
-                state.invitation_window, now, true, state.allocator);
-            return std::unexpected(make_problem(state, 410, Code::gone,
-                "This invitation is unknown, expired, revoked or used up.", "Invitation gone"));
+            if (state.admin)
+            {
+                auto redeemed = state.accounts->redeem_invitation(doc.invitation, now, state.allocator);
+                if (!redeemed)
+                    return std::unexpected(internal_error(state));
+                invitation = std::move(*redeemed);
+            }
+            if (invitation)
+            {
+                auto holder = state.accounts->account(invitation->user, state.allocator);
+                if (!holder)
+                    return std::unexpected(internal_error(state));
+                account = std::move(*holder);
+            }
+            if (!account)
+            {
+                std::ignore = limit(state.runtime.invitation_hits, request.remote, state.invitation_attempts,
+                    state.invitation_window, now, true, state.allocator);
+                return std::unexpected(make_problem(state, 410, Code::gone,
+                    "This invitation is unknown, expired, revoked or used up.", "Invitation gone"));
+            }
         }
     }
 
@@ -512,6 +534,17 @@ Answer pairing_start(const ServerState& state, const ServerRequest& request)
                 slow_down(state, state.pairing_interval, "Too many pairings are waiting; try again later."));
         if (*added == PairingAdded::added)
         {
+            if (invitation && account)
+            {
+                // Approved at once, for the invitation's account, the scopes it holds and its cap (§ 5.5)
+                Vector<std::string_view> held(state.allocator);
+                for (const String& scope : invitation->scopes)
+                    held.emplace_back(scope);
+                const auto approved = approve_entry(state, entry, *account, true, held,
+                    invitation->rating_cap, invitation->id, state.allocator);
+                if (!approved || !*approved)
+                    return std::unexpected(internal_error(state));
+            }
             auto verify = verify_url(state, request);
             if (!verify)
                 return std::unexpected(std::move(verify.error()));
@@ -607,12 +640,81 @@ Answer pairing_poll(const ServerState& state, const ServerRequest& request, std:
         w.key("expires");
         w.number(static_cast<std::uint64_t>(*outcome->token_lifetime));
     }
+    // The cap the device was approved with is its token's (§ 5.6): the device shows it to its user
+    if (const auto device = state.accounts->device_of(Sha256::of(outcome->token), now, state.allocator);
+        device && *device && (*device)->rating_cap)
+    {
+        w.key("rating_cap");
+        write_rating_cap(w, *(*device)->rating_cap);
+    }
     w.end_object();
     ServerResponse response = json_response(state, request, std::move(out), 200, false);
     response.headers.set("Cache-Control", "no-store");
     secure_wipe(std::span<std::uint8_t>(
         reinterpret_cast<std::uint8_t*>(outcome->token.data()), outcome->token.size()));
     return response;
+}
+
+Result<std::optional<Vector<String>>> approve_entry(const ServerState& state, const PendingPairing& entry,
+    const StoredAccount& account, bool restrict, std::span<const std::string_view> only,
+    const std::optional<RatingCap>& cap, std::string_view invitation, const Allocator& allocator)
+{
+    const std::int64_t now = state.clock->unix_seconds();
+    // The scopes it asked for, among those approved, that the account holds (§ 5.2, L-5.2-4)
+    Vector<String> granted(allocator);
+    for (const String& scope : entry.scopes)
+    {
+        const auto same = [&](const auto& item) { return item == scope; };
+        if ((!restrict || std::ranges::any_of(only, same)) && std::ranges::any_of(account.scopes, same))
+            granted.push_back(scope);
+    }
+    std::array<std::uint8_t, 8 + token_bytes> raw {};
+    if (auto drawn = state.random->fill(raw); !drawn)
+        return std::unexpected(drawn.error());
+    String token("et_", allocator);
+    base64url_encode(std::span<const std::uint8_t>(raw).subspan(8, token_bytes), token);
+    PairedDevice device(allocator);
+    device.id = "d_";
+    device.id.append(lower_hex(std::span<const std::uint8_t>(raw).first(8), allocator));
+    secure_wipe(raw);
+    device.user.assign(account.name);
+    device.name    = entry.device;
+    device.scopes  = granted;
+    device.key     = entry.key;
+    device.created = now;
+    if (cap)
+        device.rating_cap.emplace(*cap, allocator);
+    device.invitation.assign(invitation);
+    std::optional<std::int64_t> lifetime;
+    if (state.token_lifetime != 0)
+    {
+        lifetime       = static_cast<std::int64_t>(state.token_lifetime);
+        device.expires = now + *lifetime;
+    }
+    const Digest hash = Sha256::of(std::string_view(token));
+    if (auto added = state.accounts->add_device(device, hash); !added)
+        return std::unexpected(added.error());
+    Vector<std::string_view> views(allocator);
+    for (const String& scope : granted)
+        views.push_back(scope);
+    const auto approved
+        = state.accounts->approve_pairing(entry.poll, account.name, views, token, lifetime, now);
+    secure_wipe(std::span<std::uint8_t>(reinterpret_cast<std::uint8_t*>(token.data()), token.size()));
+    if (!approved)
+        return std::unexpected(approved.error());
+    if (!*approved)
+    {
+        // Decided meanwhile: the token just made is not kept
+        if (auto revoked = state.accounts->revoke_device(device.id); !revoked)
+            return std::unexpected(revoked.error());
+        return std::optional<Vector<String>> {};
+    }
+    return std::optional<Vector<String>>(std::move(granted));
+}
+
+std::expected<String, ProblemError> pairing_verify_url(const ServerState& state, const ServerRequest& request)
+{
+    return verify_url(state, request);
 }
 
 bool is_approval_path(const ServerState& state, std::string_view path) noexcept
@@ -698,53 +800,8 @@ Result<std::optional<Vector<String>>> Server::approve_pairing(std::string_view c
         return std::unexpected(entry.error());
     if (!*entry)
         return std::optional<Vector<String>> {};
-    // The scopes it asked for, among those approved, that the account holds (§ 5.2, L-5.2-4)
-    Vector<String> granted(allocator);
-    for (const String& scope : (*entry)->scopes)
-    {
-        const auto same = [&](const auto& item) { return item == scope; };
-        if ((scopes.empty() || std::ranges::any_of(scopes, same))
-            && std::ranges::any_of((*account)->scopes, same))
-            granted.push_back(scope);
-    }
-    std::array<std::uint8_t, 8 + token_bytes> raw {};
-    if (auto drawn = state.random->fill(raw); !drawn)
-        return std::unexpected(drawn.error());
-    String token("et_", allocator);
-    base64url_encode(std::span<const std::uint8_t>(raw).subspan(8, token_bytes), token);
-    PairedDevice device(allocator);
-    device.id = "d_";
-    device.id.append(lower_hex(std::span<const std::uint8_t>(raw).first(8), allocator));
-    secure_wipe(raw);
-    device.user.assign(user);
-    device.name    = (*entry)->device;
-    device.scopes  = granted;
-    device.key     = (*entry)->key;
-    device.created = now;
-    std::optional<std::int64_t> lifetime;
-    if (state.token_lifetime != 0)
-    {
-        lifetime       = static_cast<std::int64_t>(state.token_lifetime);
-        device.expires = now + *lifetime;
-    }
-    const Digest hash = Sha256::of(std::string_view(token));
-    if (auto added = state.accounts->add_device(device, hash); !added)
-        return std::unexpected(added.error());
-    Vector<std::string_view> views(allocator);
-    for (const String& scope : granted)
-        views.push_back(scope);
-    const auto approved = state.accounts->approve_pairing((*entry)->poll, user, views, token, lifetime, now);
-    secure_wipe(std::span<std::uint8_t>(reinterpret_cast<std::uint8_t*>(token.data()), token.size()));
-    if (!approved)
-        return std::unexpected(approved.error());
-    if (!*approved)
-    {
-        // Decided meanwhile: the token just made is not kept
-        if (auto revoked = state.accounts->revoke_device(device.id); !revoked)
-            return std::unexpected(revoked.error());
-        return std::optional<Vector<String>> {};
-    }
-    return std::optional<Vector<String>>(std::move(granted));
+    return detail::approve_entry(
+        state, **entry, **account, !scopes.empty(), scopes, std::nullopt, {}, allocator);
 }
 
 Result<bool> Server::refuse_pairing(std::string_view code) const

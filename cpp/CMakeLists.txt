@@ -83,16 +83,20 @@ add_library(lantern
     src/peers.cpp
     src/pinning.cpp
     src/profiles.cpp
+    src/requests.cpp
     src/requires.cpp
     src/saves.cpp
     src/variants.cpp
     src/server.cpp
+    src/server_admin.cpp
     src/server_auth.cpp
+    src/server_caps.cpp
     src/server_catalog.cpp
     src/server_cursor.cpp
     src/server_homebrew.cpp
     src/server_http.cpp
     src/server_library.cpp
+    src/server_requests.cpp
     src/server_saves.cpp
     src/sha256.cpp
     src/sharing.cpp

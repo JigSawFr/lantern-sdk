@@ -181,11 +181,14 @@ void write_ratings(json::Writer& w, const Vector<Rating>& ratings)
     w.end_array();
 }
 
-Answer changes_route(const ServerState& state, const ServerRequest& request)
+Answer changes_route(const ServerState& state, const ServerRequest& request, const Caller& caller)
 {
     Journal* journal = state.library->journal();
     if (journal == nullptr)
         return std::unexpected(not_found(state, "This server does not offer it."));
+    const auto cap = CapFilter::of(state, caller);
+    if (!cap)
+        return std::unexpected(cap.error());
     const auto platform = platform_param(state, request);
     if (!platform)
         return std::unexpected(platform.error());
@@ -203,6 +206,9 @@ Answer changes_route(const ServerState& state, const ServerRequest& request)
         if (!found)
             return std::unexpected(internal_error(state));
         changes = std::move(*found);
+        // What a capped caller does not see is not announced either (§ 5.6)
+        std::erase_if(
+            changes.added, [&](const App& app) { return cap->hides_title(app.platform, app.title_id); });
     }
     String out(state.allocator);
     json::Writer w(out);
@@ -225,11 +231,14 @@ Answer changes_route(const ServerState& state, const ServerRequest& request)
     return json_response(state, request, std::move(out));
 }
 
-Answer titles_route(const ServerState& state, const ServerRequest& request)
+Answer titles_route(const ServerState& state, const ServerRequest& request, const Caller& caller)
 {
     const auto platform = platform_param(state, request);
     if (!platform)
         return std::unexpected(platform.error());
+    const auto cap = CapFilter::of(state, caller);
+    if (!cap)
+        return std::unexpected(cap.error());
     // The ids asked for, each once, in the order they came
     Vector<std::string_view> ids(state.allocator);
     std::size_t asked        = 0;
@@ -258,8 +267,9 @@ Answer titles_route(const ServerState& state, const ServerRequest& request)
     Vector<const Title*> chosen(state.allocator);
     for (const Title& title : *all)
     {
+        // A title above the cap is one the server does not know (§ 5.6)
         if ((!platform->has_value() || title.platform == **platform)
-            && std::ranges::contains(ids, std::string_view(title.title_id)))
+            && std::ranges::contains(ids, std::string_view(title.title_id)) && !cap->hides(title.ratings))
             chosen.push_back(&title);
     }
     std::ranges::sort(chosen, title_before);
@@ -288,18 +298,23 @@ Answer titles_route(const ServerState& state, const ServerRequest& request)
     return json_response(state, request, std::move(out));
 }
 
-Answer title_route(const ServerState& state, const ServerRequest& request, std::string_view title_id)
+Answer title_route(
+    const ServerState& state, const ServerRequest& request, const Caller& caller, std::string_view title_id)
 {
     const auto platform = platform_param(state, request);
     if (!platform)
         return std::unexpected(platform.error());
+    const auto cap = CapFilter::of(state, caller);
+    if (!cap)
+        return std::unexpected(cap.error());
     auto all = state.library->titles(languages_of(request), state.allocator);
     if (!all)
         return std::unexpected(internal_error(state));
     const Title* found = nullptr;
     for (const Title& title : *all)
     {
-        if (title.title_id != title_id || (platform->has_value() && title.platform != **platform))
+        if (title.title_id != title_id || (platform->has_value() && title.platform != **platform)
+            || cap->hides(title.ratings))
             continue;
         if (found != nullptr)
             return std::unexpected(
@@ -318,11 +333,14 @@ Answer title_route(const ServerState& state, const ServerRequest& request, std::
     return json_response(state, request, std::move(out));
 }
 
-Answer title_changes_route(const ServerState& state, const ServerRequest& request)
+Answer title_changes_route(const ServerState& state, const ServerRequest& request, const Caller& caller)
 {
     const auto platform = platform_param(state, request);
     if (!platform)
         return std::unexpected(platform.error());
+    const auto cap = CapFilter::of(state, caller);
+    if (!cap)
+        return std::unexpected(cap.error());
     const auto since = request.param("since");
     Journal* journal = state.library->journal();
 
@@ -352,6 +370,7 @@ Answer title_changes_route(const ServerState& state, const ServerRequest& reques
             if (!found)
                 return std::unexpected(internal_error(state));
             delta = std::move(*found);
+            std::erase_if(delta.titles, [&](const Title& title) { return cap->hides(title.ratings); });
         }
     }
     String out(state.allocator);
@@ -384,11 +403,14 @@ Answer title_changes_route(const ServerState& state, const ServerRequest& reques
     return json_response(state, request, std::move(out));
 }
 
-Answer sections_route(const ServerState& state, const ServerRequest& request)
+Answer sections_route(const ServerState& state, const ServerRequest& request, const Caller& caller)
 {
     const auto platform = platform_param(state, request);
     if (!platform)
         return std::unexpected(platform.error());
+    const auto cap = CapFilter::of(state, caller);
+    if (!cap)
+        return std::unexpected(cap.error());
     AppsFilter filter;
     filter.platform = platform->value_or(std::string_view {});
     auto apps       = state.library->apps(filter, state.allocator);
@@ -415,7 +437,8 @@ Answer sections_route(const ServerState& state, const ServerRequest& request)
                 continue;
             for (const App& app : *apps)
             {
-                if (app.id == id && (!platform->has_value() || app.platform == **platform))
+                if (app.id == id && (!platform->has_value() || app.platform == **platform)
+                    && !cap->hides_title(app.platform, app.title_id))
                 {
                     ids.push_back(id);
                     break;

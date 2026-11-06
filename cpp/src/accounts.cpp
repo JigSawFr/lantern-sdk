@@ -80,17 +80,23 @@ PairingPoll::~PairingPoll()
     wipe(token);
 }
 
+StoredInvitation::~StoredInvitation()
+{
+    wipe(code);
+}
+
 MemoryAccountStore::MemoryAccountStore(const Allocator& allocator, std::size_t max_pairings)
     : allocator_(allocator)
     , max_pairings_(max_pairings)
     , accounts_(allocator)
     , devices_(allocator)
     , pairings_(allocator)
+    , invitations_(allocator)
 {
 }
 
 Result<void> MemoryAccountStore::add_account(
-    std::string_view name, std::span<const std::string_view> scopes, bool frozen)
+    std::string_view name, std::span<const std::string_view> scopes, bool frozen, std::int64_t created)
 {
     if (!is_account_name(name))
         return fail(Category::usage, "an account's name is 1 to 64 letters, digits, '.', '_' and '-'");
@@ -101,8 +107,9 @@ Result<void> MemoryAccountStore::add_account(
         return fail(Category::usage, "an account of that name exists");
     StoredAccount account(allocator_);
     account.name.assign(name);
-    account.scopes = ordered_scopes(scopes, allocator_);
-    account.frozen = frozen;
+    account.scopes  = ordered_scopes(scopes, allocator_);
+    account.frozen  = frozen;
+    account.created = created;
     accounts_.push_back(std::move(account));
     return {};
 }
@@ -166,6 +173,7 @@ Result<bool> MemoryAccountStore::delete_account(std::string_view name)
     accounts_.erase(found);
     std::erase_if(devices_, [&](const StoredDevice& item) { return item.device.user == name; });
     std::erase_if(pairings_, [&](const PendingPairing& item) { return item.user == name; });
+    std::erase_if(invitations_, [&](const StoredInvitation& item) { return item.user == name; });
     return true;
 }
 
@@ -354,6 +362,139 @@ Result<void> MemoryAccountStore::forget_user(std::string_view user)
     const std::scoped_lock lock(mutex_);
     std::erase_if(pairings_, [&](const PendingPairing& item) { return item.user == user; });
     return {};
+}
+
+Result<Vector<StoredAccount>> MemoryAccountStore::accounts(const Allocator& allocator)
+{
+    Vector<StoredAccount> out(allocator);
+    const std::scoped_lock lock(mutex_);
+    for (const StoredAccount& item : accounts_)
+        out.emplace_back(item);
+    std::ranges::sort(out, [](const StoredAccount& a, const StoredAccount& b) { return a.name < b.name; });
+    return out;
+}
+
+Result<bool> MemoryAccountStore::create_account(const StoredAccount& account)
+{
+    if (!is_account_name(account.name))
+        return fail(Category::usage, "an account's name is 1 to 64 letters, digits, '.', '_' and '-'");
+    const std::scoped_lock lock(mutex_);
+    if (std::ranges::any_of(accounts_, [&](const StoredAccount& item) { return item.name == account.name; }))
+        return false;
+    accounts_.emplace_back(account);
+    return true;
+}
+
+Result<bool> MemoryAccountStore::change_account(
+    std::string_view name, std::optional<bool> frozen, const Vector<String>* scopes)
+{
+    const std::scoped_lock lock(mutex_);
+    const auto found
+        = std::ranges::find_if(accounts_, [&](const StoredAccount& item) { return item.name == name; });
+    if (found == accounts_.end())
+        return false;
+    if (frozen)
+        found->frozen = *frozen;
+    if (scopes != nullptr)
+    {
+        Vector<std::string_view> views(allocator_);
+        for (const String& scope : *scopes)
+            views.emplace_back(scope);
+        found->scopes = ordered_scopes(views, allocator_);
+    }
+    return true;
+}
+
+Result<Vector<PairedDevice>> MemoryAccountStore::all_devices(
+    std::string_view user, std::int64_t now, const Allocator& allocator)
+{
+    Vector<PairedDevice> out(allocator);
+    const std::scoped_lock lock(mutex_);
+    for (const StoredDevice& item : devices_)
+    {
+        if ((user.empty() || item.device.user == user)
+            && (!item.device.expires || *item.device.expires > now))
+            out.emplace_back(item.device);
+    }
+    std::ranges::stable_sort(
+        out, [](const PairedDevice& a, const PairedDevice& b) { return a.created < b.created; });
+    return out;
+}
+
+Result<Vector<PendingPairing>> MemoryAccountStore::waiting_pairings(
+    std::int64_t now, const Allocator& allocator)
+{
+    Vector<PendingPairing> out(allocator);
+    const std::scoped_lock lock(mutex_);
+    purge(now);
+    for (const PendingPairing& item : pairings_)
+    {
+        if (item.state == PendingPairing::State::waiting)
+            out.emplace_back(item);
+    }
+    std::ranges::stable_sort(
+        out, [](const PendingPairing& a, const PendingPairing& b) { return a.created < b.created; });
+    return out;
+}
+
+Result<std::optional<PendingPairing>> MemoryAccountStore::pairing_by_id(
+    std::string_view id, std::int64_t now, const Allocator& allocator)
+{
+    const std::scoped_lock lock(mutex_);
+    purge(now);
+    for (const PendingPairing& item : pairings_)
+    {
+        if (item.state == PendingPairing::State::waiting && item.id == id)
+            return std::optional<PendingPairing>(std::in_place, item, allocator);
+    }
+    return std::optional<PendingPairing> {};
+}
+
+Result<void> MemoryAccountStore::add_invitation(const StoredInvitation& invitation)
+{
+    const std::scoped_lock lock(mutex_);
+    invitations_.emplace_back(invitation);
+    return {};
+}
+
+Result<Vector<StoredInvitation>> MemoryAccountStore::invitations(std::int64_t now, const Allocator& allocator)
+{
+    Vector<StoredInvitation> out(allocator);
+    const std::scoped_lock lock(mutex_);
+    std::erase_if(invitations_, [&](const StoredInvitation& item) { return item.expires <= now; });
+    for (const StoredInvitation& item : invitations_)
+    {
+        if (item.used < item.devices)
+            out.emplace_back(item);
+    }
+    std::ranges::stable_sort(
+        out, [](const StoredInvitation& a, const StoredInvitation& b) { return a.created < b.created; });
+    return out;
+}
+
+Result<bool> MemoryAccountStore::revoke_invitation(std::string_view id)
+{
+    const std::scoped_lock lock(mutex_);
+    return std::erase_if(invitations_, [&](const StoredInvitation& item) { return item.id == id; }) != 0;
+}
+
+Result<std::optional<StoredInvitation>> MemoryAccountStore::redeem_invitation(
+    std::string_view code, std::int64_t now, const Allocator& allocator)
+{
+    const String typed = typed_code(code, allocator_);
+    const std::scoped_lock lock(mutex_);
+    std::erase_if(invitations_, [&](const StoredInvitation& item) { return item.expires <= now; });
+    StoredInvitation* found = nullptr;
+    // Every code is compared, so that the time taken does not say where a match is
+    for (StoredInvitation& item : invitations_)
+    {
+        if (constant_time_equal(typed_code(item.code, allocator_), typed))
+            found = &item;
+    }
+    if (found == nullptr || found->used >= found->devices)
+        return std::optional<StoredInvitation> {};
+    ++found->used;
+    return std::optional<StoredInvitation>(std::in_place, *found, allocator);
 }
 
 } // namespace lantern

@@ -8,9 +8,11 @@
 // device is missing, the files, with its changes and sections, its titles
 // with their images, its homebrew and its cheat sets) to anyone, takes cheat
 // sets from a token with the scope cheats.write, keeps save backups (also
-// encrypted ones) in memory for the accounts with the scope saves, and pairs
+// encrypted ones) in memory for the accounts with the scope saves, keeps the
+// requests for games of the accounts with the scope requests, and pairs
 // devices: the accounts of demo_accounts.hpp, a token bound to a key, signed
-// requests.
+// requests, invitations. An account with the scope admin runs the
+// administration API: accounts, devices, pairings, invitations, requests.
 // `--private` asks for a token on the library; `--no-encrypted-saves` keeps
 // no backup encrypted on the device (a 400, § 9.4). Plain HTTP on 127.0.0.1; it
 // prints its URL and serves until it is stopped. No port, or 0: a free one.
@@ -84,6 +86,7 @@ int main(int argc, char** argv)
         return report(filled.error());
 
     lantern::MemorySaveStore saves;
+    lantern::MemoryRequestStore requests;
     const std::array<std::string_view, 1> origins { lantern::demo::origin };
     lantern::ServerOptions options;
     options.uid              = lantern::demo::uid;
@@ -96,6 +99,7 @@ int main(int argc, char** argv)
     options.accounts         = &accounts;
     options.require_auth     = is_private;
     options.saves            = &saves;
+    options.requests         = &requests;
     options.encrypted_saves  = encrypted;
     lantern::posix::SystemRandom random;
     auto server = lantern::Server::create(library, options, random, clock);
