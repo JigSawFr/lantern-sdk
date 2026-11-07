@@ -146,8 +146,8 @@ def sdk_use(catalog: dict, data: dict) -> str:
     buttons = "".join(f'<button type="button" data-pick="{lang}" aria-pressed="false">{SDK_NAMES[lang]}</button>'
                       for lang in SDK_LANGS if lang in ids)
     label = html.escape(catalog["sdk_i_code"], quote=True)
-    return (f'<div class="picker" hidden role="group" aria-label="{label}"><span>{catalog["sdk_i_code"]}</span>{buttons}</div>\n'
-            f'    <h3>{catalog["sdk_use_title"]}</h3>\n    <ul class="uses">{items}</ul>')
+    return (f'<h3 class="which">{catalog["sdk_use_title"]}</h3>\n    <ul class="uses">{items}</ul>\n'
+            f'    <div class="picker" hidden role="group" aria-label="{label}"><span>{catalog["sdk_i_code"]}</span>{buttons}</div>')
 
 
 def sdk_origin(catalog: dict) -> str:
@@ -394,7 +394,7 @@ def page_header(language: str, catalog: dict, root: str) -> str:
     return SDK.header(language, catalog, root, "", links=[
         ("nav_spec", f"{LANTERN_URL}spec/"), ("footer_conformance", f"{LANTERN_URL}conformance/"),
         ("nav_bridge", BRIDGE_URL),
-    ], cta=("sdk_cta_link", REPO), github=REPO, label=catalog["nav_label"], latest=VERSIONS)
+    ], cta=("sdk_cta_link", REPO), label=catalog["nav_label"], latest=VERSIONS)
 
 
 def page_footer(language: str, catalog: dict, root: str) -> str:
