@@ -28,6 +28,7 @@ from lantern.server import (
     parse_range,
 )
 from lantern.server.http import FileBody
+from lantern.server.library import MemoryJournal
 from lantern.server.paging import Cursors, Sealer, page_size
 from lantern.uid import new_uid
 
@@ -363,7 +364,7 @@ def test_changes(app: LanternApp) -> None:
     problem(call(other, "GET", BASE + "/changes", query={"since": token["since"]}), 400, "bad_request")
     stale = make_lantern(lib, secret=b"s" * 32)
     t = body(call(stale, "GET", BASE + "/changes"))["since"]
-    assert lib._journal is not None
+    assert isinstance(lib._journal, MemoryJournal)
     lib._journal.floor = lib._journal.seq + 1
     problem(call(stale, "GET", BASE + "/changes", query={"since": t}), 410, "gone")
 
