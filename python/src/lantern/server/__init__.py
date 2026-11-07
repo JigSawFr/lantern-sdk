@@ -29,6 +29,7 @@ from lantern.server.library import (
     DELTAS_MIN,
     Account,
     Authenticate,
+    ChangeLog,
     CheatWriter,
     ChunkSource,
     Journal,
@@ -43,7 +44,11 @@ from lantern.server.library import (
 from lantern.server.paging import Cursors, Sealer, SinceTokens, page_size
 from lantern.server.pairing import Limiter, PairingDesk, Pending, approval_page
 from lantern.server.saves import FileSaveStore, MemorySaveStore, SaveLimits, SaveStore, UploadSession
+from lantern.server.secrets_file import SecretsFile, SecretsSchemaError
 from lantern.server.sqlite_accounts import AccountsSchemaError, SqliteAccounts
+from lantern.server.sqlite_journal import SqliteJournal
+from lantern.server.sqlite_requests import SqliteRequests
+from lantern.server.sqlite_sync import SqliteSync
 from lantern.server.title_requests import MemoryRequests, RequestStore, StoredRequest
 
 __all__ = [
@@ -54,6 +59,7 @@ __all__ = [
     "Accounts",
     "AccountsSchemaError",
     "Authenticate",
+    "ChangeLog",
     "CheatWriter",
     "ChunkSource",
     "Cursors",
@@ -78,11 +84,16 @@ __all__ = [
     "SaveLimits",
     "SaveStore",
     "Sealer",
+    "SecretsFile",
+    "SecretsSchemaError",
     "SectionSource",
     "ServerRequest",
     "ServerResponse",
     "SinceTokens",
     "SqliteAccounts",
+    "SqliteJournal",
+    "SqliteRequests",
+    "SqliteSync",
     "StoredRequest",
     "UploadSession",
     "User",
