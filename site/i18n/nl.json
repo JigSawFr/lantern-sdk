@@ -104,5 +104,18 @@
   "lost_title": "Verdwaald in de nacht",
   "lost_text": "Deze pagina bestaat niet, of niet meer.",
   "lost_back": "Terug naar de startpagina",
-  "lost_page_title": "Pagina niet gevonden · Lantern SDK"
+  "lost_page_title": "Pagina niet gevonden · Lantern SDK",
+  "sdk_nav_try": "Uitproberen",
+  "sdk_try_title": "Voer het hier uit",
+  "sdk_try_text": "Deze pagina bevat de TypeScript-client en -server van de SDK, allebei: de client leest een verzonnen bibliotheek van de server, in je browser, over een verbinding die alleen in deze pagina bestaat. Er gaat niets over het netwerk. Het is de code van de bibliotheek (lantern-protocol), geen tekening van wat ze doet.",
+  "sdk_try_run": "De vier aanroepen uitvoeren",
+  "sdk_try_again": "Opnieuw uitvoeren",
+  "sdk_try_running": "Bezig…",
+  "sdk_try_error": "Het draaide niet in deze browser.",
+  "sdk_try_s1": "Hallo zeggen: wie deze bibliotheek aanbiedt",
+  "sdk_try_s2": "De apps opsommen, drie tegelijk",
+  "sdk_try_s3": "Wat mist een console?",
+  "sdk_try_s4": "Een bestand downloaden en controleren",
+  "sdk_try_requests": "Over de lijn",
+  "sdk_try_result": "Wat de aanroep teruggeeft"
 }

@@ -22,3 +22,14 @@ to the protocol's site (`lantern.boreale.dev`).
 
 A text added goes in all fifteen catalogs, translated. The site's marks and
 social preview are the brand kit's (`boreale/branding/sdk/`).
+
+## The playground
+
+The "Run it, here" section runs the SDK's own TypeScript client and server in the page: `site/playground/playground.ts`
+builds a made-up library (`MemoryLibrary`), serves it with `LanternApp` through `fetchHandler()` and reads it with
+`LanternClient` over an in-page `Transport`. `site/assets/sdk-playground.js` is that bundle (built by
+`node tools/build_playground.mjs` with esbuild 0.25.5, loaded when the button is first pressed); `node-crypto.ts` stands
+in for `node:crypto` (the SDK's SHA-256 and the browser's randomness). Its first line carries the SHA-256 of the
+sources it was built from, and `tools/check_site.py` fails when `typescript/src/` or `site/playground/` changed
+without the bundle built again, so CI needs no esbuild.
+

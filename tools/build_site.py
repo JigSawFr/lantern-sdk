@@ -103,7 +103,7 @@ def sdk_legend(catalog: dict) -> str:
     return catalog["sdk_legend"].replace("◐", HALF)
 
 
-SDK_SECTIONS = ("pick", "parity", "calls", "examples", "trust", "versions")
+SDK_SECTIONS = ("pick", "parity", "calls", "examples", "try", "trust", "versions")
 
 
 def sdk_nav(catalog: dict) -> str:
@@ -464,7 +464,8 @@ def page_html(template: str, language: str, catalog: dict, sections: dict, lost:
         "scripts": (f'<script src="{root}assets/code.js" defer data-copy="{html.escape(catalog["ui_copy"], quote=True)}" '
                     f'data-copied="{html.escape(catalog["ui_copied"], quote=True)}" '
                     f'data-failed="{html.escape(catalog["ui_copy_failed"], quote=True)}"></script>\n'
-                    f'<script src="{root}assets/sdk.js" defer></script>'),
+                    f'<script src="{root}assets/sdk.js" defer></script>\n'
+                    f'<script src="{root}assets/playground.js" defer></script>'),
     })
     values["structured"] = structured_data(language, catalog)
     if lost:

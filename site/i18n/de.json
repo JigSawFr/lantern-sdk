@@ -104,5 +104,18 @@
   "lost_title": "Verloren in der Nacht",
   "lost_text": "Diese Seite gibt es nicht oder nicht mehr.",
   "lost_back": "Zurück zur Startseite",
-  "lost_page_title": "Seite nicht gefunden · Lantern SDK"
+  "lost_page_title": "Seite nicht gefunden · Lantern SDK",
+  "sdk_nav_try": "Ausprobieren",
+  "sdk_try_title": "Hier ausführen",
+  "sdk_try_text": "Diese Seite enthält den TypeScript-Client und -Server des SDK, beide: Der Client liest eine erfundene Bibliothek vom Server, in Ihrem Browser, über eine Verbindung, die nur in dieser Seite existiert. Nichts geht über das Netz. Es ist der Code der Bibliothek (lantern-protocol), keine Zeichnung davon.",
+  "sdk_try_run": "Die vier Aufrufe ausführen",
+  "sdk_try_again": "Erneut ausführen",
+  "sdk_try_running": "Läuft …",
+  "sdk_try_error": "Es lief in diesem Browser nicht.",
+  "sdk_try_s1": "Hallo sagen: wer diese Bibliothek bereitstellt",
+  "sdk_try_s2": "Die Apps auflisten, drei auf einmal",
+  "sdk_try_s3": "Was fehlt einer Konsole?",
+  "sdk_try_s4": "Eine Datei laden und prüfen",
+  "sdk_try_requests": "Auf der Leitung",
+  "sdk_try_result": "Was der Aufruf zurückgibt"
 }

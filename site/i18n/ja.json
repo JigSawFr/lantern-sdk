@@ -104,5 +104,18 @@
   "lost_title": "夜の中で迷子に",
   "lost_text": "このページは存在しないか、なくなりました。",
   "lost_back": "ホームページに戻る",
-  "lost_page_title": "ページが見つかりません · Lantern SDK"
+  "lost_page_title": "ページが見つかりません · Lantern SDK",
+  "sdk_nav_try": "試してみる",
+  "sdk_try_title": "ここで動かす",
+  "sdk_try_text": "このページには、SDK の TypeScript クライアントとサーバーの両方が入っています。クライアントは、このページの中だけにある接続を通じて、ブラウザ内でサーバーから架空のライブラリを読み取ります。ネットワークは使いません。これは動作を描いた図ではなく、ライブラリ（lantern-protocol）そのもののコードです。",
+  "sdk_try_run": "4つの呼び出しを実行",
+  "sdk_try_again": "もう一度実行",
+  "sdk_try_running": "実行中…",
+  "sdk_try_error": "このブラウザでは実行できませんでした。",
+  "sdk_try_s1": "あいさつ：このライブラリを提供しているのは誰か",
+  "sdk_try_s2": "アプリを3件ずつ一覧する",
+  "sdk_try_s3": "コンソールに足りないものは？",
+  "sdk_try_s4": "ファイルを1つダウンロードして検証する",
+  "sdk_try_requests": "通信の中身",
+  "sdk_try_result": "呼び出しの戻り値"
 }
