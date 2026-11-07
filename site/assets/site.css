@@ -806,12 +806,12 @@ main:has(.subnav) section[id] { scroll-margin-top: 64px; }
 .versions td:first-child { font-family: var(--mono); color: var(--snow); }
 
 /* The SDK page: the picker, the situations, the parity in a card and the card that leads to its README. */
-.picker { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 16px 0 4px; color: var(--mist); }
+.picker { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 20px 0 28px; color: var(--mist); }
 .picker[hidden] { display: none; }
 .picker button { min-height: 36px; padding: 0 14px; border: 1px solid var(--night-line); border-radius: 99px; background: rgb(14 26 51 / 0.6); color: var(--snow); font: inherit; font-size: 0.9375rem; cursor: pointer; }
 .picker button[aria-pressed="true"] { border-color: var(--ice); background: rgb(51 187 255 / 0.14); }
 .picker button:focus-visible { outline: 2px solid var(--aurora); outline-offset: 2px; }
-.uses { list-style: none; margin: 8px 0 20px; padding: 0; display: grid; gap: 6px 24px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); }
+.uses { list-style: none; margin: 8px 0 20px; padding: 0; display: grid; gap: 8px 32px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); }
 .uses li { color: var(--mist); }
 .uses a { display: inline-flex; align-items: center; min-height: 28px; padding: 0 10px; border-radius: 99px; background: rgb(51 187 255 / 0.1); color: var(--snow); font-weight: 600; text-decoration: none; }
 .card .parity { margin: 0; display: flex; flex-wrap: wrap; gap: 2px 14px; font: 500 0.8125rem var(--mono); color: var(--mist); }
@@ -851,3 +851,4 @@ pre code .tk-k { color: #7cc4ff; }
   .parity-list { display: grid; }
 }
 @media print { .fold-body { max-height: none; } .fold-body::after, .fold label { display: none; } .parity-list { display: none; } .matrix { display: block; } }
+#pick .which { margin: 2.25rem 0 0.5rem; color: var(--snow); font: 600 1.125rem/1.4 var(--display); }
