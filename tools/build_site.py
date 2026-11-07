@@ -453,7 +453,7 @@ def page_html(template: str, language: str, catalog: dict, sections: dict, lost:
     values.update({
         "lang": boreale.html_lang(language), "root": root, "home": folder(language), "site": SITE_URL, "page": "sdk",
         "url": SITE_URL + folder(language), "title": catalog["title_sdk"],
-        "description": html.escape(catalog["description_sdk"], quote=True), "og_locale": OG_LOCALES[language],
+        "description": html.escape(catalog["description_sdk"], quote=True), "og_locale": OG_LOCALES[language], "social": f"social/{language}.jpg",
         "first_visit": "", "indexing": SDK.indexing(language, ""),
         "skip": SDK.skip(catalog), "sky": SDK.sky(home=False), "header": page_header(language, catalog, root),
         "crumbs": "", "main_class": ' class="wrap"', "footer": page_footer(language, catalog, root),
