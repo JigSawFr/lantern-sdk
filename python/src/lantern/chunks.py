@@ -12,6 +12,7 @@ The pieces, all standard library and no I/O of their own but a seed file's:
   clear), `size_for()` the chunker's size a server picks for a file;
 - build_index() and ref(): a file's chunk index, in canonical JSON (§ 2.3),
   and the `chunks` of its app or package (§ 22.1), what a server writes;
+  index_file(), a file on disk's SHA-256 and index from a single read;
 - read_index(): what a client checks of an index before it uses it (§ 22.3,
   L-22.3-1), refused as UnusableIndex, after which it reads the whole file;
 - plan(), ranges_of() and Pieces: what comes from a seed and what is read as
@@ -146,6 +147,70 @@ def build_index(data: bytes | bytearray | memoryview, size: int | None = None) -
         "chunks": chunks,
     }
     return doc, canonical(doc)
+
+
+class FileDigest(NamedTuple):
+    """What index_file() learns of a file in one read: its SHA-256 and size, and, unless the file is too large
+    for any chunker, its chunk index, `cdc` (the document and its canonical bytes)."""
+
+    sha256: str
+    size: int
+    cdc: tuple[JSONObject, bytes] | None
+
+
+def index_file(
+    path: str | os.PathLike[str],
+    size: int | None = None,
+    *,
+    progress: Callable[[int], None] | None = None,
+    chunk_index: bool = True,
+) -> FileDigest:
+    """The SHA-256 of the file at `path` and its chunk index (SPEC.md § 22.1), from one read of it: what a server
+    needs before it lists a file, whatever its size, without reading a file of many gigabytes twice. Memory holds
+    16 MiB at most. `size`: the chunker's, by default size_for()'s; `progress`: called with the bytes read so far;
+    `chunk_index=False`: only the SHA-256 (FileDigest.cdc is None). The file is not to change meanwhile."""
+    length = Path(path).stat().st_size
+    chunker = (size or size_for(length)) if chunk_index else None
+    whole = hashlib.sha256()
+    chunks: list[JSONValue] = []
+    done = 0
+    with Path(path).open("rb") as f:
+        if chunker is None:
+            while block := f.read(1 << 20):
+                whole.update(block)
+                done += len(block)
+                if progress:
+                    progress(done)
+            return FileDigest(whole.hexdigest(), done, None)
+        low, high, mask = bounds(chunker)
+        buf = bytearray()
+        eof = False
+        while True:
+            while len(buf) < high and not eof:
+                block = f.read(max(high - len(buf), 1 << 20))
+                if block:
+                    buf += block
+                else:
+                    eof = True
+            if not buf:
+                break
+            with memoryview(buf) as view:
+                n = _end(view[:high], low, high, mask)
+                piece = bytes(view[:n])
+            del buf[:n]
+            whole.update(piece)
+            chunks.append([n, hashlib.sha256(piece).hexdigest()])
+            done += n
+            if progress:
+                progress(done)
+    doc: JSONObject = {
+        "schema": 1,
+        "sha256": whole.hexdigest(),
+        "size": done,
+        "chunker": {"alg": ALG, "size": chunker},
+        "chunks": chunks,
+    }
+    return FileDigest(whole.hexdigest(), done, (doc, canonical(doc)))
 
 
 def ref(url: str, raw: bytes) -> JSONObject:

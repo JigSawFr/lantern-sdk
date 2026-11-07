@@ -367,3 +367,28 @@ def test_no_seed_reads_every_range() -> None:
 
     assert assemble(index, read_range, []) == NEW
     assert asked == [(0, len(NEW) - 1)]
+
+
+def test_a_file_is_hashed_and_indexed_in_one_read(tmp_path: Path) -> None:
+    """The same index as build_index() gives, and the SHA-256 of the file, from a file read once."""
+    for data in (b"", b"a", NEW, OLD, bytes(range(256)) * 4096):
+        path = tmp_path / "f"
+        path.write_bytes(data)
+        seen: list[int] = []
+        found = chunks.index_file(path, SIZE, progress=seen.append)
+        assert found.sha256 == hashlib.sha256(data).hexdigest() and found.size == len(data)
+        assert found.cdc == chunks.build_index(data, SIZE)
+        assert seen == sorted(seen) and (seen[-1] if seen else 0) == len(data)
+
+
+def test_a_file_can_be_hashed_without_an_index(tmp_path: Path) -> None:
+    path = tmp_path / "f"
+    path.write_bytes(NEW)
+    assert chunks.index_file(path, chunk_index=False) == (hashlib.sha256(NEW).hexdigest(), len(NEW), None)
+
+
+def test_a_file_too_large_for_any_chunker_is_still_hashed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "f"
+    path.write_bytes(NEW)
+    monkeypatch.setattr(chunks, "size_for", lambda length: None)
+    assert chunks.index_file(path) == (hashlib.sha256(NEW).hexdigest(), len(NEW), None)
