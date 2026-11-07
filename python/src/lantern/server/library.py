@@ -258,6 +258,22 @@ def check_homebrew(entry: Homebrew) -> list[str]:
     return problems
 
 
+class ChangeLog(Protocol):
+    """The log a `MemoryLibrary` records its changes in: `MemoryJournal`, or `SqliteJournal` to keep them."""
+
+    epoch: str
+
+    @property
+    def seq(self) -> int: ...
+
+    @property
+    def floor(self) -> int: ...
+
+    def record(self, kind: str, key: str, platform: str) -> None: ...
+
+    def since(self, after: int, kinds: tuple[str, ...], platform: str | None) -> list[tuple[str, str]]: ...
+
+
 class MemoryJournal:
     """A journal kept in memory, of the last `keep` changes."""
 
@@ -297,7 +313,7 @@ class MemoryLibrary:
         *,
         base: str = "/api/lantern",
         families: Iterable[str] = LIBRARY_FAMILIES,
-        journal: bool = True,
+        journal: bool | ChangeLog = True,
         deltas: tuple[int, int] | None = None,
     ) -> None:
         """`deltas`: (min, max), the sizes in bytes of the files cut into chunks for differential updates
@@ -315,7 +331,9 @@ class MemoryLibrary:
         self._cheat_files: dict[str, FileRef] = {}
         self._media: dict[str, FileRef] = {}
         self._sections: dict[str, Section] = {}
-        self._journal = MemoryJournal() if journal else None
+        self._journal: ChangeLog | None = (
+            journal if not isinstance(journal, bool) else (MemoryJournal() if journal else None)
+        )
         self._lock = threading.RLock()
         self._listeners: list[Callable[[LibraryChange], object]] = []
 
