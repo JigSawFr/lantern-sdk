@@ -2,6 +2,7 @@
 // on the fictional library of spec/tests/library.py, started by
 // run_server.py. Every name and game here is made up.
 #include <doctest.h>
+#include <cstring>
 
 #include <algorithm>
 #include <array>
@@ -324,6 +325,34 @@ TEST_CASE("downloads: an app, whole, then cut and resumed")
     const auto mismatch = c.client.download(wrong, fresh, refused);
     REQUIRE_FALSE(mismatch);
     CHECK(mismatch.error().category() == Category::integrity);
+}
+
+TEST_CASE("downloads: a range of an app, read where it is")
+{
+    Connection c("LANTERN_TEST_PUBLIC", "switch");
+    AppsQuery query;
+    query.title_id  = "0100ABCD00010000";
+    query.type      = "base";
+    const auto page = c.client.apps(query);
+    REQUIRE(page);
+    REQUIRE((*page)->items.size() == 1);
+    const App& app = (*page)->items[0];
+    const DownloadTarget target { app.file, app.size, app.sha256 };
+
+    FileSink whole;
+    DownloadState state;
+    REQUIRE(c.client.download(target, state, whole));
+
+    std::array<std::byte, 700> piece {};
+    const auto got = c.client.read_range(target, ByteRange { 1234, 1933 }, piece);
+    REQUIRE(got);
+    CHECK(*got == 700);
+    CHECK(std::memcmp(piece.data(), whole.bytes.data() + 1234, piece.size()) == 0);
+
+    // The file's end, and what lies outside the file or does not fit the buffer
+    CHECK(c.client.read_range(target, ByteRange { app.size - 10, app.size - 1 }, piece));
+    CHECK_FALSE(c.client.read_range(target, ByteRange { app.size - 10, app.size }, piece));
+    CHECK_FALSE(c.client.read_range(target, ByteRange { 0, 700 }, piece));
 }
 
 TEST_CASE("homebrew: the Switch's listing, an entry, its plan and its download")
