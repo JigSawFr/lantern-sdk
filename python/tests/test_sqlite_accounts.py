@@ -93,6 +93,66 @@ def test_an_existing_file_keeps_its_mode(tmp_path: Path) -> None:
         assert path.stat().st_mode & 0o777 == 0o640
 
 
+def test_a_cap_and_a_suspension_survive_a_restart(tmp_path: Path) -> None:
+    path = tmp_path / "accounts.sqlite3"
+    first = SqliteAccounts(path)
+    first.create_user("lea", ["library"])
+    first.update_user("lea", rating_cap=RatingCap(age=7, unrated="hide"))
+    token, device = first.issue("lea", "console", ["library"])
+    first.update_device(device.id, device="Salon", suspended=True)
+    first.close()
+    second = SqliteAccounts(path)
+    lea = second.user("lea")
+    assert lea is not None and lea.rating_cap == RatingCap(age=7, unrated="hide")
+    found = second.device_of(token)
+    assert found is not None and found.suspended is True and found.device == "Salon"
+    second.close()
+
+
+_SCHEMA_1 = """
+CREATE TABLE users (name TEXT PRIMARY KEY, scopes TEXT NOT NULL, state TEXT NOT NULL, created TEXT NOT NULL);
+CREATE TABLE devices (
+    id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, user TEXT NOT NULL REFERENCES users(name) ON DELETE CASCADE,
+    device TEXT NOT NULL, scopes TEXT NOT NULL, created TEXT NOT NULL, key BLOB, rating_cap TEXT, invitation TEXT,
+    expires TEXT, last_used TEXT
+);
+CREATE INDEX devices_by_user ON devices(user);
+CREATE TABLE invitations (
+    id TEXT PRIMARY KEY, code TEXT NOT NULL, user TEXT NOT NULL REFERENCES users(name) ON DELETE CASCADE,
+    scopes TEXT NOT NULL, expires TEXT NOT NULL, devices INTEGER NOT NULL, used INTEGER NOT NULL, rating_cap TEXT,
+    note TEXT, created TEXT NOT NULL
+);
+"""
+
+
+def test_a_schema_1_file_is_taken_up(tmp_path: Path) -> None:
+    path = tmp_path / "accounts.sqlite3"
+    raw = sqlite3.connect(path)
+    raw.executescript(_SCHEMA_1)
+    raw.execute("INSERT INTO users VALUES ('lea', '[\"library\"]', 'active', '2026-11-01T00:00:00Z')")
+    raw.execute(
+        "INSERT INTO devices (id, token_hash, user, device, scopes, created) "
+        "VALUES ('d_0000000000000001', 'h', 'lea', 'console', '[\"library\"]', '2026-11-01T00:00:00Z')"
+    )
+    raw.execute("PRAGMA user_version = 1")
+    raw.commit()
+    raw.close()
+    store = SqliteAccounts(path)
+    lea = store.user("lea")
+    assert lea is not None and lea.rating_cap is None and lea.scopes == ("library",)
+    assert [(d.device, d.suspended) for d in store.devices("lea")] == [("console", False)]
+    store.update_user("lea", rating_cap=RatingCap(age=12))
+    store.update_device("d_0000000000000001", suspended=True)
+    store.close()
+    again = SqliteAccounts(path)  # opened a second time: nothing to take up, nothing lost
+    lea = again.user("lea")
+    assert lea is not None and lea.rating_cap == RatingCap(age=12) and again.devices("lea")[0].suspended is True
+    again.close()
+    check = sqlite3.connect(path)
+    assert check.execute("PRAGMA user_version").fetchone()[0] == 2
+    check.close()
+
+
 def test_a_newer_schema_is_refused_and_left_alone(tmp_path: Path) -> None:
     path = tmp_path / "accounts.sqlite3"
     store = SqliteAccounts(path)

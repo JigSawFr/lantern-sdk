@@ -11,7 +11,7 @@ Flask and FastAPI adapters are in lantern.server.flask and
 lantern.server.fastapi (their extras)."""
 
 from lantern.missing import missing
-from lantern.server.accounts import AccountError, Accounts, Device, Invitation, MemoryAccounts, User
+from lantern.server.accounts import UNSET, AccountError, Accounts, Device, Invitation, MemoryAccounts, User
 from lantern.server.app import LanternApp, check_content_digest
 from lantern.server.discovery import DiscoveryResponder, advertise_dnssd, discovery_reply
 from lantern.server.files import FileRef, file_response, parse_range
@@ -54,6 +54,7 @@ from lantern.server.title_requests import MemoryRequests, RequestStore, StoredRe
 __all__ = [
     "DELTAS_MAX",
     "DELTAS_MIN",
+    "UNSET",
     "Account",
     "AccountError",
     "Accounts",

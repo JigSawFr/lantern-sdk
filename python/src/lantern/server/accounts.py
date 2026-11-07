@@ -83,15 +83,29 @@ def ordered_scopes(scopes: Iterable[str]) -> tuple[str, ...]:
     return tuple(s for s in SCOPES if s in wanted)
 
 
+class _Unset:
+    """The type of `UNSET`."""
+
+    def __repr__(self) -> str:
+        return "UNSET"
+
+
+#: "Leave it as it is", for a value None already means "none" for: `update_user(..., rating_cap=UNSET)` keeps
+#: the cap, `rating_cap=None` removes it.
+UNSET = _Unset()
+
+
 @dataclass(frozen=True)
 class User:
     """An account (SPEC.md § 5.7): its name, state and scopes. No password: a
-    server's own means may give it one, outside this."""
+    server's own means may give it one, outside this. Its `rating_cap` holds for every device of the account,
+    whatever the cap a device carries: the stricter of the two applies (`ratings.stricter`)."""
 
     name: str
     scopes: tuple[str, ...]
     state: str = "active"
     created: str = field(default_factory=utc)
+    rating_cap: RatingCap | None = None
 
 
 @dataclass(frozen=True)
@@ -109,6 +123,9 @@ class Device:
     invitation: str | None = None
     expires: str | None = None
     last_used: str | None = None
+    #: Held back by the server's owner: the device stays paired, and is answered as a frozen account until it is
+    #: lifted. Not in the specification; the wire shows it as `frozen` (SPEC.md § 5.1, § 5.7).
+    suspended: bool = False
 
     @property
     def bound(self) -> bool:
@@ -161,8 +178,16 @@ class Accounts(Protocol):
         """A new account; AccountError 409 `conflict` when the name is taken."""
         ...
 
-    def update_user(self, name: str, *, state: str | None = None, scopes: Sequence[str] | None = None) -> User:
-        """An account changed; AccountError 404 when there is none. Its devices' scopes are cut back with its own."""
+    def update_user(
+        self,
+        name: str,
+        *,
+        state: str | None = None,
+        scopes: Sequence[str] | None = None,
+        rating_cap: RatingCap | None | _Unset = UNSET,
+    ) -> User:
+        """An account changed; AccountError 404 when there is none. Its devices' scopes are cut back with its own.
+        `rating_cap` None removes the account's cap, `UNSET` leaves it."""
         ...
 
     def delete_user(self, name: str) -> None:
@@ -190,6 +215,20 @@ class Accounts(Protocol):
         ...
 
     def devices(self, user: str | None = None) -> Sequence[Device]: ...
+
+    def update_device(
+        self,
+        device_id: str,
+        *,
+        device: str | None = None,
+        scopes: Sequence[str] | None = None,
+        rating_cap: RatingCap | None | _Unset = UNSET,
+        suspended: bool | None = None,
+    ) -> Device:
+        """A device changed, at once, token and key kept; AccountError 404 when there is none. `device` is its
+        name, `scopes` the ones it keeps (never more than it has: the others are ignored), `rating_cap` None
+        removes its own cap (its account's still holds), `suspended` holds it back or lifts that."""
+        ...
 
     def revoke(self, device_id: str) -> bool:
         """Revokes a device's token, at once; False when there is none."""
@@ -248,13 +287,22 @@ class MemoryAccounts:
             self._users[name] = user
             return user
 
-    def update_user(self, name: str, *, state: str | None = None, scopes: Sequence[str] | None = None) -> User:
+    def update_user(
+        self,
+        name: str,
+        *,
+        state: str | None = None,
+        scopes: Sequence[str] | None = None,
+        rating_cap: RatingCap | None | _Unset = UNSET,
+    ) -> User:
         with self._lock:
             user = self._users.get(name)
             if user is None:
                 raise AccountError(404, "not_found", "No such account.")
             if state is not None:
                 user = replace(user, state=state)
+            if not isinstance(rating_cap, _Unset):
+                user = replace(user, rating_cap=rating_cap)
             if scopes is not None:
                 user = replace(user, scopes=ordered_scopes(scopes))
                 for h, d in list(self._devices.items()):
@@ -339,6 +387,31 @@ class MemoryAccounts:
         with self._lock:
             found = [d for d in self._devices.values() if d.live() and (user is None or d.user == user)]
         return sorted(found, key=lambda d: (d.user, d.created, d.id))
+
+    def update_device(
+        self,
+        device_id: str,
+        *,
+        device: str | None = None,
+        scopes: Sequence[str] | None = None,
+        rating_cap: RatingCap | None | _Unset = UNSET,
+        suspended: bool | None = None,
+    ) -> Device:
+        with self._lock:
+            found = next(((h, d) for h, d in self._devices.items() if d.id == device_id), None)
+            if found is None:
+                raise AccountError(404, "not_found", "No such device.")
+            digest, record = found
+            if device is not None:
+                record = replace(record, device=device)
+            if scopes is not None:
+                record = replace(record, scopes=tuple(s for s in record.scopes if s in scopes))
+            if not isinstance(rating_cap, _Unset):
+                record = replace(record, rating_cap=rating_cap)
+            if suspended is not None:
+                record = replace(record, suspended=suspended)
+            self._devices[digest] = record
+            return record
 
     def revoke(self, device_id: str) -> bool:
         with self._lock:

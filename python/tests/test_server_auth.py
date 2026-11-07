@@ -17,7 +17,7 @@ from lantern import signatures as sig
 from lantern.http import Headers
 from lantern.models import RatingCap
 from lantern.server import LanternApp, ServerRequest, ServerResponse
-from lantern.server.accounts import AccountError, MemoryAccounts, User, typed_code
+from lantern.server.accounts import AccountError, MemoryAccounts, User, token_hash, typed_code
 from lantern.server.pairing import Limiter, approval_page
 
 HOST = "shelf.example.org"
@@ -285,6 +285,47 @@ def test_a_rating_cap_hides_what_is_above_it() -> None:
     file_id = hidden[0]["file"].rsplit("/", 1)[-1]
     assert capped("GET", f"{BASE}/files/{file_id}").status == 404
     assert all(c["title_id"] != title for c in doc(capped("GET", BASE + "/cheats"))["cheats"])
+
+
+def test_an_account_cap_holds_for_its_devices() -> None:
+    accounts = demo_accounts()
+    accounts.add_token(
+        "et_wide-00000000000000000000000000000",
+        "mira",
+        "Wide",
+        ["library"],
+        key=KEY.public,
+        rating_cap=RatingCap(age=18),
+    )
+    app = lantern(accounts=accounts)
+
+    def cap_of(token: str, key: sig.DeviceKey) -> Any:
+        return doc(call(app, "GET", BASE, token=token, key=key))["account"].get("rating_cap")
+
+    assert cap_of(DEMO_TOKEN, DEMO_KEY) is None and cap_of("et_wide-00000000000000000000000000000", KEY) == {"age": 18}
+    accounts.update_user("mira", rating_cap=RatingCap(age=7, unrated="hide"))  # at once, for devices already paired
+    assert cap_of(DEMO_TOKEN, DEMO_KEY) == {"age": 7, "unrated": "hide"}
+    assert cap_of("et_wide-00000000000000000000000000000", KEY) == {"age": 7, "unrated": "hide"}
+    accounts.update_user("mira", rating_cap=RatingCap(age=18))
+    own = next(d for d in accounts.devices("mira") if d.token_hash == token_hash(DEMO_TOKEN))
+    accounts.update_device(own.id, rating_cap=RatingCap(age=3))  # a device's own cap, stricter than its account's
+    assert cap_of(DEMO_TOKEN, DEMO_KEY) == {"age": 3}
+    assert cap_of("et_wide-00000000000000000000000000000", KEY) == {"age": 18}  # the other keeps the account's
+    accounts.update_user("mira", rating_cap=None)
+    assert cap_of("et_wide-00000000000000000000000000000", KEY) == {"age": 18}  # then only its own
+
+
+def test_a_suspended_device_is_answered_as_a_frozen_account() -> None:
+    accounts = demo_accounts()
+    app = lantern(accounts=accounts)
+    device = accounts.devices("mira")[0]
+    assert mira(app, "GET", BASE + "/apps").status == 200
+    accounts.update_device(device.id, suspended=True)
+    held = mira(app, "GET", BASE + "/apps")
+    assert held.status == 403 and code(held) == "account_frozen"
+    assert doc(mira(app, "GET", BASE))["account"]["state"] == "frozen"  # the wire has no other word for it
+    accounts.update_device(device.id, suspended=False)
+    assert mira(app, "GET", BASE + "/apps").status == 200
 
 
 def test_the_approval_page() -> None:
