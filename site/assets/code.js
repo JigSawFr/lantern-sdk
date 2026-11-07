@@ -51,7 +51,7 @@
     const button = document.createElement('button');
     button.type = 'button'; button.className = 'code-copy';
     button.setAttribute('aria-label', T.copy + (named ? ' (' + named[1] + ')' : ''));
-    button.append(icon(['M9 9h11v11H9z', 'M5 15V5a1 1 0 0 1 1-1h10'], 'copy'), icon(['M5 12.5l4.5 4.5L19 7.5'], 'done'));
+    button.append(icon(['M9 9h11v11H9z', 'M5 15V5a1 1 0 0 1 1-1h10'], 'i-copy'), icon(['M5 12.5l4.5 4.5L19 7.5'], 'i-done'));
     const text = document.createElement('span');
     text.className = 'code-text'; text.textContent = T.copy;
     button.append(text);
