@@ -377,7 +377,7 @@ def test_a_file_is_hashed_and_indexed_in_one_read(tmp_path: Path) -> None:
         seen: list[int] = []
         found = chunks.index_file(path, SIZE, progress=seen.append)
         assert found.sha256 == hashlib.sha256(data).hexdigest() and found.size == len(data)
-        assert found.index == chunks.build_index(data, SIZE)
+        assert found.cdc == chunks.build_index(data, SIZE)
         assert seen == sorted(seen) and (seen[-1] if seen else 0) == len(data)
 
 

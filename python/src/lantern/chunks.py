@@ -151,11 +151,11 @@ def build_index(data: bytes | bytearray | memoryview, size: int | None = None) -
 
 class FileDigest(NamedTuple):
     """What index_file() learns of a file in one read: its SHA-256 and size, and, unless the file is too large
-    for any chunker, its chunk index (the document and its canonical bytes)."""
+    for any chunker, its chunk index, `cdc` (the document and its canonical bytes)."""
 
     sha256: str
     size: int
-    index: tuple[JSONObject, bytes] | None
+    cdc: tuple[JSONObject, bytes] | None
 
 
 def index_file(
@@ -168,7 +168,7 @@ def index_file(
     """The SHA-256 of the file at `path` and its chunk index (SPEC.md § 22.1), from one read of it: what a server
     needs before it lists a file, whatever its size, without reading a file of many gigabytes twice. Memory holds
     16 MiB at most. `size`: the chunker's, by default size_for()'s; `progress`: called with the bytes read so far;
-    `chunk_index=False`: only the SHA-256 (FileDigest.index is None). The file is not to change meanwhile."""
+    `chunk_index=False`: only the SHA-256 (FileDigest.cdc is None). The file is not to change meanwhile."""
     length = Path(path).stat().st_size
     chunker = (size or size_for(length)) if chunk_index else None
     whole = hashlib.sha256()
