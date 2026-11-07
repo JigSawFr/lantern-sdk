@@ -670,8 +670,8 @@ svg.dg .mono { font-family: var(--mono); font-size: 12px; }
   background: rgb(14 26 51 / 0.7); color: var(--snow); font: 500 16px var(--body); cursor: pointer;
 }
 .code-copy svg { width: 14px; height: 14px; fill: none; stroke: var(--aurora); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.code-copy .done, .code-copy[data-done] .copy { display: none; }
-.code-copy[data-done] .done { display: block; }
+.code-copy .i-done, .code-copy[data-done] .i-copy { display: none; }
+.code-copy[data-done] .i-done { display: block; }
 .code-copy[data-done] { border-color: rgb(0 255 204 / 0.6); color: var(--aurora); }
 @media (hover: hover) { .code-copy:hover { border-color: var(--mist); } }
 
