@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from lantern.server.file_index import (
+    NAMED,
     Entry,
     IndexSchemaError,
     SqliteIndex,
@@ -58,6 +59,15 @@ def test_sync_adds_changes_and_removes() -> None:
         assert (result.added, result.changed, result.removed) == (1, 1, 0)
         result = index.sync("s", [Entry("c", 1, 1)])
         assert result.removed == 2 and [r.path for r in index.rows()] == ["c"]
+
+
+def test_a_sync_names_the_files_it_found() -> None:
+    with SqliteIndex(":memory:") as index:
+        index.sync("s", [Entry("a", 1, 10), Entry("b", 2, 10)])
+        result = index.sync("s", [Entry("a", 1, 11), Entry("c", 1, 1)])
+        assert (result.added_paths, result.changed_paths, result.removed_paths) == (("c",), ("a",), ("b",))
+        many = index.sync("t", [Entry(f"f{n}", 1, 1) for n in range(40)])
+        assert many.added == 40 and len(many.added_paths) == NAMED
 
 
 def test_the_queue_is_priority_then_smallest() -> None:
