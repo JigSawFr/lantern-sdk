@@ -472,6 +472,17 @@ app = LanternApp(
 )
 ```
 
+A store of your own is checked against the contract the toolkit's stores pass,
+`lantern.server.contracts` (`ACCOUNTS_CONTRACT`, `REQUESTS_CONTRACT`): each
+check takes a fresh, empty store and raises `AssertionError` when it behaves
+otherwise.
+
+```python
+@pytest.mark.parametrize("check", ACCOUNTS_CONTRACT, ids=lambda c: c.__name__)
+def test_my_accounts(check, tmp_path):
+    check(MyAccounts(tmp_path / "db"))
+```
+
 It then offers `pairing` and `signatures` to every caller, and `admin` to
 the accounts that hold it:
 

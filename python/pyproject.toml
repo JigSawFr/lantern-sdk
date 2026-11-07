@@ -113,6 +113,8 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S", "PLR", "B011", "BLE001", "PT018", "PT011"]
 "tools/**" = ["S"]
+# The contracts are assertions a server runs against its own stores, outside pytest.
+"src/lantern/server/contracts.py" = ["S101", "PT"]
 "examples/**" = ["S", "T201", "INP001"]
 
 [tool.ruff.lint.isort]
