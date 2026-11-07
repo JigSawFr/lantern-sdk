@@ -17,6 +17,7 @@
 - no e-mail address and no mailto: link in any file of the site (contact
   goes through the issues).
 """
+import hashlib
 import os
 import re
 import sys
@@ -31,6 +32,25 @@ from boreale_site import check  # noqa: E402
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
 
 
+def playground_errors(root: Path) -> list[str]:
+    """site/assets/sdk-playground.js (tools/build_playground.mjs) carries the SHA-256 of the sources it was built from in
+    its first line; this says when they are not the sources now (typescript/src/ or site/playground/ changed without
+    the bundle built again). It needs no esbuild."""
+    bundle = root / "site" / "assets" / "sdk-playground.js"
+    if not bundle.exists():
+        return ["site/assets/sdk-playground.js is missing: node tools/build_playground.mjs"]
+    files = sorted(
+        {p.relative_to(root).as_posix() for d in ("typescript/src", "site/playground") for p in (root / d).rglob("*.ts")}
+    )
+    digest = hashlib.sha256()
+    for name in files:
+        digest.update(name.encode() + b"\0" + (root / name).read_bytes() + b"\0")
+    first = bundle.read_text(encoding="utf-8").split("\n", 1)[0]
+    if f"source-sha256:{digest.hexdigest()} " not in first:
+        return ["site/assets/sdk-playground.js is not built from these sources: node tools/build_playground.mjs"]
+    return []
+
+
 def main() -> None:
     if len(sys.argv) != 2:
         sys.exit(__doc__)
@@ -38,6 +58,7 @@ def main() -> None:
     errors = boreale.check_catalogs(ROOT / "site" / "i18n")
     found, pages = check.pages(site, boreale.Site("sdk", os.environ.get("SITE_URL")), chrome=True)
     errors += found
+    errors += playground_errors(ROOT)
     try:
         ElementTree.parse(site / "sitemap.xml")
     except (OSError, ElementTree.ParseError) as error:

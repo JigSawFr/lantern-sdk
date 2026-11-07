@@ -878,3 +878,16 @@ pre code .tk-k { color: #7cc4ff; }
 .lost { padding-block: clamp(64px, 12vw, 140px); display: grid; gap: 18px; justify-items: start; }
 .lost h1 { font-size: clamp(2.25rem, 6vw, 3.5rem); font-weight: 600; letter-spacing: -0.03em; }
 .lost p { color: var(--mist); max-width: 50ch; }
+
+/* "Run it, here" (playground.js): each call, what went over the in-page connection, what came back. */
+#try[hidden] { display: none; }
+.try-out { display: grid; gap: 16px; margin-top: 16px; }
+.try-step { padding: 16px; border: 1px solid var(--night-line); border-radius: 12px; background: rgb(14 26 51 / 0.45); display: grid; gap: 10px; min-width: 0; }
+.try-step h3 { margin: 0; font-size: 1.0625rem; }
+.try-step h4 { margin: 4px 0 0; color: var(--mist); font: 500 0.75rem var(--mono); letter-spacing: 0.08em; text-transform: uppercase; }
+.try-step pre { margin: 0; max-height: 18rem; overflow: auto; }
+.try-wire { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; font-size: 0.8125rem; }
+.try-wire li { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
+.try-wire code { overflow-wrap: anywhere; color: var(--snow); }
+.try-ok { color: var(--aurora); }
+.try-bad { color: #ff8a8a; }

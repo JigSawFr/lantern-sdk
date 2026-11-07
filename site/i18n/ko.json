@@ -104,5 +104,18 @@
   "lost_title": "밤 속에서 길을 잃었습니다",
   "lost_text": "이 페이지는 없거나 더 이상 없습니다.",
   "lost_back": "홈페이지로 돌아가기",
-  "lost_page_title": "페이지를 찾을 수 없습니다 · Lantern SDK"
+  "lost_page_title": "페이지를 찾을 수 없습니다 · Lantern SDK",
+  "sdk_nav_try": "직접 해 보기",
+  "sdk_try_title": "여기서 실행하기",
+  "sdk_try_text": "이 페이지에는 SDK의 TypeScript 클라이언트와 서버가 모두 들어 있습니다. 클라이언트는 이 페이지 안에만 있는 연결을 통해, 브라우저 안에서 서버의 가상 라이브러리를 읽습니다. 네트워크는 사용하지 않습니다. 동작을 그린 그림이 아니라 라이브러리(lantern-protocol)의 실제 코드입니다.",
+  "sdk_try_run": "호출 네 개 실행",
+  "sdk_try_again": "다시 실행",
+  "sdk_try_running": "실행 중…",
+  "sdk_try_error": "이 브라우저에서는 실행되지 않았습니다.",
+  "sdk_try_s1": "인사하기: 이 라이브러리를 제공하는 쪽은 누구인가",
+  "sdk_try_s2": "앱을 세 개씩 나열하기",
+  "sdk_try_s3": "콘솔에 없는 것은?",
+  "sdk_try_s4": "파일 하나를 내려받아 검증하기",
+  "sdk_try_requests": "오간 요청",
+  "sdk_try_result": "호출이 돌려주는 것"
 }

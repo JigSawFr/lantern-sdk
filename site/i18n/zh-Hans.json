@@ -104,5 +104,18 @@
   "lost_title": "迷失在夜色中",
   "lost_text": "此页面不存在，或已不存在。",
   "lost_back": "返回首页",
-  "lost_page_title": "找不到页面 · Lantern SDK"
+  "lost_page_title": "找不到页面 · Lantern SDK",
+  "sdk_nav_try": "试一试",
+  "sdk_try_title": "在这里运行",
+  "sdk_try_text": "这个页面同时包含 SDK 的 TypeScript 客户端和服务器：客户端在你的浏览器内，通过只存在于本页的连接，从服务器读取一个虚构的游戏库。不经过网络。这是库本身的代码（lantern-protocol），不是对它行为的示意图。",
+  "sdk_try_run": "运行四个调用",
+  "sdk_try_again": "再次运行",
+  "sdk_try_running": "运行中…",
+  "sdk_try_error": "未能在此浏览器中运行。",
+  "sdk_try_s1": "打个招呼：谁在提供这个库",
+  "sdk_try_s2": "每次三个，列出应用",
+  "sdk_try_s3": "主机缺少什么？",
+  "sdk_try_s4": "下载一个文件并校验",
+  "sdk_try_requests": "线路上",
+  "sdk_try_result": "调用的返回值"
 }
