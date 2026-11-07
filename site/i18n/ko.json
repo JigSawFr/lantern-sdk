@@ -100,5 +100,9 @@
   "sdk_origin": "lantern-sdk 데이터, 커밋 {c}.",
   "sdk_show_all": "{n}줄 모두 보기",
   "sdk_show_less": "접기",
-  "nav_bridge": "브리지"
+  "nav_bridge": "브리지",
+  "lost_title": "밤 속에서 길을 잃었습니다",
+  "lost_text": "이 페이지는 없거나 더 이상 없습니다.",
+  "lost_back": "홈페이지로 돌아가기",
+  "lost_page_title": "페이지를 찾을 수 없습니다 · Lantern SDK"
 }

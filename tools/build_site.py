@@ -445,8 +445,10 @@ def page_footer(language: str, catalog: dict, root: str) -> str:
     ], fine=catalog["footer_trademarks"])
 
 
-def page_html(template: str, language: str, catalog: dict, sections: dict) -> str:
+def page_html(template: str, language: str, catalog: dict, sections: dict, lost: bool = False) -> str:
     root = "../" * (0 if language == ENGLISH else 1)
+    if lost:
+        root = boreale.urlparse(SITE_URL).path if hasattr(boreale, "urlparse") else "/"  # 404.html is served at any depth
     values = dict(catalog)
     values.update({
         "lang": boreale.html_lang(language), "root": root, "home": folder(language), "site": SITE_URL, "page": "sdk",
@@ -464,10 +466,34 @@ def page_html(template: str, language: str, catalog: dict, sections: dict) -> st
                     f'data-failed="{html.escape(catalog["ui_copy_failed"], quote=True)}"></script>\n'
                     f'<script src="{root}assets/sdk.js" defer></script>'),
     })
-    values.update(sdk_values(catalog, root, sections))
-    body = (SITE / "home.html").read_text(encoding="utf-8")
+    values["structured"] = structured_data(language, catalog)
+    if lost:
+        # The root's 404.html (the English one) sends a visitor reading another language to that language's 404.html
+        # (boreale-site's lang.js); the site's path tells it where.
+        values.update({
+            "title": catalog["lost_page_title"], "description": html.escape(catalog["lost_text"], quote=True),
+            "indexing": SDK.indexing(language, "", True), "structured": "", "hero": "", "scripts": "",
+            "lost": f' data-lost="{root}"' if language == ENGLISH else "",
+        })
+        body = (SITE / "lost.html").read_text(encoding="utf-8")
+    else:
+        values["lost"] = ""
+        values.update(sdk_values(catalog, root, sections))
+        body = (SITE / "home.html").read_text(encoding="utf-8")
     values["body"] = fill(body, values)
     return SDK.links_out(fill(template, values))
+
+
+def structured_data(language: str, catalog: dict) -> str:
+    """What the page is, for search engines: schema.org's SoftwareSourceCode, in the page's language. A data block,
+    which the Content-Security-Policy leaves alone."""
+    data = {
+        "@context": "https://schema.org", "@type": "SoftwareSourceCode", "name": "Lantern SDK",
+        "description": catalog["description_sdk"], "url": SITE_URL + folder(language), "codeRepository": REPO,
+        "programmingLanguage": [SDK_NAMES[lang] for lang in SDK_LANGS], "license": "https://spdx.org/licenses/MIT.html",
+        "inLanguage": boreale.html_lang(language), "isPartOf": {"@type": "SoftwareSourceCode", "name": "Lantern", "url": LANTERN_URL},
+    }
+    return '<script type="application/ld+json">' + json.dumps(data, ensure_ascii=False).replace("<", "\\u003c") + "</script>"
 
 
 def main() -> None:
@@ -489,6 +515,7 @@ def main() -> None:
         target = out / folder(language) / "index.html"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(page_html(template, language, catalogs[language], sections), encoding="utf-8")
+        (target.parent / "404.html").write_text(page_html(template, language, catalogs[language], sections, lost=True), encoding="utf-8")
         urls.append(SITE_URL + folder(language))
     (out / "sitemap.xml").write_text(
         '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
