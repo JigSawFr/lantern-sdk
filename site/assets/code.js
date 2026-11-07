@@ -57,6 +57,8 @@
     button.append(text);
     button.addEventListener('click', () => {
       copy((code || pre).textContent.replace(/\n$/, '')).then(() => {
+        // Umami counts that a block was copied, never what it held (the privacy text on boreale.dev)
+        try { if (window.umami && typeof window.umami.track === 'function') window.umami.track('copy'); } catch (e) { /* counting never breaks the page */ }
         button.dataset.done = ''; text.textContent = T.copied;
         setTimeout(() => { button.removeAttribute('data-done'); text.textContent = T.copy; }, 1600);
         say(T.copied);
