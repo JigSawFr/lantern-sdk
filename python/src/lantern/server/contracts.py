@@ -1,8 +1,9 @@
 """The contracts of the stores a server plugs into LanternApp, as checks a server runs against its own.
 
-A server that keeps its accounts or its requests in its own database writes an `Accounts` or a `RequestStore`
-(SPEC.md § 5.5, § 5.7, § 11). Each check here takes a fresh, empty store and fails with an AssertionError when the
-store does not behave as MemoryAccounts and MemoryRequests do, which the toolkit relies on:
+A server that keeps its accounts, requests, change log, sync data or file hashes in its own database writes an
+`Accounts`, a `RequestStore`, a `ChangeLog`, a `SyncStore` or an `IndexStore` (SPEC.md § 5.5, § 5.7, § 6.4, § 11,
+§ 20). Each check here takes a fresh, empty store and fails with an AssertionError when the store does not behave as
+the toolkit's own do, which it relies on (a SyncStore is made with `limit=3`, a ChangeLog with `keep=3`):
 
     @pytest.mark.parametrize("check", ACCOUNTS_CONTRACT)
     def test_my_accounts(check, tmp_path):
@@ -19,8 +20,13 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import TypeVar
 
+from lantern import sync as syncing
 from lantern.models import RatingCap
 from lantern.server.accounts import AccountError, Accounts, token_hash, typed_code
+from lantern.server.file_index import Entry, IndexStore
+from lantern.server.http import ProblemError
+from lantern.server.library import ChangeLog
+from lantern.server.sync import SyncStore
 from lantern.server.title_requests import RequestStore, StoredRequest
 
 S = TypeVar("S")
@@ -201,4 +207,182 @@ REQUESTS_CONTRACT: tuple[Callable[[RequestStore], None], ...] = (
     forgetting_an_account,
 )
 
-__all__ = ["ACCOUNTS_CONTRACT", "REQUESTS_CONTRACT", "run_contract"]
+# Change log (made with keep=3).
+
+
+def a_log_records_and_answers(log: ChangeLog) -> None:
+    log.record("added", "a1", "switch")
+    log.record("title", "switch/0100", "switch")
+    log.record("added", "a2", "ps5")
+    assert log.seq == 3 and log.floor == 0
+    assert log.since(0, ("added",), None) == [("added", "a1"), ("added", "a2")]
+    assert log.since(0, ("added", "title"), "switch") == [("added", "a1"), ("title", "switch/0100")]
+    assert log.since(1, ("added",), None) == [("added", "a2")]
+
+
+def a_log_forgets_the_oldest(log: ChangeLog) -> None:
+    for n in range(5):
+        log.record("added", f"a{n}", "switch")
+    assert log.seq == 5 and log.floor == 2
+    assert [k for _, k in log.since(0, ("added",), None)] == ["a2", "a3", "a4"]
+
+
+CHANGELOG_CONTRACT: tuple[Callable[[ChangeLog], None], ...] = (a_log_records_and_answers, a_log_forgets_the_oldest)
+
+
+# Sync (made with limit=3).
+
+_NOW = datetime(2026, 11, 7, 12, 0, tzinfo=UTC)
+
+
+def _item(key: str, value: object = 1, when: str = "2026-11-07T11:00:00.000Z", deleted: bool = False) -> syncing.Item:
+    return syncing.Item(key, when, None if deleted else value, deleted)  # type: ignore[arg-type]
+
+
+def _merge(
+    store: SyncStore, items: list[syncing.Item], generation: str | None = None
+) -> tuple[str, int, list[syncing.Item]]:
+    generation = generation or store.overview("mira")[0]
+    return store.merge("mira", "wishes", generation, items, if_match=None, now=_NOW, skew=300)
+
+
+def _problem(status: int, call: Callable[[], object]) -> None:
+    try:
+        call()
+    except ProblemError as e:
+        assert e.status == status, f"expected {status}, got {e.status}"
+    else:
+        raise AssertionError(f"expected ProblemError {status}")
+
+
+def sync_merges_and_reads(store: SyncStore) -> None:
+    generation, rev, kept = _merge(store, [_item("a"), _item("b", {"x": [1, 2]})])
+    assert rev == 2 and [i.rev for i in kept] == [1, 2]
+    got = store.read("mira", "wishes", None)
+    assert got[0] == generation and got[1] == 2
+    assert [(i.key, i.value) for i in got[2]] == [("a", 1), ("b", {"x": [1, 2]})]
+    assert [i.key for i in store.read("mira", "wishes", 1)[2]] == ["b"]
+
+
+def sync_last_writer_wins(store: SyncStore) -> None:
+    _merge(store, [_item("a", 1, "2026-11-07T11:00:00.000Z")])
+    _, rev, kept = _merge(store, [_item("a", 0, "2026-11-07T10:00:00.000Z")])
+    assert rev == 1 and kept[0].value == 1
+    _, rev, kept = _merge(store, [_item("a", 2, "2026-11-07T11:30:00.000Z")])
+    assert rev == 2 and kept[0].value == 2
+
+
+def sync_keeps_deletions_for_a_reader_since(store: SyncStore) -> None:
+    _merge(store, [_item("a"), _item("b")])
+    _merge(store, [_item("a", deleted=True, when="2026-11-07T11:30:00.000Z")])
+    assert [i.key for i in store.read("mira", "wishes", None)[2]] == ["b"]
+    since = store.read("mira", "wishes", 2)[2]
+    assert [(i.key, i.deleted) for i in since] == [("a", True)]
+    assert store.overview("mira")[1]["wishes"] == (3, 1)
+
+
+def sync_refuses_a_revision_never_given(store: SyncStore) -> None:
+    _merge(store, [_item("a")])
+    _problem(400, lambda: store.read("mira", "wishes", 9))
+
+
+def sync_conflicts(store: SyncStore) -> None:
+    generation, _, _ = _merge(store, [_item("a")])
+    _problem(409, lambda: _merge(store, [_item("b")], generation="g_other"))
+    _problem(
+        412,
+        lambda: store.merge("mira", "wishes", generation, [_item("b")], if_match='"nope"', now=_NOW, skew=300),
+    )
+    store.merge("mira", "wishes", generation, [_item("b")], if_match=f'"{generation}-1"', now=_NOW, skew=300)
+
+
+def sync_limit(store: SyncStore) -> None:
+    _merge(store, [_item("a"), _item("b"), _item("c")])
+    _problem(413, lambda: _merge(store, [_item("d")]))
+    _merge(store, [_item("a", 5, "2026-11-07T11:30:00.000Z")])
+
+
+def sync_erase_changes_the_generation(store: SyncStore) -> None:
+    generation, _, _ = _merge(store, [_item("a")])
+    fresh = store.erase("mira", "wishes")
+    assert fresh != generation and store.read("mira", "wishes", None)[2] == []
+    _merge(store, [_item("a")], generation=fresh)
+    again = store.erase("mira")
+    assert again != fresh and store.overview("mira")[0] == again
+
+
+def sync_forget(store: SyncStore) -> None:
+    generation, _, _ = _merge(store, [_item("a")])
+    store.forget("mira")
+    fresh, overview = store.overview("mira")
+    assert fresh != generation and overview["wishes"] == (0, 0)
+
+
+SYNC_CONTRACT: tuple[Callable[[SyncStore], None], ...] = (
+    sync_merges_and_reads,
+    sync_last_writer_wins,
+    sync_keeps_deletions_for_a_reader_since,
+    sync_refuses_a_revision_never_given,
+    sync_conflicts,
+    sync_limit,
+    sync_erase_changes_the_generation,
+    sync_forget,
+)
+
+
+# File hashes.
+
+
+def the_index_adds_changes_and_removes(index: IndexStore) -> None:
+    assert index.sync("s", [Entry("a", 1, 10), Entry("b", 2, 10)]).added == 2
+    [first] = index.pending(1)
+    index.set_hash(first, "h")
+    result = index.sync("s", [Entry("a", 1, 10), Entry("b", 3, 11), Entry("c", 1, 1)])
+    assert (result.added, result.changed, result.removed) == (1, 1, 0)
+    result = index.sync("s", [Entry("c", 1, 1)])
+    assert result.removed == 2 and [r.path for r in index.rows()] == ["c"]
+
+
+def the_queue_is_priority_then_smallest(index: IndexStore) -> None:
+    index.sync(
+        "s", [Entry("dlc", 1, 1, 2), Entry("big-base", 9, 1, 0), Entry("small-base", 2, 1, 0), Entry("up", 5, 1, 1)]
+    )
+    assert [r.path for r in index.pending()] == ["small-base", "big-base", "up", "dlc"]
+    assert [r.path for r in index.pending(2)] == ["small-base", "big-base"]
+    assert index.pending(10, ["other"]) == []
+
+
+def a_hash_is_recorded_only_under_its_validators(index: IndexStore) -> None:
+    index.sync("s", [Entry("a", 1, 10)])
+    [row] = index.pending()
+    index.sync("s", [Entry("a", 1, 11)])  # changed meanwhile
+    assert index.set_hash(row, "h") is False
+    assert index.hashed() == [] and index.counts() == {"hashed": 0, "pending": 1}
+    [row] = index.pending()
+    assert index.set_hash(row, "h") is True
+    assert [r.sha256 for r in index.hashed("s")] == ["h"] and index.pending_bytes() == 0
+
+
+def rehashing_queues_files_first(index: IndexStore) -> None:
+    index.sync("s", [Entry("a", 1, 1), Entry("b", 2, 1)])
+    for row in index.pending():
+        index.set_hash(row, "h")
+    assert index.rehash_files([("s", "b"), ("s", "missing")]) == 1
+    assert [r.path for r in index.pending()] == ["b"] and index.counts() == {"hashed": 1, "pending": 1}
+
+
+INDEX_CONTRACT: tuple[Callable[[IndexStore], None], ...] = (
+    the_index_adds_changes_and_removes,
+    the_queue_is_priority_then_smallest,
+    a_hash_is_recorded_only_under_its_validators,
+    rehashing_queues_files_first,
+)
+
+__all__ = [
+    "ACCOUNTS_CONTRACT",
+    "CHANGELOG_CONTRACT",
+    "INDEX_CONTRACT",
+    "REQUESTS_CONTRACT",
+    "SYNC_CONTRACT",
+    "run_contract",
+]

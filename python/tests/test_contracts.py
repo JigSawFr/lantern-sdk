@@ -4,12 +4,23 @@ stores that break them."""
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
-from lantern.server import MemoryAccounts, MemoryRequests
+from lantern.server import MemoryAccounts, MemoryRequests, SqliteJournal, SqliteSync
 from lantern.server.accounts import Accounts
-from lantern.server.contracts import ACCOUNTS_CONTRACT, REQUESTS_CONTRACT, run_contract
+from lantern.server.contracts import (
+    ACCOUNTS_CONTRACT,
+    CHANGELOG_CONTRACT,
+    INDEX_CONTRACT,
+    REQUESTS_CONTRACT,
+    SYNC_CONTRACT,
+    run_contract,
+)
+from lantern.server.file_index import IndexStore, SqliteIndex
+from lantern.server.library import ChangeLog, MemoryJournal
+from lantern.server.sync import MemorySync, SyncStore
 from lantern.server.title_requests import RequestStore, StoredRequest
 
 
@@ -32,6 +43,32 @@ def test_run_contract_runs_every_check_on_a_fresh_store() -> None:
 
     run_contract(REQUESTS_CONTRACT, make)
     assert len(made) == len(REQUESTS_CONTRACT)
+
+
+@pytest.mark.parametrize("check", CHANGELOG_CONTRACT, ids=lambda c: c.__name__)
+@pytest.mark.parametrize("kind", ["memory", "sqlite"])
+def test_change_logs(check: Callable[[ChangeLog], None], kind: str, tmp_path: Path) -> None:
+    if kind == "memory":
+        check(MemoryJournal(keep=3))
+    else:
+        with SqliteJournal(tmp_path / "journal.db", keep=3) as log:
+            check(log)
+
+
+@pytest.mark.parametrize("check", SYNC_CONTRACT, ids=lambda c: c.__name__)
+@pytest.mark.parametrize("kind", ["memory", "sqlite"])
+def test_sync_stores(check: Callable[[SyncStore], None], kind: str, tmp_path: Path) -> None:
+    if kind == "memory":
+        check(MemorySync(limit=3))
+    else:
+        with SqliteSync(tmp_path / "sync.db", limit=3) as store:
+            check(store)
+
+
+@pytest.mark.parametrize("check", INDEX_CONTRACT, ids=lambda c: c.__name__)
+def test_the_file_index(check: Callable[[IndexStore], None]) -> None:
+    with SqliteIndex(":memory:") as index:
+        check(index)
 
 
 class LeakyRequests(MemoryRequests):

@@ -473,7 +473,8 @@ app = LanternApp(
 ```
 
 A store of your own is checked against the contract the toolkit's stores pass,
-`lantern.server.contracts` (`ACCOUNTS_CONTRACT`, `REQUESTS_CONTRACT`): each
+`lantern.server.contracts` (`ACCOUNTS_CONTRACT`, `REQUESTS_CONTRACT`,
+`CHANGELOG_CONTRACT`, `SYNC_CONTRACT`, `INDEX_CONTRACT`): each
 check takes a fresh, empty store and raises `AssertionError` when it behaves
 otherwise.
 
