@@ -852,3 +852,15 @@ pre code .tk-k { color: #7cc4ff; }
 }
 @media print { .fold-body { max-height: none; } .fold-body::after, .fold label { display: none; } .parity-list { display: none; } .matrix { display: block; } }
 #pick .which { margin: 2.25rem 0 0.5rem; color: var(--snow); font: 600 1.125rem/1.4 var(--display); }
+
+/* On a phone the parity, the calls and the examples start folded (sdk.js): their title is the button that opens them. */
+.fold-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 0; border: 0; background: none;
+  color: inherit; font: inherit; letter-spacing: inherit; text-align: left; cursor: pointer; }
+.fold-title::after { content: ""; flex: none; width: 10px; height: 10px; border-right: 2px solid var(--aurora); border-bottom: 2px solid var(--aurora);
+  transform: translateY(-2px) rotate(45deg); transition: transform 0.15s; }
+.fold-title[aria-expanded="true"]::after { transform: translateY(2px) rotate(-135deg); }
+.fold-title:focus-visible { outline: 2px solid var(--aurora); outline-offset: 4px; border-radius: 4px; }
+@media (prefers-reduced-motion: reduce) { .fold-title::after { transition: none; } }
+@media (min-width: 601px) { .fold-title::after { display: none; } .fold-title { cursor: default; } }
+
+.folds [hidden] { display: none !important; }

@@ -40,4 +40,43 @@
   try { asked = new URL(location.href).searchParams.get('lang') || ''; } catch (e) { asked = ''; }
   if (known(asked)) pick(asked, false);
   else if (known(stored)) pick(stored, false);
+
+  // On a phone the page is long: the parity, the calls and the examples start folded under their title, which is
+  // the button that opens them. A link that leads inside one (the sub-navigation, an address with a #) opens it.
+  // Without script, or on a wide screen, everything is shown.
+  const narrow = window.matchMedia('(max-width: 600px)');
+  const folds = [];
+  for (const id of ['parity', 'calls', 'examples']) {
+    const section = document.getElementById(id);
+    const head = section && section.querySelector('.section-head');
+    const title = head && head.querySelector('h2');
+    if (!title) continue;
+    const button = document.createElement('button');
+    button.type = 'button'; button.className = 'fold-title';
+    button.append(...title.childNodes);
+    title.append(button);
+    const rest = Array.from(section.children).filter((el) => el !== head);
+    const lede = Array.from(head.children).filter((el) => el !== title);
+    const set = (open) => {
+      button.setAttribute('aria-expanded', String(open));
+      for (const el of rest.concat(lede)) el.hidden = !open;
+    };
+    button.addEventListener('click', () => set(button.getAttribute('aria-expanded') !== 'true'));
+    folds.push({ section, set });
+  }
+  const apply = () => {
+    for (const fold of folds) {
+      fold.section.classList.toggle('folds', narrow.matches);
+      fold.set(!narrow.matches || (!!location.hash && fold.section.querySelector(':target') !== null));
+    }
+  };
+  const openFor = () => {
+    const target = location.hash && document.getElementById(decodeURIComponent(location.hash.slice(1)));
+    for (const fold of folds) if (narrow.matches && target && fold.section.contains(target)) fold.set(true);
+    if (target && narrow.matches) target.scrollIntoView();
+  };
+  narrow.addEventListener('change', apply);
+  window.addEventListener('hashchange', openFor);
+  apply();
+  openFor();
 })();
