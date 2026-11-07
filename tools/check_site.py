@@ -56,8 +56,11 @@ def main() -> None:
         sys.exit(__doc__)
     site = Path(sys.argv[1])
     errors = boreale.check_catalogs(ROOT / "site" / "i18n")
-    found, pages = check.pages(site, boreale.Site("sdk", os.environ.get("SITE_URL")), chrome=True)
+    sdk = boreale.Site("sdk", os.environ.get("SITE_URL"))
+    # What a visitor downloads at once (the page and what it loads): the heaviest page today is ~280 KB.
+    found, pages = check.pages(site, sdk, chrome=True, budget=350 * 1024)
     errors += found
+    errors += check.llms(site, sdk)
     errors += playground_errors(ROOT)
     try:
         ElementTree.parse(site / "sitemap.xml")

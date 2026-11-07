@@ -1,0 +1,17 @@
+# The links out of the SDK's website, followed once a week: which of them lead nowhere now. A failed run is the report.
+# The check is boreale-site's (library/boreale-site/tools/check_links.py), run by its reusable workflow.
+name: links
+
+on:
+  schedule:
+    - cron: "41 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  links:
+    uses: JigSawFr/boreale-site/.github/workflows/links.yml@2f83041741afc602a3c42e4799d1b449a6db6c52 # main after #22
+    with:
+      build: python3 tools/build_site.py build

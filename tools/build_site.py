@@ -522,6 +522,13 @@ def main() -> None:
         '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
         + "".join(f"  <url><loc>{html.escape(u)}</loc></url>\n" for u in urls) + "</urlset>\n", encoding="utf-8")
     (out / "robots.txt").write_text(f"User-agent: *\nAllow: /\nSitemap: {SITE_URL}sitemap.xml\n", encoding="utf-8")
+    if os.environ.get("SITE_NOINDEX") != "1":
+        (out / "llms.txt").write_text(SDK.llms(
+            "Lantern SDK", "Client and server libraries for the Lantern protocol in C++, C, Python, TypeScript, Go and Rust.",
+            {language: catalogs[language]["description_sdk"] for language, _, _, _ in LANGUAGES},
+            [("Source code", REPO, "The SDK's repository: the libraries, the examples and the conformance tests."),
+             ("Lantern", LANTERN_URL, "The protocol these libraries speak."),
+             ("Specification", f"{LANTERN_URL}spec/", "The Lantern specification the libraries follow.")]), encoding="utf-8")
     host = boreale.urlparse(SITE_URL).hostname if hasattr(boreale, "urlparse") else SITE_URL.split("/")[2]
     if host and not host.endswith("github.io"):
         (out / "CNAME").write_text(host + "\n", encoding="utf-8")
