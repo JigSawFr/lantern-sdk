@@ -100,5 +100,9 @@
   "sdk_origin": "Données de lantern-sdk au commit {c}.",
   "sdk_show_all": "Tout afficher ({n} lignes)",
   "sdk_show_less": "Réduire",
-  "nav_bridge": "Passerelle"
+  "nav_bridge": "Passerelle",
+  "lost_title": "Perdu dans la nuit",
+  "lost_text": "Cette page n'existe pas, ou plus.",
+  "lost_back": "Retour à l'accueil",
+  "lost_page_title": "Page introuvable · Lantern SDK"
 }

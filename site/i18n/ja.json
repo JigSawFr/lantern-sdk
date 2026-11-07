@@ -100,5 +100,9 @@
   "sdk_origin": "lantern-sdk のデータ（コミット {c}）。",
   "sdk_show_all": "{n} 行すべてを表示",
   "sdk_show_less": "折りたたむ",
-  "nav_bridge": "ブリッジ"
+  "nav_bridge": "ブリッジ",
+  "lost_title": "夜の中で迷子に",
+  "lost_text": "このページは存在しないか、なくなりました。",
+  "lost_back": "ホームページに戻る",
+  "lost_page_title": "ページが見つかりません · Lantern SDK"
 }

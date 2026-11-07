@@ -100,5 +100,9 @@
   "sdk_origin": "Gegevens uit lantern-sdk bij commit {c}.",
   "sdk_show_all": "Alle {n} regels tonen",
   "sdk_show_less": "Minder tonen",
-  "nav_bridge": "Bridge"
+  "nav_bridge": "Bridge",
+  "lost_title": "Verdwaald in de nacht",
+  "lost_text": "Deze pagina bestaat niet, of niet meer.",
+  "lost_back": "Terug naar de startpagina",
+  "lost_page_title": "Pagina niet gevonden · Lantern SDK"
 }

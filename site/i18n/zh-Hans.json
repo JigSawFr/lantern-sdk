@@ -100,5 +100,9 @@
   "sdk_origin": "数据来自 lantern-sdk，提交 {c}。",
   "sdk_show_all": "显示全部 {n} 行",
   "sdk_show_less": "收起",
-  "nav_bridge": "桥接"
+  "nav_bridge": "桥接",
+  "lost_title": "迷失在夜色中",
+  "lost_text": "此页面不存在，或已不存在。",
+  "lost_back": "返回首页",
+  "lost_page_title": "找不到页面 · Lantern SDK"
 }

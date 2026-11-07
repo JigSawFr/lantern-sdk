@@ -873,3 +873,8 @@ pre code .tk-k { color: #7cc4ff; }
 .hero-code .note { margin: 6px 0 0; font-size: 0.8125rem; }
 @media (min-width: 980px) { .hero-sdk { grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 14px 48px; align-items: center; } }
 
+
+/* 404.html. */
+.lost { padding-block: clamp(64px, 12vw, 140px); display: grid; gap: 18px; justify-items: start; }
+.lost h1 { font-size: clamp(2.25rem, 6vw, 3.5rem); font-weight: 600; letter-spacing: -0.03em; }
+.lost p { color: var(--mist); max-width: 50ch; }

@@ -100,5 +100,9 @@
   "sdk_origin": "Данные из lantern-sdk, коммит {c}.",
   "sdk_show_all": "Показать все {n} строк",
   "sdk_show_less": "Свернуть",
-  "nav_bridge": "Мост"
+  "nav_bridge": "Мост",
+  "lost_title": "Потерялись в ночи",
+  "lost_text": "Такой страницы нет или уже нет.",
+  "lost_back": "На главную",
+  "lost_page_title": "Страница не найдена · Lantern SDK"
 }
