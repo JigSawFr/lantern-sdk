@@ -7,7 +7,7 @@ import os
 import sqlite3
 import sys
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -17,7 +17,7 @@ from demo import DEMO_KEY, DEMO_TOKEN, EVERY_SCOPE, build_library, make_lantern
 from lantern import schema
 from lantern.models import RatingCap
 from lantern.server import Accounts, AccountsSchemaError, MemoryAccounts, SqliteAccounts
-from lantern.server.accounts import AccountError, token_hash, typed_code
+from lantern.server.contracts import ACCOUNTS_CONTRACT
 from test_server_auth import BASE, call, doc, mira
 
 
@@ -35,106 +35,12 @@ def later(seconds: int) -> str:
     return (datetime.now(UTC) + timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-# The contract, for both stores.
+# The contract, for both stores: the one the toolkit publishes for servers' own stores.
 
 
-def test_users(accounts: Accounts) -> None:
-    created = accounts.create_user("lea", ["saves", "library"])
-    assert created.scopes == ("library", "saves")  # in the handshake's order
-    assert accounts.user("lea") == created and accounts.user("nobody") is None
-    accounts.create_user("ada", ["library"])
-    assert [u.name for u in accounts.users()] == ["ada", "lea"]
-    with pytest.raises(AccountError) as conflict:
-        accounts.create_user("lea", ["library"])
-    assert conflict.value.status == 409
-    for bad in ("", "a b", "x" * 65, "é"):
-        with pytest.raises(AccountError) as refused:
-            accounts.create_user(bad, ["library"])
-        assert refused.value.status == 400
-
-
-def test_updating_an_account_cuts_its_devices_back(accounts: Accounts) -> None:
-    accounts.create_user("lea", ["library", "saves", "cheats"])
-    _, device = accounts.issue("lea", "console", ["library", "saves", "cheats"])
-    frozen = accounts.update_user("lea", state="frozen")
-    assert frozen.state == "frozen" and frozen.scopes == ("library", "saves", "cheats")
-    assert accounts.user("lea") == frozen
-    accounts.update_user("lea", scopes=["library"])
-    assert accounts.devices("lea")[0].scopes == ("library",) and accounts.devices("lea")[0].id == device.id
-    with pytest.raises(AccountError) as missing:
-        accounts.update_user("nobody", state="frozen")
-    assert missing.value.status == 404
-
-
-def test_deleting_an_account_takes_its_devices_and_invitations(accounts: Accounts) -> None:
-    accounts.create_user("lea", ["library"])
-    accounts.create_user("ada", ["library"])
-    token, _ = accounts.issue("lea", "console", ["library"])
-    accounts.issue("ada", "other", ["library"])
-    mine = accounts.create_invitation("lea", ["library"], later(3600), 2)
-    accounts.create_invitation("ada", ["library"], later(3600), 2)
-    accounts.delete_user("lea")
-    assert accounts.user("lea") is None and accounts.device_of(token) is None
-    assert [d.user for d in accounts.devices()] == ["ada"]
-    assert accounts.redeem(mine.code) is None and [i.user for i in accounts.invitations()] == ["ada"]
-    with pytest.raises(AccountError) as missing:
-        accounts.delete_user("lea")
-    assert missing.value.status == 404
-
-
-def test_tokens(accounts: Accounts) -> None:
-    accounts.create_user("lea", ["library", "saves"])
-    cap = RatingCap(age=12)
-    token, device = accounts.issue("lea", "console", ["saves", "library"], key=b"k" * 32, rating_cap=cap)
-    assert device.token_hash == token_hash(token) and device.id.startswith("d_") and device.bound
-    found = accounts.device_of(token)
-    assert found is not None and found.scopes == ("library", "saves") and found.key == b"k" * 32
-    assert found.rating_cap is not None and found.rating_cap.age == 12
-    assert accounts.device_of(token + "x") is None
-    assert accounts.revoke(device.id) is True and accounts.revoke(device.id) is False
-    assert accounts.device_of(token) is None
-
-
-def test_a_token_expires(accounts: Accounts) -> None:
-    accounts.create_user("lea", ["library"])
-    live, _ = accounts.issue("lea", "console", ["library"], lifetime=3600)
-    dead, record = accounts.issue("lea", "old", ["library"], lifetime=-3600)
-    assert accounts.device_of(live) is not None and accounts.device_of(dead) is None
-    assert record.id not in [d.id for d in accounts.devices()]
-
-
-def test_invitations(accounts: Accounts) -> None:
-    accounts.create_user("lea", ["library"])
-    cap = RatingCap(age=7)
-    inv = accounts.create_invitation("lea", ["library"], later(3600), 2, rating_cap=cap, note="for Sam")
-    assert len(inv.code.replace("-", "")) == 16 and inv.note == "for Sam"
-    assert [i.id for i in accounts.invitations()] == [inv.id]
-    first = accounts.redeem(" " + inv.code.lower().replace("-", " ") + " ")  # as a person typed it
-    assert first is not None and first.used == 1 and first.rating_cap is not None and first.rating_cap.age == 7
-    second = accounts.redeem(inv.code)
-    assert second is not None and second.used == 2
-    assert accounts.redeem(inv.code) is None  # two devices, used up
-    assert accounts.invitations() == []
-    assert accounts.redeem("AAAA-BBBB-CCCC-DDDD") is None
-
-
-def test_an_expired_invitation_is_not_redeemed(accounts: Accounts) -> None:
-    accounts.create_user("lea", ["library"])
-    inv = accounts.create_invitation("lea", ["library"], later(-1), 1)
-    assert accounts.redeem(inv.code) is None and accounts.invitations() == []
-
-
-def test_revoking_an_invitation(accounts: Accounts) -> None:
-    accounts.create_user("lea", ["library"])
-    inv = accounts.create_invitation("lea", ["library"], later(3600), 1)
-    assert accounts.revoke_invitation(inv.id) is True and accounts.revoke_invitation(inv.id) is False
-    assert accounts.redeem(inv.code) is None
-
-
-def test_codes_are_distinct(accounts: Accounts) -> None:
-    accounts.create_user("lea", ["library"])
-    codes = {typed_code(accounts.create_invitation("lea", ["library"], later(3600), 1).code) for _ in range(50)}
-    assert len(codes) == 50
+@pytest.mark.parametrize("check", ACCOUNTS_CONTRACT, ids=lambda c: c.__name__)
+def test_the_contract(accounts: Accounts, check: Callable[[Accounts], None]) -> None:
+    check(accounts)
 
 
 # What a file adds.
