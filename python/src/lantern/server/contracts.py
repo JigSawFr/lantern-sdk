@@ -77,6 +77,48 @@ def updating_an_account_cuts_its_devices_back(accounts: Accounts) -> None:
     _refused(404, lambda: accounts.update_user("nobody", state="frozen"))
 
 
+def an_account_has_a_rating_cap(accounts: Accounts) -> None:
+    accounts.create_user("lea", ["library"])
+    fresh = accounts.user("lea")
+    assert fresh is not None and fresh.rating_cap is None
+    capped = accounts.update_user("lea", rating_cap=RatingCap(age=7, unrated="hide"))
+    assert capped.rating_cap is not None and capped.rating_cap.age == 7 and capped.rating_cap.unrated == "hide"
+    kept = accounts.update_user("lea", state="frozen")  # not named: left as it is
+    assert kept.rating_cap == capped.rating_cap and kept.state == "frozen"
+    stored = accounts.user("lea")
+    assert stored is not None and stored.rating_cap == capped.rating_cap
+    cleared = accounts.update_user("lea", rating_cap=None)
+    assert cleared.rating_cap is None and cleared.state == "frozen"
+    assert accounts.create_user("ada", ["library"]).rating_cap is None
+    _refused(404, lambda: accounts.update_user("nobody", rating_cap=RatingCap(age=7)))
+
+
+def changing_a_device(accounts: Accounts) -> None:
+    accounts.create_user("lea", ["library", "saves", "cheats"])
+    accounts.create_user("ada", ["library"])
+    token, device = accounts.issue("lea", "console", ["library", "saves"], key=b"k" * 32, rating_cap=RatingCap(age=12))
+    _, other = accounts.issue("ada", "other", ["library"])
+    assert device.suspended is False
+    renamed = accounts.update_device(device.id, device="Salon")
+    assert renamed.device == "Salon" and renamed.scopes == ("library", "saves") and renamed.suspended is False
+    held = accounts.update_device(device.id, suspended=True)
+    assert held.suspended is True and held.device == "Salon"
+    found = accounts.device_of(token)  # still paired: the token, its key and its id are the same
+    assert found is not None and found.suspended is True and found.id == device.id and found.key == b"k" * 32
+    assert found.rating_cap is not None and found.rating_cap.age == 12
+    cut = accounts.update_device(device.id, scopes=["library", "cheats"])  # only what it has, never more
+    assert cut.scopes == ("library",)
+    recapped = accounts.update_device(device.id, rating_cap=RatingCap(age=7))
+    assert recapped.rating_cap is not None and recapped.rating_cap.age == 7
+    assert accounts.update_device(device.id, rating_cap=None).rating_cap is None
+    lifted = accounts.update_device(device.id, suspended=False)
+    assert lifted.suspended is False and lifted.scopes == ("library",) and lifted.device == "Salon"
+    assert [d.device for d in accounts.devices("ada")] == ["other"] and accounts.devices("ada")[0].id == other.id
+    _refused(404, lambda: accounts.update_device("d_0000000000000000", device="x"))
+    assert accounts.revoke(device.id) is True
+    _refused(404, lambda: accounts.update_device(device.id, suspended=True))
+
+
 def deleting_an_account_takes_its_devices_and_invitations(accounts: Accounts) -> None:
     accounts.create_user("lea", ["library"])
     accounts.create_user("ada", ["library"])
@@ -149,6 +191,8 @@ def codes_are_distinct(accounts: Accounts) -> None:
 ACCOUNTS_CONTRACT: tuple[Callable[[Accounts], None], ...] = (
     users,
     updating_an_account_cuts_its_devices_back,
+    an_account_has_a_rating_cap,
+    changing_a_device,
     deleting_an_account_takes_its_devices_and_invitations,
     tokens,
     a_token_expires,

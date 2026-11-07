@@ -7,6 +7,7 @@ carries (the handshake's `account.rating_cap`). Test vectors:
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from dataclasses import replace
 
 from lantern._base import JSONValue
 from lantern._generated.models import Rating, RatingCap
@@ -35,6 +36,22 @@ def cap_age(cap: RatingCap) -> int | None:
     if cap.system is not None and cap.rating is not None:
         return rating_age(cap.system, cap.rating)
     return None
+
+
+def stricter(a: RatingCap | None, b: RatingCap | None) -> RatingCap | None:
+    """The one cap that holds both `a` and `b` (a token's and its account's): the lower age, and `hide` for the
+    unrated when either hides them. A cap the table cannot read hides everything rated (see `hidden`), so it is
+    the stricter; between equal ages `a` stays. None is no cap."""
+    if a is None or b is None:
+        return a if b is None else b
+    age_a, age_b = cap_age(a), cap_age(b)
+    if age_a is None or (age_b is not None and age_a <= age_b):
+        chosen = a
+    else:
+        chosen = b
+    if "hide" in (a.unrated, b.unrated) and chosen.unrated != "hide":
+        chosen = replace(chosen, unrated="hide")
+    return chosen
 
 
 def age_of(ratings: Iterable[Rating], cap: RatingCap) -> int | None:

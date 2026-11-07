@@ -8,7 +8,9 @@ the scopes approved, its rating cap and its invitation. An invitation's code is 
 the administration API shows it again; the file is created readable by its owner alone for that reason.
 
 The file carries its `schema` as SQLite's `user_version`. A file of a newer schema is not opened (`AccountsSchemaError`)
-and nothing is written to it; a column or a table this version does not know is left as it is.
+and nothing is written to it; a column or a table this version does not know is left as it is. A file of the
+schema before (1) gets the two columns schema 2 adds (an account's rating cap, a device's suspension) when it is
+opened.
 """
 
 from __future__ import annotations
@@ -29,10 +31,12 @@ from lantern._generated.models import RatingCap
 from lantern.server.accounts import (
     ACCOUNT_NAME,
     INVITATION_SYMBOLS,
+    UNSET,
     AccountError,
     Device,
     Invitation,
     User,
+    _Unset,
     new_code,
     new_device_id,
     new_token,
@@ -45,14 +49,15 @@ from lantern.server.accounts import (
 __all__ = ["SCHEMA", "AccountsSchemaError", "SqliteAccounts"]
 
 #: The schema this version writes (SQLite's `user_version`).
-SCHEMA = 1
+SCHEMA = 2
 
 _TABLES = """
 CREATE TABLE users (
     name TEXT PRIMARY KEY,
     scopes TEXT NOT NULL,
     state TEXT NOT NULL,
-    created TEXT NOT NULL
+    created TEXT NOT NULL,
+    rating_cap TEXT
 );
 CREATE TABLE devices (
     id TEXT PRIMARY KEY,
@@ -65,7 +70,8 @@ CREATE TABLE devices (
     rating_cap TEXT,
     invitation TEXT,
     expires TEXT,
-    last_used TEXT
+    last_used TEXT,
+    suspended INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX devices_by_user ON devices(user);
 CREATE TABLE invitations (
@@ -82,8 +88,8 @@ CREATE TABLE invitations (
 );
 """
 
-_USER = "name, scopes, state, created"
-_DEVICE = "id, token_hash, user, device, scopes, created, key, rating_cap, invitation, expires, last_used"
+_USER = "name, scopes, state, created, rating_cap"
+_DEVICE = "id, token_hash, user, device, scopes, created, key, rating_cap, invitation, expires, last_used, suspended"
 _INVITATION = "id, code, user, scopes, expires, devices, used, rating_cap, note, created"
 
 
@@ -99,8 +105,14 @@ def _cap(text: str | None) -> RatingCap | None:
     return None if text is None else RatingCap.from_json(json.loads(text))
 
 
-def _user(row: tuple[str, str, str, str]) -> User:
-    return User(row[0], tuple(json.loads(row[1])), row[2], row[3])
+def _user(row: tuple[object, ...]) -> User:
+    return User(
+        str(row[0]),
+        tuple(json.loads(str(row[1]))),
+        str(row[2]),
+        str(row[3]),
+        _cap(row[4] if isinstance(row[4], str) else None),
+    )
 
 
 def _device(row: tuple[object, ...]) -> Device:
@@ -117,6 +129,7 @@ def _device(row: tuple[object, ...]) -> Device:
         invitation=row[8] if isinstance(row[8], str) else None,
         expires=row[9] if isinstance(row[9], str) else None,
         last_used=row[10] if isinstance(row[10], str) else None,
+        suspended=bool(row[11]),
     )
 
 
@@ -173,14 +186,24 @@ class SqliteAccounts:
         self._db.execute("PRAGMA busy_timeout = 5000")
         # Not for an in-memory database, which has no file to log to
         self._db.execute("PRAGMA journal_mode = WAL")
-        if version == 0:
+        if version < SCHEMA:
             with self._transaction():
                 has_tables = self._db.execute("SELECT 1 FROM sqlite_master WHERE name = 'users'").fetchone()
                 if has_tables is None:
                     for statement in _TABLES.split(";"):
                         if statement.strip():
                             self._db.execute(statement)
+                else:
+                    # Taking up a file of schema 1 (before an account had a rating cap and a device a suspension).
+                    # Kept for the files written before schema 2; goes when no schema 1 file is left to open.
+                    self._add_column("users", "rating_cap", "TEXT")
+                    self._add_column("devices", "suspended", "INTEGER NOT NULL DEFAULT 0")
                 self._db.execute(f"PRAGMA user_version = {SCHEMA}")
+
+    def _add_column(self, table: str, column: str, definition: str) -> None:
+        names = {str(r[1]) for r in self._db.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in names:
+            self._db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def close(self) -> None:
         with self._lock:
@@ -230,7 +253,14 @@ class SqliteAccounts:
             )
         return user
 
-    def update_user(self, name: str, *, state: str | None = None, scopes: Sequence[str] | None = None) -> User:
+    def update_user(
+        self,
+        name: str,
+        *,
+        state: str | None = None,
+        scopes: Sequence[str] | None = None,
+        rating_cap: RatingCap | None | _Unset = UNSET,
+    ) -> User:
         with self._transaction() as db:
             row = db.execute(f"SELECT {_USER} FROM users WHERE name = ?", (name,)).fetchone()  # noqa: S608
             if row is None:
@@ -238,6 +268,8 @@ class SqliteAccounts:
             user = _user(row)
             if state is not None:
                 user = replace(user, state=state)
+            if not isinstance(rating_cap, _Unset):
+                user = replace(user, rating_cap=rating_cap)
             if scopes is not None:
                 user = replace(user, scopes=ordered_scopes(scopes))
                 # Its devices' scopes are cut back with its own
@@ -247,7 +279,8 @@ class SqliteAccounts:
                     kept = [s for s in json.loads(device_scopes) if s in user.scopes]
                     db.execute("UPDATE devices SET scopes = ? WHERE id = ?", (json.dumps(kept), device_id))
             db.execute(
-                "UPDATE users SET scopes = ?, state = ? WHERE name = ?", (json.dumps(user.scopes), user.state, name)
+                "UPDATE users SET scopes = ?, state = ?, rating_cap = ? WHERE name = ?",
+                (json.dumps(user.scopes), user.state, _cap_text(user.rating_cap), name),
             )
         return user
 
@@ -351,6 +384,40 @@ class SqliteAccounts:
             else:
                 rows = self._db.execute(f"SELECT {_DEVICE} FROM devices WHERE user = ?", (user,)).fetchall()  # noqa: S608
         return sorted((d for d in map(_device, rows) if d.live()), key=lambda d: (d.user, d.created, d.id))
+
+    def update_device(
+        self,
+        device_id: str,
+        *,
+        device: str | None = None,
+        scopes: Sequence[str] | None = None,
+        rating_cap: RatingCap | None | _Unset = UNSET,
+        suspended: bool | None = None,
+    ) -> Device:
+        with self._transaction() as db:
+            row = db.execute(f"SELECT {_DEVICE} FROM devices WHERE id = ?", (device_id,)).fetchone()  # noqa: S608
+            if row is None:
+                raise AccountError(404, "not_found", "No such device.")
+            record = _device(row)
+            if device is not None:
+                record = replace(record, device=device)
+            if scopes is not None:
+                record = replace(record, scopes=tuple(s for s in record.scopes if s in scopes))
+            if not isinstance(rating_cap, _Unset):
+                record = replace(record, rating_cap=rating_cap)
+            if suspended is not None:
+                record = replace(record, suspended=suspended)
+            db.execute(
+                "UPDATE devices SET device = ?, scopes = ?, rating_cap = ?, suspended = ? WHERE id = ?",
+                (
+                    record.device,
+                    json.dumps(record.scopes),
+                    _cap_text(record.rating_cap),
+                    int(record.suspended),
+                    device_id,
+                ),
+            )
+        return record
 
     def revoke(self, device_id: str) -> bool:
         with self._transaction() as db:

@@ -454,6 +454,12 @@ standard library only, readable by its owner alone, of a versioned
 `schema`: a file of a newer one is not opened, nor written to), or your own
 implementation of the interface over your database.
 
+An account can carry a `rating_cap` of its own (`update_user(name, rating_cap=…)`, `None` removes it): it holds
+for every device of the account, at once, and where a device has a cap too the stricter of the two applies
+(`ratings.stricter`). `update_device()` renames a device, cuts its scopes back, changes its own cap or suspends it
+(`suspended=True`): the device stays paired and is answered as a frozen account until it is lifted. Suspension is
+the toolkit's own, outside the specification; on the wire it reads as `frozen`.
+
 ```python
 from lantern.server import LanternApp, SqliteAccounts
 

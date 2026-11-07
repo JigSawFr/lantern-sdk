@@ -649,10 +649,10 @@ class LanternApp:
             return None
         return Account(
             scopes=frozenset(s for s in device.scopes if s in user.scopes),
-            state="frozen" if user.state == "frozen" else "active",
+            state="frozen" if user.state == "frozen" or device.suspended else "active",
             name=user.name,
             key=device.key,
-            rating_cap=device.rating_cap,
+            rating_cap=ratings.stricter(device.rating_cap, user.rating_cap),
             device=device.id,
             device_name=device.device,
         )
