@@ -43,8 +43,11 @@ def main() -> None:
     except (OSError, ElementTree.ParseError) as error:
         errors.append(f"sitemap.xml: {error}")
     for page in sorted(site.rglob("index.html")):
-        if 'class="cards' not in page.read_text(encoding="utf-8"):
+        text = page.read_text(encoding="utf-8")
+        if 'class="cards' not in text:
             errors.append(f"{page.relative_to(site)}: no SDK data (sdk.json unread)")
+        elif 'class="hero-code"' not in text:
+            errors.append(f"{page.relative_to(site)}: no code beside the title")
     for path in sorted(site.rglob("*")):
         if path.is_file() and path.suffix in (".html", ".xml", ".txt", ".js", ".css", ".json"):
             text = path.read_text(encoding="utf-8", errors="replace")

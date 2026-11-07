@@ -20,6 +20,7 @@ import os
 import re
 import shutil
 import sys
+import textwrap
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -388,6 +389,45 @@ def sdk_versions(catalog: dict, data: dict) -> str:
             f'<table><caption class="sr">{html.escape(catalog["sdk_versions_title"])}</caption><thead><tr>{head}</tr></thead><tbody><tr>{row}</tr></tbody></table></div>')
 
 
+#: The hero's excerpt of the "read a library" example, per language: where it starts and where it ends in the file.
+#: The lines are the example's own (CI runs it), so the hero cannot drift from it; a file that no longer has these
+#: markers stops the build.
+HERO_CUT = {
+    "python": (r"^\s*with lantern\.LanternClient", r"bytes\)\"\)$"),
+    "typescript": (r"^const client = new NodeLanternClient", r"^}$"),
+}
+
+
+def sdk_hero_excerpt(source: str, lang: str) -> str:
+    start, end = (re.compile(pattern) for pattern in HERO_CUT[lang])
+    lines = source.splitlines()
+    first = next((i for i, line in enumerate(lines) if start.search(line)), None)
+    last = next((i for i in range(first or 0, len(lines)) if end.search(lines[i])), None) if first is not None else None
+    if first is None or last is None:
+        raise SystemExit(f"build_site: the hero's excerpt of the {lang} example is gone; update HERO_CUT")
+    return textwrap.dedent("\n".join(lines[first:last + 1]))
+
+
+def sdk_hero_code(catalog: dict, data: dict | None) -> str:
+    """The first calls of reading a library, in two languages as tabs (the language the page follows)."""
+    if not data:
+        return ""
+    wanted = {e["language"]: e for e in data.get("examples", []) if e.get("id") == "read-library" and e.get("language") in HERO_CUT}
+    if not wanted:
+        return ""
+    inputs, panels = "", ""
+    for n, lang in enumerate(lang for lang in SDK_LANGS if lang in wanted):
+        example = wanted[lang]
+        ident = f"hero-{lang}"
+        path = html.escape(str(example.get("path", "")), quote=True)
+        inputs += (f'<input type="radio" name="hero-code" id="{ident}" data-lang="{lang}"{" checked" if n == 0 else ""}>'
+                   f'<label for="{ident}">{SDK_NAMES[lang]}</label>')
+        panels += (f'<div class="panel"><pre tabindex="0"><code class="language-{lang}">'
+                   f'{sdk_highlight(sdk_hero_excerpt(str(example.get("source", "")), lang), lang)}</code></pre>'
+                   f'<p class="note"><a href="{SDK_REPO}/blob/main/{path}">{path}</a></p></div>')
+    return f'<div class="hero-code"><div class="tabs">{inputs}<div class="panels">{panels}</div></div></div>'
+
+
 # ---- The page.
 
 def page_header(language: str, catalog: dict, root: str) -> str:
@@ -416,8 +456,9 @@ def page_html(template: str, language: str, catalog: dict, sections: dict) -> st
         "skip": SDK.skip(catalog), "sky": SDK.sky(home=False), "header": page_header(language, catalog, root),
         "crumbs": "", "main_class": ' class="wrap"', "footer": page_footer(language, catalog, root),
         "audience": SDK.audience(root), "repo": REPO, "lantern": LANTERN_URL,
-        "hero": (f'<div class="wrap hero small">\n    <span class="eyebrow">{catalog["sdk_eyebrow"]}</span>\n'
-                 f'    <h1>{catalog["sdk_title"]}</h1>\n    <p class="lede">{catalog["sdk_lede"]}</p>\n  </div>'),
+        "hero": (f'<div class="wrap hero small hero-sdk">\n    <div class="hero-text"><span class="eyebrow">{catalog["sdk_eyebrow"]}</span>\n'
+                 f'    <h1>{catalog["sdk_title"]}</h1>\n    <p class="lede">{catalog["sdk_lede"]}</p></div>\n'
+                 f'    {sdk_hero_code(catalog, sdk_data())}\n  </div>'),
         "scripts": (f'<script src="{root}assets/code.js" defer data-copy="{html.escape(catalog["ui_copy"], quote=True)}" '
                     f'data-copied="{html.escape(catalog["ui_copied"], quote=True)}" '
                     f'data-failed="{html.escape(catalog["ui_copy_failed"], quote=True)}"></script>\n'
