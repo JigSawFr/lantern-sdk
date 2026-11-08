@@ -2370,21 +2370,13 @@ class LanternApp:
             raise ProblemError(e.status, e.code, e.detail) from None
         return json_response(request, {"schema": SCHEMA, **self._user_doc(args[0])})
 
-    def delete_user(self, request: ServerRequest, account: Account, name: str) -> ServerResponse:
-        """DELETE an account (SPEC.md § 5.7): confirmed by its name (400 otherwise), never the caller's own
-        (409); its devices, invitations, pairings not yet collected, save backups, requests and sync data
-        go at once, and its streams end at their next wake (L-5.7-6, L-5.7-7, L-18.1-8)."""
+    def delete_account(self, name: str) -> None:
+        """Deletes an account and what is kept for it (SPEC.md § 5.7): its devices, invitations, pairings not yet
+        collected, save backups, requests and sync data go at once, and its streams end at their next wake. For a
+        server's own pages; the administration API's DELETE does the same after its checks. AccountError 404 for an
+        unknown account, 409 for one the store will not delete."""
         assert self.accounts is not None
-        if self.accounts.user(name) is None:
-            raise not_found("No such account.")
-        if request.query.get("confirm") != name:
-            raise bad_request("confirm repeats the account's name: ?confirm=<name> (SPEC.md § 5.7).")
-        if name == account.name:
-            raise ProblemError(409, "conflict", "An admin does not delete the account they use.")
-        try:
-            self.accounts.delete_user(name)
-        except AccountError as e:
-            raise ProblemError(e.status, e.code, e.detail) from None
+        self.accounts.delete_user(name)
         if self.desk is not None:
             self.desk.forget_user(name)
         if self.sync is not None:
@@ -2397,6 +2389,22 @@ class LanternApp:
                 self.requests.forget(name)
         if self.hub is not None:
             self.hub.wake()
+
+    def delete_user(self, request: ServerRequest, account: Account, name: str) -> ServerResponse:
+        """DELETE an account (SPEC.md § 5.7): confirmed by its name (400 otherwise), never the caller's own
+        (409); its devices, invitations, pairings not yet collected, save backups, requests and sync data
+        go at once, and its streams end at their next wake (L-5.7-6, L-5.7-7, L-18.1-8)."""
+        assert self.accounts is not None
+        if self.accounts.user(name) is None:
+            raise not_found("No such account.")
+        if request.query.get("confirm") != name:
+            raise bad_request("confirm repeats the account's name: ?confirm=<name> (SPEC.md § 5.7).")
+        if name == account.name:
+            raise ProblemError(409, "conflict", "An admin does not delete the account they use.")
+        try:
+            self.delete_account(name)
+        except AccountError as e:
+            raise ProblemError(e.status, e.code, e.detail) from None
         return _no_content(request)
 
     @staticmethod
