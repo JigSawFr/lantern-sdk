@@ -19,6 +19,7 @@ from lantern.models import RatingCap
 from lantern.server import LanternApp, ServerRequest, ServerResponse
 from lantern.server.accounts import AccountError, MemoryAccounts, User, token_hash, typed_code
 from lantern.server.pairing import Limiter, approval_page
+from lantern.server.title_requests import StoredRequest
 
 HOST = "shelf.example.org"
 BASE = "/api/lantern/v1"
@@ -326,6 +327,40 @@ def test_a_suspended_device_is_answered_as_a_frozen_account() -> None:
     assert doc(mira(app, "GET", BASE))["account"]["state"] == "frozen"  # the wire has no other word for it
     accounts.update_device(device.id, suspended=False)
     assert mira(app, "GET", BASE + "/apps").status == 200
+
+
+def test_a_server_deletes_an_account_and_what_is_kept_for_it() -> None:
+    accounts = demo_accounts()
+    app = lantern(accounts=accounts)
+    accounts.create_user("ines", ["library"])
+    token, _ = accounts.issue("ines", "console", ["library"])
+    assert app.requests is not None
+    app.requests.add(
+        StoredRequest(
+            id="r_1",
+            user="ines",
+            platform="switch",
+            title_id="0100000000010000",
+            status="open",
+            created="2026-11-08T00:00:00Z",
+        )
+    )
+    app.requests.add(
+        StoredRequest(
+            id="r_2",
+            user="mira",
+            platform="switch",
+            title_id="0100000000020000",
+            status="open",
+            created="2026-11-08T00:00:00Z",
+        )
+    )
+    app.delete_account("ines")
+    assert accounts.user("ines") is None and accounts.device_of(token) is None
+    assert [r.id for r in app.requests.requests()] == ["r_2"]  # only what was kept for her goes
+    with pytest.raises(AccountError) as unknown:
+        app.delete_account("ines")
+    assert unknown.value.status == 404
 
 
 def test_the_approval_page() -> None:
